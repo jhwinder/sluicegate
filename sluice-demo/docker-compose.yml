@@ -1,0 +1,20 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - POLICY_PATH=/policies/policy.yml
+      - BASE_URL=http://localhost:8000
+      - RESEND_API_KEY=re_QjmR2ZZn_ExNhDf2XHz2CfDfLhGJ9Mujw
+      - APPROVER_EMAIL=jhwinder@gmail.com
+      - RESEND_FROM=onboarding@resend.dev
+    volumes:
+      - ./policies:/policies:ro
+
+  frontend:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro

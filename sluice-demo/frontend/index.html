@@ -1,0 +1,207 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SluiceGate Demo</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 24px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; }
+    input, select, button { padding: 10px; font-size: 14px; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; margin-top: 16px; }
+    .pill { display:inline-block; padding:4px 10px; border-radius: 999px; border: 1px solid #ddd; }
+    pre { background:#fafafa; padding:12px; border-radius: 12px; overflow:auto; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ddd; padding: 8px; vertical-align: top; }
+    th { text-align: left; background: #fafafa; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+  </style>
+</head>
+<body>
+  <h2>SluiceGate Demo</h2>
+
+  <p>
+    <b>Simulated AI Agent:</b> An autonomous system attempting to execute an action without human involvement.
+  </p>
+
+  <p>
+    Submit an <b>Execution Request</b>. SluiceGate returns a <b>Gate Decision</b>:
+    <span class="pill">ALLOW</span> (executes now) /
+    <span class="pill">PAUSE</span> (requires approval) /
+    <span class="pill">BLOCK</span> (denied).
+    <br>Principle: Nothing executes without passing SluiceGate!
+  </p>
+
+  <div class="card">
+    <div class="row">
+      <select id="action">
+        <option value="stripe.charge">stripe.charge</option>
+      </select>
+
+      <select id="amount">
+        <option value="100" selected>100</option>
+        <option value="500">500</option>
+        <option value="1000">1000</option>
+      </select>
+
+      <select id="currency">
+        <option value="usd">USD</option>
+      </select>
+
+      <button onclick="submitReq()">AI Agent Attempts Action</button>
+    </div>
+
+    <small>
+      Try:
+      <b>$100</b> (ALLOW),
+      <b>$500</b> (PAUSE → approval required),
+      <b>$1,000</b> (BLOCK).
+    </small>
+  </div>
+
+  <div class="card">
+    <h3>SluiceGate Outcome</h3>
+    <div id="statusLine">No execution request submitted yet.</div>
+    <div class="row" style="margin-top:12px;">
+      <button onclick="approve()" id="approveBtn" disabled>Approve</button>
+      <button onclick="reject()" id="rejectBtn" disabled>Reject</button>
+      <button onclick="refresh()" id="refreshBtn" disabled>Refresh</button>
+    </div>
+    <pre id="details"></pre>
+  </div>
+
+  <div class="card">
+    <h3>Audit Trail</h3>
+    <div class="row" style="margin-bottom:12px; align-items:center;">
+      <button onclick="refreshAudit()">Refresh Audit</button>
+      <label style="display:flex; align-items:center; gap:8px;">
+        <input type="checkbox" id="showAllAudit" onchange="refreshAudit()" />
+        Show all audit events
+      </label>
+    </div>
+    <div id="auditTable"><em>No audit events yet.</em></div>
+  </div>
+
+<script>
+  const API = "http://localhost:8000";
+  let currentId = null;
+
+  function escapeHtml(s) {
+    return String(s)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  // If we were redirected from an approval email, auto-load that request
+  (function initFromQueryString() {
+    const params = new URLSearchParams(window.location.search);
+    const rid = params.get("request_id");
+    if (rid) {
+      currentId = rid;
+      document.getElementById("statusLine").innerText =
+        `execution_request_id=${currentId} | loaded from approval link`;
+      setButtons(true);
+      refresh().then(refreshAudit);
+    }
+  })();
+
+  function setButtons(enabled) {
+    document.getElementById("approveBtn").disabled = !enabled;
+    document.getElementById("rejectBtn").disabled = !enabled;
+    document.getElementById("refreshBtn").disabled = !enabled;
+  }
+
+  async function submitReq() {
+    const payload = {
+      action: document.getElementById("action").value,
+      amount: parseInt(document.getElementById("amount").value || "0", 10),
+      currency: document.getElementById("currency").value,
+      metadata: { demo: true, units: "usd" }
+    };
+
+    const r = await fetch(`${API}/api/decide`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await r.json();
+    currentId = data.request_id;
+
+    document.getElementById("statusLine").innerText =
+      `execution_request_id=${currentId} | gate_decision=${data.decision} | state=${data.status} | ${data.message}`;
+
+    setButtons(true);
+    await refresh();
+    await refreshAudit();
+  }
+
+  async function refresh() {
+    if (!currentId) return;
+    const r = await fetch(`${API}/api/requests/${currentId}`);
+    const data = await r.json();
+    document.getElementById("details").innerText = JSON.stringify(data, null, 2);
+  }
+
+  async function approve() {
+    if (!currentId) return;
+    await fetch(`${API}/api/requests/${currentId}/approve`, { method: "POST" });
+    await refresh();
+    await refreshAudit();
+  }
+
+  async function reject() {
+    if (!currentId) return;
+    await fetch(`${API}/api/requests/${currentId}/reject`, { method: "POST" });
+    await refresh();
+    await refreshAudit();
+  }
+
+  async function refreshAudit() {
+    const showAll = document.getElementById("showAllAudit")?.checked;
+
+    const url = (showAll || !currentId)
+      ? `${API}/api/audit?limit=200`
+      : `${API}/api/audit?request_id=${encodeURIComponent(currentId)}&limit=200`;
+
+    const r = await fetch(url);
+    const events = await r.json();
+    const scopeLabel = (showAll || !currentId) ? "All events" : `Events for ${currentId.slice(0,8)}…`;
+
+    if (!events.length) {
+      document.getElementById("auditTable").innerHTML = `<em>No audit events yet. (${escapeHtml(scopeLabel)})</em>`;
+      return;
+    }
+
+    const rows = events.map(e => `
+      <tr>
+        <td style="white-space:nowrap;">${escapeHtml(e.timestamp)}</td>
+        <td>${escapeHtml(e.event_type)}</td>
+        <td class="mono">${escapeHtml((e.request_id || "").slice(0, 8))}…</td>
+        <td>${escapeHtml(e.actor_type)}${e.actor_id ? " / " + escapeHtml(e.actor_id) : ""}</td>
+        <td>${escapeHtml(e.summary || "")}</td>
+      </tr>
+    `).join("");
+
+    document.getElementById("auditTable").innerHTML = `
+      <div style="margin-bottom:8px;"><span class="pill">${escapeHtml(scopeLabel)}</span></div>
+      <table>
+        <thead>
+          <tr>
+            <th>Time (UTC)</th>
+            <th>Event</th>
+            <th>Request</th>
+            <th>Actor</th>
+            <th>Summary</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+</script>
+</body>
+</html>

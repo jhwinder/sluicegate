@@ -1,0 +1,24 @@
+version: 1
+default: PAUSE
+
+rules:
+  - id: allow_small_charge
+    when:
+      action: "stripe.charge"
+      amount_lte: 100   
+      currency: "USD"
+    decision: ALLOW
+
+  - id: pause_mid_charge
+    when:
+      action: "stripe.charge"
+      amount_lte: 500  
+      currency: "USD"
+    decision: PAUSE
+
+  - id: block_large_charge
+    when:
+      action: "stripe.charge"
+      amount_gt: 500   
+      currency: "USD"
+    decision: BLOCK
