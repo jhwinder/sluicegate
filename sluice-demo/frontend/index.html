@@ -21,19 +21,23 @@
   <h2>SluiceGate Demo</h2>
 
   <p>
-    <b>Simulated AI Agent:</b> An autonomous system attempting to execute an action without human involvement.
-  </p>
-
-  <p>
-    Submit an <b>Execution Request</b>. SluiceGate returns a <b>Gate Decision</b>:
+    1. A simulated AI Agent attempts to submit an <b>Execution Request</b>. 
+    <br>2. SluiceGate returns a <b>Gate Decision</b>:
+    <br><br>
     <span class="pill">ALLOW</span> (executes now) /
     <span class="pill">PAUSE</span> (requires approval) /
-    <span class="pill">BLOCK</span> (denied).
-    <br>Principle: Nothing executes without passing SluiceGate!
+    <span class="pill">BLOCK</span> (denied)
+    <br><br><b>Nothing executes without passing SluiceGate!</b>
   </p>
 
   <div class="card">
     <div class="row">
+      <select id="agentType">
+        <option value="Billing Agent" selected>Billing Agent</option>
+        <option value="Infrastructure Agent">Infrastructure Agent</option>
+        <option value="Support Agent">Support Agent</option>
+      </select>
+
       <select id="action">
         <option value="stripe.charge">stripe.charge</option>
       </select>
@@ -115,11 +119,17 @@
   }
 
   async function submitReq() {
+    const agentType = document.getElementById("agentType").value;
+
     const payload = {
       action: document.getElementById("action").value,
       amount: parseInt(document.getElementById("amount").value || "0", 10),
       currency: document.getElementById("currency").value,
-      metadata: { demo: true, units: "usd" }
+      metadata: {
+        demo: true,
+        units: "usd",
+        agent_type: agentType
+      }
     };
 
     const r = await fetch(`${API}/api/decide`, {
@@ -182,7 +192,10 @@
         <td>${escapeHtml(e.event_type)}</td>
         <td class="mono">${escapeHtml((e.request_id || "").slice(0, 8))}…</td>
         <td>${escapeHtml(e.actor_type)}${e.actor_id ? " / " + escapeHtml(e.actor_id) : ""}</td>
-        <td>${escapeHtml(e.summary || "")}</td>
+        <td>
+          ${escapeHtml(e.summary || "")}
+          ${e.details?.agent_type ? `<br/><small><b>Agent:</b> ${escapeHtml(e.details.agent_type)}</small>` : ""}
+        </td>
       </tr>
     `).join("");
 

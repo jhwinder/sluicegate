@@ -43,15 +43,21 @@ def health():
 @app.post("/api/decide", response_model=CreateDecisionResponse)
 def decide(req: ActionRequest):
     rid = new_request_id()
+    agent_type = req.metadata.get("agent_type", "Unknown Agent")
 
     # Audit: request received
     log_event(
         request_id=rid,
         event_type="REQUEST_CREATED",
         actor_type="SYSTEM",
-        actor_id=None,
-        summary="Execution request received",
-        details={"action": req.action, "amount": req.amount, "currency": req.currency},
+        actor_id=agent_type,
+        summary=f"Execution request received from {agent_type}",
+        details={
+            "agent_type": agent_type,
+            "action": req.action,
+            "amount": req.amount,
+            "currency": req.currency,
+        },
     )
 
     decision = policy_engine.decide(req.model_dump())
@@ -62,8 +68,11 @@ def decide(req: ActionRequest):
         event_type="GATE_DECIDED",
         actor_type="POLICY",
         actor_id="policy.yml",
-        summary=f"Gate decision: {decision}",
-        details={"decision": decision},
+        summary=f"Gate decision for {agent_type}: {decision}",
+        details={
+            "decision": decision,
+            "agent_type": agent_type,
+        },
     )
 
     if decision == "ALLOW":

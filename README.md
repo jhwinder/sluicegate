@@ -6,14 +6,14 @@ SluiceGate is a policy-enforcing control plane for autonomous and semi-autonomou
 
 Autonomous systems are increasingly capable of taking meaningful actions:
 
-    Charging customers
-    Deploying infrastructure
-    Modifying data or permissions
-    Triggering downstream workflows
-    Existing safeguards focus on:
-    Model alignment
-    Monitoring and alerts
-    Post-hoc auditing
+* Charging customers
+* Deploying infrastructure
+* Modifying data or permissions
+* Triggering downstream workflows
+* Existing safeguards focus on:
+* Model alignment
+* Monitoring and alerts
+* Post-hoc auditing
 
 These approaches fail at the critical moment: execution.  Once an action is triggered, it is often too late.
 
@@ -38,37 +38,37 @@ A decision point, not an after-the-fact monitor
 
 It is designed to be:
 
-    Deterministic
-    Auditable
-    Policy-driven
-    System-agnostic
+* Deterministic
+* Auditable
+* Policy-driven
+* System-agnostic
 
 **Core Capabilities**
 
 Policy-Driven Enforcement
 
-    Human-readable policies (e.g., YAML)
-    Deterministic evaluation
-    Hot-reloadable rules
-    Clear ALLOW / PAUSE / BLOCK semantics
+* Human-readable policies (e.g., YAML)
+* Deterministic evaluation
+* Hot-reloadable rules
+* Clear ALLOW / PAUSE / BLOCK semantics
 
 Execution Gating
 
-    Sits directly in front of real actions
-    No execution bypass
-    Explicit decision trail
+* Sits directly in front of real actions
+* No execution bypass
+* Explicit decision trail
 
 Human-in-the-Loop Control
 
-    Approvals for high-risk actions
-    Supports async workflows
-    Extensible to chat, email, ticketing systems
+* Approvals for high-risk actions
+* Supports async workflows
+* Extensible to chat, email, ticketing systems
 
 Connector Model
 
-    Pluggable integrations (payments, infra, APIs, internal tools)
-    Safe stubs for testing
-    Designed for community and partner expansion
+* Pluggable integrations (payments, infra, APIs, internal tools)
+* Safe stubs for testing
+* Designed for community and partner expansion
 
 **Example Use Cases**
 
@@ -78,9 +78,7 @@ Autonomous customer-facing actions
 High-risk enterprise workflows
 Regulated or compliance-sensitive environments
 
-In all cases, SluiceGate ensures:
-
-Autonomy proceeds only within explicitly defined bounds.
+In all cases, SluiceGate ensures that autonomy proceeds only within explicitly defined bounds.
 
 **Repository Structure**
 
@@ -96,25 +94,25 @@ Autonomy proceeds only within explicitly defined bounds.
 
 SluiceGate is currently in:
 
-    Early product definition
-    Reference implementation and demos
-    Architecture validation with real workflows
+* Early product definition
+* Reference implementation and demos
+* Architecture validation with real workflows
 
 The current focus is on:
 
-    Clear execution semantics
-    Simple, explainable policy models
-    Demonstrable value in high-risk automation scenarios
+* Clear execution semantics
+* Simple, explainable policy models
+ * Demonstrable value in high-risk automation scenarios
 
 **What Comes Next**
 
 Planned evolution includes:
 
-    Hardened core engine
-    SDK for connectors and integrations
-    Enterprise deployment models
-    Persistent audit and compliance features
-    Policy authoring and simulation tools
+* Hardened core engine
+* SDK for connectors and integrations
+* Enterprise deployment models
+* Persistent audit and compliance features
+* Policy authoring and simulation tools
 
 **Philosophy**
 
