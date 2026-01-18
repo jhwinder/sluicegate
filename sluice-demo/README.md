@@ -72,7 +72,7 @@ Then open:
 Use the UI to submit a stripe.charge request:
 
     Amount	Outcome
-    100	    ALLOW → executes immediately
+    100   ALLOW → executes immediately
     500   	PAUSE → requires approval
     1000  	BLOCK → denied by policy
 

@@ -72,13 +72,13 @@ Connector Model
 
 **Example Use Cases**
 
-AI agents initiating payments or refunds
-Automated infrastructure changes
-Autonomous customer-facing actions
-High-risk enterprise workflows
-Regulated or compliance-sensitive environments
+* AI agents initiating payments or refunds
+* Automated infrastructure changes
+* Autonomous customer-facing actions
+* High-risk enterprise workflows
+* Regulated or compliance-sensitive environments
 
-In all cases, SluiceGate ensures that autonomy proceeds only within explicitly defined bounds.
+In all cases, SluiceGate ensures that AI autonomy operates only within explicitly defined bounds.
 
 **Repository Structure**
 
@@ -102,7 +102,7 @@ The current focus is on:
 
 * Clear execution semantics
 * Simple, explainable policy models
- * Demonstrable value in high-risk automation scenarios
+* Demonstrable value in high-risk automation scenarios
 
 **What Comes Next**
 
@@ -117,5 +117,7 @@ Planned evolution includes:
 **Philosophy**
 
 SluiceGate is built on a single, non-negotiable principle:
-Autonomous systems should not be trusted to act without explicit, enforceable boundaries.
+
+<b>Autonomous systems should not be trusted to act without explicit, enforceable boundaries.</b>
+
 SluiceGate provides those boundaries—clearly, transparently, and at the moment it matters most.
