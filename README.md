@@ -121,3 +121,12 @@ SluiceGate is built on a single, non-negotiable principle:
 <b>Autonomous systems should not be trusted to act without explicit, enforceable boundaries.</b>
 
 SluiceGate provides those boundaries—clearly, transparently, and at the moment it matters most.
+
+## License
+
+SluiceGate Core is source-available under the SluiceGate Source-Available
+License. You may inspect, modify, and evaluate the software freely for
+non-commercial purposes.
+
+Commercial and production use requires a commercial license.
+See LICENSE for details.
