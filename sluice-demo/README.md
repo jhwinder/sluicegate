@@ -23,28 +23,28 @@ This demonstrates human-in-the-loop control without removing autonomy.
 
 **Architecture Overview**
 
-  Browser UI
-    │
-    ▼
-  SluiceGate API (FastAPI)
-    │
-    ├── Policy Engine (YAML)
-    ├── Decision Logic (ALLOW / PAUSE / BLOCK)
-    ├── Approval Workflow
-    └── Connector Layer (Stripe stub)
+    Browser UI
+      │
+      ▼
+    SluiceGate API (FastAPI)
+      │
+      ├── Policy Engine (YAML)
+      ├── Decision Logic (ALLOW / PAUSE / BLOCK)
+      ├── Approval Workflow
+      └── Connector Layer (Stripe stub)
 
 All execution paths flow through the gate.
 
 **Repo Structure**
 
-  sluicegate-demo/
-    docker-compose.yml
-    policies/
-      policy.yml        # Human-readable policy rules
-    backend/
-      app/              # SluiceGate API + enforcement logic
-    frontend/
-      index.html        # Minimal UI for demoing decisions
+    sluicegate-demo/
+      docker-compose.yml
+      policies/
+        policy.yml        # Human-readable policy rules
+      backend/
+        app/              # SluiceGate API + enforcement logic
+      frontend/
+        index.html        # Minimal UI for demoing decisions
 
 **Running the Demo Locally**
 
