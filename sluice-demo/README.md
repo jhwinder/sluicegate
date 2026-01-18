@@ -13,9 +13,9 @@ The demo implements an end-to-end transaction gating flow:
 2. SluiceGate evaluates the request against a YAML-defined policy
 3. One of three outcomes occurs:
 
-      ALLOW – request executes immediately
-      PAUSE – request is held pending human approval
-      BLOCK – request is denied outright
+        ALLOW – request executes immediately
+        PAUSE – request is held pending human approval
+        BLOCK – request is denied outright
 
 Approved requests execute via a connector (stubbed for safety).
 
@@ -48,13 +48,13 @@ All execution paths flow through the gate.
 
 **Running the Demo Locally**
 
-<u>Prerequisites</u>
+<ins>Prerequisites</ins>
 
 macOS
 
 Docker Desktop
 
-<u>Start the demo</u>
+<ins>Start the demo</ins>
 
 From inside sluicegate-demo/:
 
