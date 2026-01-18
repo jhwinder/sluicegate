@@ -7,7 +7,7 @@ import os
 from .models import ActionRequest, CreateDecisionResponse, StoredRequest, new_request_id, now_ts
 from .policy import PolicyEngine, default_policy_path
 from .connectors import execute_action
-from .approvals import maybe_send_email_approval
+from .approvals import maybe_send_email_approval, maybe_send_email_blocked
 from .audit import AUDIT_LOG, log_event
 
 app = FastAPI(title="SluiceGate Demo")
@@ -124,6 +124,10 @@ def decide(req: ActionRequest):
             payload=req,
         )
         STORE[rid] = stored
+        
+        agent_type = req.metadata.get("agent_type", "Unknown Agent")
+        maybe_send_email_blocked(rid, req.action, req.amount, req.currency, base_url(), agent_type=agent_type)
+
         return CreateDecisionResponse(
             request_id=rid,
             decision="BLOCK",

@@ -6,6 +6,7 @@ services:
     environment:
       - POLICY_PATH=/policies/policy.yml
       - BASE_URL=http://localhost:8000
+      - UI_URL=http://localhost:8080
       - RESEND_API_KEY=re_QjmR2ZZn_ExNhDf2XHz2CfDfLhGJ9Mujw
       - APPROVER_EMAIL=jhwinder@gmail.com
       - RESEND_FROM=onboarding@resend.dev
