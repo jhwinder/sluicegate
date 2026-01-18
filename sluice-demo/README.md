@@ -13,9 +13,9 @@ The demo implements an end-to-end transaction gating flow:
 2. SluiceGate evaluates the request against a YAML-defined policy
 3. One of three outcomes occurs:
 
-    ALLOW – request executes immediately
-    PAUSE – request is held pending human approval
-    BLOCK – request is denied outright
+      ALLOW – request executes immediately
+      PAUSE – request is held pending human approval
+      BLOCK – request is denied outright
 
 Approved requests execute via a connector (stubbed for safety).
 
@@ -23,15 +23,15 @@ This demonstrates human-in-the-loop control without removing autonomy.
 
 **Architecture Overview**
 
-Browser UI
-   │
-   ▼
-SluiceGate API (FastAPI)
-   │
-   ├── Policy Engine (YAML)
-   ├── Decision Logic (ALLOW / PAUSE / BLOCK)
-   ├── Approval Workflow
-   └── Connector Layer (Stripe stub)
+  Browser UI
+    │
+    ▼
+  SluiceGate API (FastAPI)
+    │
+    ├── Policy Engine (YAML)
+    ├── Decision Logic (ALLOW / PAUSE / BLOCK)
+    ├── Approval Workflow
+    └── Connector Layer (Stripe stub)
 
 All execution paths flow through the gate.
 
