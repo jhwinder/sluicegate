@@ -6,9 +6,9 @@ import os
 
 from .models import ActionRequest, CreateDecisionResponse, StoredRequest, new_request_id, now_ts
 from .policy import PolicyEngine, default_policy_path
-from .connectors import execute_action
-from .approvals import maybe_send_email_approval, maybe_send_email_blocked
 from .audit import AUDIT_LOG, log_event
+from .decision_loop import run_decision_loop
+from .connectors import execute_action
 
 app = FastAPI(title="SluiceGate Demo")
 
@@ -42,127 +42,11 @@ def health():
 
 @app.post("/api/decide", response_model=CreateDecisionResponse)
 def decide(req: ActionRequest):
-    rid = new_request_id()
-    agent_type = req.metadata.get("agent_type", "Unknown Agent")
-
-    # Audit: request received
-    log_event(
-        request_id=rid,
-        event_type="REQUEST_CREATED",
-        actor_type="SYSTEM",
-        actor_id=agent_type,
-        summary=f"Execution request received from {agent_type}",
-        details={
-            "agent_type": agent_type,
-            "action": req.action,
-            "amount": req.amount,
-            "currency": req.currency,
-        },
-    )
-
-    decision = policy_engine.decide(req.model_dump())
-
-    # Audit: gate decision
-    log_event(
-        request_id=rid,
-        event_type="GATE_DECIDED",
-        actor_type="POLICY",
-        actor_id="policy.yml",
-        summary=f"Gate decision for {agent_type}: {decision}",
-        details={
-            "decision": decision,
-            "agent_type": agent_type,
-        },
-    )
-
-    if decision == "ALLOW":
-        # Audit: execution start
-        log_event(
-            request_id=rid,
-            event_type="EXECUTION_STARTED",
-            actor_type="SYSTEM",
-            actor_id="connector",
-            summary="Execution started (ALLOW)",
-            details={"action": req.action},
-        )
-
-        result = execute_action(req.action, req.amount, req.currency, req.metadata)
-
-        # Audit: execution completed
-        log_event(
-            request_id=rid,
-            event_type="EXECUTION_COMPLETED",
-            actor_type="SYSTEM",
-            actor_id="connector",
-            summary="Execution completed (ALLOW)",
-            details={"result_ok": bool(result.get("ok", False))},
-        )
-
-        stored = StoredRequest(
-            request_id=rid,
-            created_at=now_ts(),
-            status="EXECUTED",
-            decision="ALLOW",
-            payload=req,
-            executed_result=result,
-        )
-        STORE[rid] = stored
-
-        return CreateDecisionResponse(
-            request_id=rid,
-            decision="ALLOW",
-            status=stored.status,
-            message="Allowed and executed immediately.",
-        )
-
-    if decision == "BLOCK":
-        stored = StoredRequest(
-            request_id=rid,
-            created_at=now_ts(),
-            status="BLOCKED",
-            decision="BLOCK",
-            payload=req,
-        )
-        STORE[rid] = stored
-        
-        agent_type = req.metadata.get("agent_type", "Unknown Agent")
-        maybe_send_email_blocked(rid, req.action, req.amount, req.currency, base_url(), agent_type=agent_type)
-
-        return CreateDecisionResponse(
-            request_id=rid,
-            decision="BLOCK",
-            status=stored.status,
-            message="Blocked by policy.",
-        )
-
-    # PAUSE
-    stored = StoredRequest(
-        request_id=rid,
-        created_at=now_ts(),
-        status="PENDING",
-        decision="PAUSE",
-        payload=req,
-    )
-    STORE[rid] = stored
-
-    # Email is optional. If not configured, it's a no-op and approvals can still be done in the UI.
-    maybe_send_email_approval(rid, req.action, req.amount, req.currency, base_url())
-
-    # Audit: notification attempted
-    log_event(
-        request_id=rid,
-        event_type="NOTIFICATION_ATTEMPTED",
-        actor_type="SYSTEM",
-        actor_id="email",
-        summary="Approval notification attempted",
-        details={"channel": "email"},
-    )
-
-    return CreateDecisionResponse(
-        request_id=rid,
-        decision="PAUSE",
-        status=stored.status,
-        message="Paused for approval.",
+    return run_decision_loop(
+        req,
+        policy_engine=policy_engine,
+        store=STORE,
+        base_url=base_url(),
     )
 
 

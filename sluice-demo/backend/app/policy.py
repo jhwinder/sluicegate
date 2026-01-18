@@ -1,23 +1,31 @@
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Literal
 import yaml
 import os
+import hashlib
 
 Decision = Literal["ALLOW", "PAUSE", "BLOCK"]
 
+
 class PolicyEngine:
+
+
     def __init__(self, policy_path: str):
         self.policy_path = policy_path
-        self.policy = self._load()
+        self.policy: Dict[str, Any] = {}
+        self.policy_hash: str = ""
+        self.reload()
 
     def _load(self) -> Dict[str, Any]:
-        with open(self.policy_path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f)
+        # Read bytes so the hash matches the actual on-disk policy
+        with open(self.policy_path, "rb") as f:
+            raw = f.read()
+        self.policy_hash = hashlib.sha256(raw).hexdigest()
+        return yaml.safe_load(raw.decode("utf-8"))
 
     def reload(self) -> None:
         self.policy = self._load()
 
     def decide(self, ctx: Dict[str, Any]) -> Decision:
-        # ctx includes: action, amount, currency, metadata
         rules = self.policy.get("rules", [])
         for rule in rules:
             when = rule.get("when", {})
@@ -43,6 +51,12 @@ class PolicyEngine:
 
         return True
 
+
 def default_policy_path() -> str:
-    # in docker-compose we mount /policies/policy.yml
     return os.environ.get("POLICY_PATH", "/policies/policy.yml")
+
+
+def short_hash(full_hash: str, length: int = 8) -> str:
+    if not full_hash:
+        return ""
+    return f"{full_hash[:length]}.."
