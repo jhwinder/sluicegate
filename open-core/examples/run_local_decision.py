@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from sluicegate_core import Gate, PolicyEngine, GateRequest
+from sg_core import Gate, PolicyEngine, GateRequest
 
 
 def main() -> None:
@@ -23,8 +23,40 @@ def main() -> None:
 
     print("\n=== SluiceGate Open Core – Policy Test Harness ===")
 
+    def show_explain(label: str, req: GateRequest, decision_obj) -> None:
+        """
+        Explain is pure: no audit emission, no side effects.
+        It returns a trace of rule/condition evaluation.
+
+        This helper also asserts that evaluate() and explain() agree.
+        """
+        exp = gate.explain(req)
+        print(f"\n[EXPLAIN] {label}")
+        print(f"  decision:     {exp.decision}")
+        print(f"  policy_hash:  {exp.policy_hash}")
+        print(f"  matched_rule: {exp.matched_rule}")
+        print(f"  used_default: {exp.used_default}")
+        print(f"  obligations:  {[{'type': o.type, **o.data} for o in exp.obligations]}")
+
+        # ---- Regression assertions: evaluate() and explain() must agree ----
+        assert exp.decision == decision_obj.decision
+        assert exp.policy_hash == decision_obj.policy_hash
+
+        exp_obls = [(o.type, tuple(sorted(o.data.items()))) for o in exp.obligations]
+        eval_obls = [(o.type, tuple(sorted(o.data.items()))) for o in decision_obj.obligations]
+        assert exp_obls == eval_obls
+
+        # Print per-condition results for the matched rule (keeps output readable)
+        if exp.rules:
+            matched = next((r for r in exp.rules if r.matched), None)
+            if matched:
+                print(f"  matched rule conditions ({matched.name}):")
+                for c in matched.conditions:
+                    print(f"    - {c.path} {c.operator} {c.expected} | actual={c.actual} | passed={c.passed}")
+
+
     # --------------------------------------------------
-    # Test 1: High-risk write to prod 
+    # Test 1: High-risk write to prod
     # --------------------------------------------------
     high_risk_write = GateRequest(
         actor={"type": "agent", "id": "agent-123"},
@@ -38,6 +70,7 @@ def main() -> None:
     print(decision_1)
 
     assert decision_1.decision == "PAUSE"
+    show_explain("High-risk write", high_risk_write, decision_1)
 
     # --------------------------------------------------
     # Test 2: Production code deploy
@@ -58,6 +91,8 @@ def main() -> None:
         o.type == "require_approval" and o.data.get("approver_group") == "ReleaseManagers"
         for o in decision_2.obligations
     )
+    show_explain("Production deploy", deploy_req, decision_2)
+
 
     # --------------------------------------------------
     # Test 3: Small refund (ALLOW)
@@ -78,6 +113,8 @@ def main() -> None:
 
     assert decision_3.decision == "ALLOW"
     assert len(decision_3.obligations) == 0
+    show_explain("Small refund", refund_small, decision_3)
+
 
     # --------------------------------------------------
     # Test 4: Large refund (PAUSE)
@@ -101,6 +138,32 @@ def main() -> None:
         o.type == "require_approval" and o.data.get("approver_group") == "Finance"
         for o in decision_4.obligations
     )
+    show_explain("Large refund", refund_large, decision_4)
+
+    
+    # --------------------------------------------------
+    # Test 5: Default path (no rule matches -> use default)
+    # --------------------------------------------------
+    unknown_req = GateRequest(
+        actor={"type": "agent", "id": "unknown-agent"},
+        action={"name": "system.reboot", "params": {"scope": "single-node"}},
+        target={"type": "host", "id": "host-77", "env": "prod"},
+        context={"env": "prod", "risk_score": 10},
+    )
+
+    decision_5 = gate.evaluate(unknown_req)
+    print("\n[TEST] Default-path decision:")
+    print(decision_5)
+
+    # This should match your policy default.
+    # If your default is PAUSE (as in example-policy.yml), this assertion should hold.
+    assert decision_5.decision == "PAUSE"
+
+    exp5 = gate.explain(unknown_req)
+    assert exp5.used_default is True
+    assert exp5.matched_rule is None
+
+    show_explain("Default path (no rule match)", unknown_req, decision_5)
 
     print("\nAll policy tests passed ✔️")
 

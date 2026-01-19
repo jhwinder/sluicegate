@@ -1,10 +1,9 @@
 from __future__ import annotations
 from typing import Any, Callable, Dict, Optional
-from dataclasses import dataclass
 import time
 import uuid
 
-from .models import GateRequest, GateDecision
+from .models import GateRequest, GateDecision, ExplainResult
 from .policy import PolicyEngine
 
 def _rid() -> str:
@@ -12,9 +11,10 @@ def _rid() -> str:
 
 class Gate:
     """
-    Public, bulletproof entrypoint for Open Core Beta.
+    Public entrypoint for Open Core Beta.
 
-    Gate is transport-agnostic: invoke via Python call, HTTP adapter, gRPC, etc.
+    - evaluate(): returns GateDecision (decision + obligations)
+    - explain(): returns ExplainResult (decision + obligations + trace)
     """
 
     def __init__(
@@ -37,13 +37,7 @@ class Gate:
             "details": {"actor": req.actor, "action": req.action, "target": req.target, "context": req.context},
         })
 
-        ctx = {
-            "actor": req.actor,
-            "action": req.action,
-            "target": req.target,
-            "context": req.context,
-        }
-
+        ctx = {"actor": req.actor, "action": req.action, "target": req.target, "context": req.context}
         decision, obligations, policy_hash = self.policy_engine.decide(ctx)
 
         self._audit({
@@ -51,7 +45,11 @@ class Gate:
             "event": "GATE_DECIDED",
             "request_id": rid,
             "summary": f"Gate decided: {decision}",
-            "details": {"decision": decision, "policy_hash": policy_hash, "obligations": [o.__dict__ for o in obligations]},
+            "details": {
+                "decision": decision,
+                "policy_hash": policy_hash,
+                "obligations": [o.__dict__ for o in obligations],
+            },
         })
 
         msg = {
@@ -67,6 +65,14 @@ class Gate:
             obligations=obligations,
             message=msg,
         )
+
+    def explain(self, req: GateRequest) -> ExplainResult:
+        """
+        Pure policy simulation and trace.
+        No execution. No side effects. No audit emission by default.
+        """
+        ctx = {"actor": req.actor, "action": req.action, "target": req.target, "context": req.context}
+        return self.policy_engine.explain(ctx)
 
     def _audit(self, event: Dict[str, Any]) -> None:
         if self.audit_sink:
