@@ -84,11 +84,17 @@ In all cases, SluiceGate ensures that AI autonomy operates only within explicitl
 
     sluice/
     README.md              # This file
+    docs/                  # Architecture, policy model, design notes (future)
+    open-core/             # SluiceGate Open Core
+        src/
+            sg_core/
+        policies/
+        examples/
     sluice-demo/           # Runnable reference demo
         backend/
         frontend/
         policies/
-    docs/                  # Architecture, policy model, design notes (future)
+
 
 **Status**
 
