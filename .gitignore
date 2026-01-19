@@ -12,6 +12,7 @@ wheels/
 
 #Mac files
 .DS_Store
+**/.DS_Store
 run/
 .init/
 scratch/
