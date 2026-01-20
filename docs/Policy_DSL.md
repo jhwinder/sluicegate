@@ -2,21 +2,21 @@
 
 This section defines the **Beta-stable Policy DSL** for the SluiceGate Open Core.
 
-The Policy DSL is intentionally **general-purpose**. It is designed to govern **any actor, any action, any target, and any context**, not just monetary or transactional use cases.
+The Policy Domain Specific Language (DSL) is intentionally **general-purpose**. It is designed to govern **any actor, any action, any target, and any context**, not just monetary or transactional use cases.
 
 ### Design Principles
 - Policies are declarative, not imperative
 - Policy evaluation is deterministic
 - Rules are evaluated top-to-bottom
 - First matching rule wins
-- Conditions within a rule are AND-only in Beta
+- Conditions within a rule are AND-only in Beta (may expand to more sophisticated Boolean logic later)
 - Policy decisions may include obligations
 - Policy provenance is cryptographically anchored via a hash
 
 ### Decisions
 Every policy evaluation returns one of:
 - ALLOW — proceed immediately
-- PAUSE — require explicit approval before proceeding
+- PAUSE — require explicit (human) approval before proceeding
 - BLOCK — do not proceed
 
 ### Request Model
@@ -87,7 +87,7 @@ rules:
 
 ### Rule Evaluation Semantics
 - Rules are evaluated in order
-- Each rule contains a when clause: a list of conditions
+- Each rule contains a when clause (i.e., a list of conditions)
 - All conditions must match (AND-only in Beta)
 - The first matching rule determines the decision
 - If no rule matches, the default decision applies
