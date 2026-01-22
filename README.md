@@ -132,7 +132,7 @@ SluiceGate provides those boundaries—clearly, transparently, and at the moment
 
 SluiceGate Core is source-available under the SluiceGate Source-Available
 License. You may inspect, modify, and evaluate the software freely for
-non-commercial purposes.
+non-commercial purposes only.
 
 Commercial and production use requires a commercial license.
 See LICENSE for details.
