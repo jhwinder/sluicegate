@@ -56,9 +56,9 @@ Docker Desktop
 
 <ins>Start the demo</ins>
 
-From inside sluicegate-demo/:
+From open-core:
 
-    docker compose up --build
+    docker compose -f sluice-demo/docker-compose.yml up --build
 
 Then open:
 

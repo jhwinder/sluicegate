@@ -38,9 +38,16 @@ class PolicyEngine:
     # ---- Core decision (no trace) ----
 
     def decide(self, request_ctx: Dict[str, Any]) -> Tuple[Decision, List[Obligation], str]:
-        default = self.policy.get("default", {}) or {}
-        default_decision: Decision = (default.get("decision") or "PAUSE")
-        default_obls = parse_obligations(default.get("obligations") or [])
+        default = self.policy.get("default", None)
+        if isinstance(default, str):
+            default_decision = default
+            default_obligations = []
+        elif isinstance(default, dict):
+            default_decision = default.get("decision") or "PAUSE"
+            default_obligations = default.get("obligations") or []
+        else:
+            default_decision = "PAUSE"
+            default_obligations = []
 
         for rule in (self.policy.get("rules") or []):
             when = rule.get("when") or []

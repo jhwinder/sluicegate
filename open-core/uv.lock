@@ -58,8 +58,8 @@ wheels = [
 ]
 
 [[package]]
-name = "sluicegate-core"
-version = "0.1.0b0"
+name = "sg-core"
+version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "pyyaml" },

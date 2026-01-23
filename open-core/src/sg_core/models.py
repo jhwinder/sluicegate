@@ -2,7 +2,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional
 
+# NOTE: "BLOCK" is used instead of "DENY" to match the existing public API.
+# The PAUSE primitive extends this by adding resumable "continuations".
 Decision = Literal["ALLOW", "PAUSE", "BLOCK"]
+
+PauseStatus = Literal["PENDING", "APPROVED", "DENIED", "EXPIRED"]
 
 @dataclass
 class GateRequest:
@@ -23,6 +27,33 @@ class GateDecision:
     policy_hash: str
     obligations: List[Obligation] = field(default_factory=list)
     message: str = ""
+
+    # ---- PAUSE primitive extensions (optional) ----
+    # If decision == "PAUSE", SluiceGate returns a resume_token that can be
+    # resolved later (approve/deny). Agents should treat PAUSE as a non-error
+    # waiting state.
+    resume_token: Optional[str] = None
+    pause_status: Optional[PauseStatus] = None
+    pause_timeout_at: Optional[float] = None  # epoch seconds
+    reason_code: Optional[str] = None
+
+
+@dataclass
+class PauseRecord:
+    """Stored continuation for a paused action."""
+
+    resume_token: str
+    created_at: float
+    timeout_at: Optional[float]
+    status: PauseStatus
+    request: GateRequest
+    policy_hash: str
+    obligations: List[Obligation] = field(default_factory=list)
+    message: str = ""
+    reason_code: Optional[str] = None
+    approver: Optional[str] = None
+    approver_comment: str = ""
+    resolved_at: Optional[float] = None
 
 # ---------- Explain / simulation models ----------
 

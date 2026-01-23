@@ -1,7 +1,7 @@
 [project]
-name = "sluicegate-core"
-version = "0.1.0-beta"
-description = "SluiceGate Open Core Beta"
+name = "sg-core"
+version = "0.1.1"
+description = "SluiceGate Open Core"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

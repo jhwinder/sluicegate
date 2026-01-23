@@ -24,7 +24,7 @@ Policies evaluate a request composed of four top-level objects:
 - actor — who or what is requesting the action
 - action — what is being requested
 - target — what the action applies to
-- context — environmental, risk, or metadata signals
+- context — environmental, risk/classification, temporal, session, or other metadata signals, i.e, “Under what conditions is this action being proposed?”
 
 Conceptual request structure:
 <pre lang="yaml">actor:

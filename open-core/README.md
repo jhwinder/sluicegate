@@ -43,10 +43,12 @@ open-core/
 ├── src/
 │   └── sg_core/
 │       ├── __init__.py
+│       ├── adapters.py
 │       ├── decision_loop.py
-│       ├── policy.py
 │       ├── models.py
 │       ├── obligation_adapter.py
+│       ├── pause_api.py
+│       ├── policy.py
 │       └── py.typed
 ├── examples/
 │   └── run_local_decision.py
@@ -161,6 +163,31 @@ The Open Core returns obligations as data:
 How those obligations are enforced is left to adapters.
 
 A minimal adapter interface (ObligationAdapter) is defined, but the core never invokes it automatically. This preserves purity and extensibility.
+
+----------------------------------------------------------------
+
+AGENT ADAPTERS / WEBSOCKETS / FASTAPI ENDPOINTS
+
+-PollingPauseAdapter (sync)
+-AsyncPollingPauseAdapter (async)
+
+They implement the “if PAUSE → wait → resume with ALLOW or BLOCK” pattern in one reusable component (so PAUSE is not treated as an error.)
+
+
+“Wait” without polling: SSE + WebSocket
+
+-SSE: GET /pause/{token}/events
+Streams event: pause messages with JSON payloads; auto-closes when resolved/expired.
+
+-WebSocket: WS /ws/pause/{token}
+Sends initial state then pushes updates; closes on resolved/expired.
+
+FastAPI endpoints
+
+`GET /pause/{token}` → returns { pause: ..., decision: ... }
+`GET /pause/{token}/decision` → returns the current decision (PAUSE|ALLOW|BLOCK)
+`POST /pause/{token}/approve` body: { "approver": "...", "comment": "..." }
+`POST /pause/{token}/deny` body: { "approver": "...", "comment": "..." }
 
 ----------------------------------------------------------------
 
