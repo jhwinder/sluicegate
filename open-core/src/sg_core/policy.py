@@ -56,14 +56,14 @@ class PolicyEngine:
                 obls = parse_obligations(rule.get("obligations") or [])
                 return decision, obls, self.policy_hash
 
-        return default_decision, default_obls, self.policy_hash
+        return default_decision, default_obligations, self.policy_hash
 
     # ---- Explain mode (with trace) ----
 
     def explain(self, request_ctx: Dict[str, Any]) -> ExplainResult:
         default = self.policy.get("default", {}) or {}
         default_decision: Decision = (default.get("decision") or "PAUSE")
-        default_obls = parse_obligations(default.get("obligations") or [])
+        default_obligations = parse_obligations(default.get("obligations") or [])
 
         rules_trace: List[RuleTrace] = []
         matched_rule_name: str | None = None
@@ -110,7 +110,7 @@ class PolicyEngine:
                 policy_hash=self.policy_hash,
                 matched_rule=None,
                 used_default=True,
-                obligations=default_obls,
+                obligations=default_obligations,
                 rules=rules_trace,
             )
 

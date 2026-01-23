@@ -58,7 +58,8 @@ Docker Desktop
 
 From open-core:
 
-    docker compose -f sluice-demo/docker-compose.yml up --build
+    docker compose -f sluice-demo/docker-compose.yml build --no-cache backend
+    docker compose -f sluice-demo/docker-compose.yml up
 
 Then open:
 

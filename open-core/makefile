@@ -4,7 +4,7 @@ SHELL := /bin/bash
 
 PYTHON ?= python3.11
 PKG ?= sg-core
-VERSION ?= 0.1.0
+VERSION ?= 0.1.2
 
 .PHONY: help venv tools clean build check-dist test-upload test-verify prod-upload
 

@@ -1,24 +1,44 @@
 version: 1
-default: PAUSE
+
+default:
+  decision: PAUSE
 
 rules:
   - id: allow_small_charge
     when:
-      action: "stripe.charge"
-      amount_lte: 100   
-      currency: "USD"
+      - path: action.name
+        operator: eq
+        expected: stripe.charge
+      - path: context.amount
+        operator: lte
+        expected: 100
+      - path: context.currency
+        operator: ieq
+        expected: USD
     decision: ALLOW
 
   - id: pause_mid_charge
     when:
-      action: "stripe.charge"
-      amount_lte: 500  
-      currency: "USD"
+      - path: action.name
+        operator: eq
+        expected: stripe.charge
+      - path: context.amount
+        operator: lte
+        expected: 500
+      - path: context.currency
+        operator: ieq
+        expected: USD
     decision: PAUSE
 
   - id: block_large_charge
     when:
-      action: "stripe.charge"
-      amount_gt: 500   
-      currency: "USD"
+      - path: action.name
+        operator: eq
+        expected: stripe.charge
+      - path: context.amount
+        operator: gt
+        expected: 500
+      - path: context.currency
+        operator: ieq
+        expected: USD
     decision: BLOCK
