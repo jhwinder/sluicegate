@@ -21,29 +21,29 @@
   <h2>SluiceGate Demo</h2>
 
   <p>
-    1. A simulated AI Agent attempts to submit an <b>Execution Request</b>. 
+    1. A simulated AI Agent attempts to submit an <b>Execution Request</b>.
     <br>2. SluiceGate returns a <b>Gate Decision</b>:
     <br><br>
-    <span class="pill">ALLOW</span> (executes now) /
-    <span class="pill">PAUSE</span> (requires approval) /
-    <span class="pill">BLOCK</span> (denied)
-    <br><br><b>Nothing executes without passing SluiceGate!</b>
+    <span class="pill">ALLOW</span> (executes now)
+    &nbsp;&nbsp;
+    <span class="pill">PAUSE</span> (wait for human approval)
+    &nbsp;&nbsp;
+    <span class="pill">BLOCK</span> (deny)
   </p>
 
   <div class="card">
+    <h3>AI Agent Attempts Action</h3>
     <div class="row">
       <select id="agentType">
-        <option value="Billing Agent" selected>Billing Agent</option>
-        <option value="Infrastructure Agent">Infrastructure Agent</option>
-        <option value="Support Agent">Support Agent</option>
+        <option>Billing Agent</option>
+        <option>Infrastructure Agent</option>
+        <option>Support Agent</option>
       </select>
 
-      <select id="action">
-        <option value="stripe.refund">stripe.refund</option>
-      </select>
+      <input id="action" value="stripe.refund" />
 
       <select id="amount">
-        <option value="100" selected>100</option>
+        <option value="100">100</option>
         <option value="500">500</option>
         <option value="1000">1000</option>
       </select>
@@ -66,6 +66,13 @@
   <div class="card">
     <h3>SluiceGate Outcome</h3>
     <div id="statusLine">No execution request submitted yet.</div>
+
+    <!-- Visible “agent waiting” panel for PAUSE -->
+    <div id="waitPanel" style="display:none; margin-top:10px; padding:10px; border:1px solid #eee; border-radius:10px;">
+      <div style="font-weight:600;">⏸ Agent is waiting for human approval</div>
+      <div id="waitDetail" style="margin-top:6px; opacity:0.8;">Waiting…</div>
+    </div>
+
     <div class="row" style="margin-top:12px;">
       <button onclick="approve()" id="approveBtn" disabled>Approve</button>
       <button onclick="reject()" id="rejectBtn" disabled>Reject</button>
@@ -78,11 +85,13 @@
     <h3>Audit Trail</h3>
     <div class="row" style="margin-bottom:12px; align-items:center;">
       <button onclick="refreshAudit()">Refresh Audit</button>
+
       <label style="display:flex; align-items:center; gap:8px;">
-        <input type="checkbox" id="showAllAudit" onchange="refreshAudit()" />
+        <input type="checkbox" id="showAllAudit" />
         Show all audit events
       </label>
     </div>
+
     <div id="auditTable"><em>No audit events yet.</em></div>
   </div>
 
@@ -99,26 +108,87 @@
       .replaceAll("'", "&#039;");
   }
 
-  // If we were redirected from an approval email, auto-load that request
-  (function initFromQueryString() {
-    const params = new URLSearchParams(window.location.search);
-    const rid = params.get("request_id");
-    if (rid) {
-      currentId = rid;
-      document.getElementById("statusLine").innerText =
-        `execution_request_id=${currentId} | loaded from approval link`;
-      setButtons(true);
-      refresh().then(refreshAudit);
-    }
-  })();
+  function setButtonsByStatus(status) {
+    const terminal = ["EXECUTED", "REJECTED", "BLOCKED"].includes(status);
+    const hasId = !!currentId;
 
-  function setButtons(enabled) {
-    document.getElementById("approveBtn").disabled = !enabled;
-    document.getElementById("rejectBtn").disabled = !enabled;
-    document.getElementById("refreshBtn").disabled = !enabled;
+    // Approve/Reject only make sense while pending
+    document.getElementById("approveBtn").disabled = !hasId || terminal;
+    document.getElementById("rejectBtn").disabled  = !hasId || terminal;
+
+    // Refresh is useful while pending or for debugging, but per request: disable after completion
+    document.getElementById("refreshBtn").disabled = !hasId || terminal;
   }
 
+  function renderStatusLine(req) {
+    const note =
+      req.status === "EXECUTED" ? "✅ Completed" :
+      req.status === "REJECTED" ? "🛑 Rejected" :
+      req.status === "BLOCKED"  ? "❌ Blocked" :
+      req.status === "PENDING"  ? "⏸ Paused pending approval" :
+      "";
+
+    document.getElementById("statusLine").innerText =
+      `execution_request_id=${req.request_id} | gate_decision=${req.decision} | state=${req.status} | ${note}`;
+
+    setButtonsByStatus(req.status);
+  }
+
+  // ---------------------------
+  // Agent wait state (PAUSE)
+  // ---------------------------
+
+  let waitTimer = null;
+  let waitStartedAt = null;
+
+  function stopWaitingUI() {
+    if (waitTimer) clearInterval(waitTimer);
+    waitTimer = null;
+    waitStartedAt = null;
+    const panel = document.getElementById("waitPanel");
+    if (panel) panel.style.display = "none";
+  }
+
+  function startWaitingUI(requestId) {
+    stopWaitingUI();
+    waitStartedAt = Date.now();
+
+    const panel = document.getElementById("waitPanel");
+    const detail = document.getElementById("waitDetail");
+    if (panel) panel.style.display = "block";
+
+    let polls = 0;
+
+    waitTimer = setInterval(async () => {
+      polls += 1;
+      const elapsed = Math.round((Date.now() - waitStartedAt) / 1000);
+      if (detail) detail.innerText = `Waiting… ${elapsed}s elapsed (check #${polls})`;
+
+      try {
+        const rr = await fetch(`${API}/api/requests/${requestId}`);
+        const latest = await rr.json();
+
+        // Keep details panel fresh while waiting
+        document.getElementById("details").innerText = JSON.stringify(latest, null, 2);
+
+        if (latest.status !== "PENDING") {
+          stopWaitingUI();
+          renderStatusLine(latest);
+          await refreshAudit();
+        }
+      } catch (e) {
+        // ignore transient errors; keep polling
+      }
+    }, 1200);
+  }
+
+  // ---------------------------
+  // Main request submit
+  // ---------------------------
+
   async function submitReq() {
+    stopWaitingUI();
+
     const agentType = document.getElementById("agentType").value;
 
     const payload = {
@@ -141,12 +211,22 @@
     const data = await r.json();
     currentId = data.request_id;
 
+    // Render immediate result from /decide (fast feedback)
     document.getElementById("statusLine").innerText =
-      `execution_request_id=${currentId} | gate_decision=${data.decision} | state=${data.status} | ${data.message}`;
+      `execution_request_id=${currentId} | gate_decision=${data.decision} | state=${data.status} | ${data.message || ""}`;
 
-    setButtons(true);
-    await refresh();
+    // Buttons: enable while pending, disable if terminal
+    setButtonsByStatus(data.status);
+
+    await refresh();       // refresh will re-render from authoritative stored request
     await refreshAudit();
+
+    // If the gate paused the agent, visibly enter a WAIT state and poll until resolved
+    if (data.decision === "PAUSE" && data.status === "PENDING") {
+      startWaitingUI(currentId);
+    } else {
+      stopWaitingUI();
+    }
   }
 
   async function refresh() {
@@ -154,11 +234,23 @@
     const r = await fetch(`${API}/api/requests/${currentId}`);
     const data = await r.json();
     document.getElementById("details").innerText = JSON.stringify(data, null, 2);
+    renderStatusLine(data);
+
+    // Keep wait panel consistent with actual state
+    if (data.status === "PENDING" && data.decision === "PAUSE") {
+      // If we're not already polling, start polling
+      if (!waitTimer) startWaitingUI(currentId);
+    } else {
+      stopWaitingUI();
+    }
   }
 
   async function approve() {
     if (!currentId) return;
     await fetch(`${API}/api/requests/${currentId}/approve`, { method: "POST" });
+
+    // Stop the waiting panel immediately; refresh will show the final state.
+    stopWaitingUI();
     await refresh();
     await refreshAudit();
   }
@@ -166,6 +258,8 @@
   async function reject() {
     if (!currentId) return;
     await fetch(`${API}/api/requests/${currentId}/reject`, { method: "POST" });
+
+    stopWaitingUI();
     await refresh();
     await refreshAudit();
   }
@@ -215,6 +309,22 @@
       </table>
     `;
   }
+
+  // ---------------------------
+  // Init from approval link
+  // ---------------------------
+
+  (function initFromQueryString() {
+    const params = new URLSearchParams(window.location.search);
+    const rid = params.get("request_id");
+    if (rid) {
+      currentId = rid;
+      document.getElementById("statusLine").innerText =
+        `execution_request_id=${currentId} | loaded from approval link`;
+      setButtonsByStatus("PENDING"); // will be corrected by refresh()
+      refresh().then(refreshAudit);
+    }
+  })();
 </script>
 </body>
 </html>
