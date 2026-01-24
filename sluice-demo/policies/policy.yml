@@ -4,41 +4,32 @@ default:
   decision: PAUSE
 
 rules:
-  - id: allow_small_charge
+  - name: allow_small_refund
     when:
       - path: action.name
-        operator: eq
-        expected: stripe.charge
+        eq: stripe.refund
       - path: context.amount
-        operator: lte
-        expected: 100
+        lte: 100
       - path: context.currency
-        operator: ieq
-        expected: USD
+        eq: USD
     decision: ALLOW
 
-  - id: pause_mid_charge
+  - name: pause_mid_refund
     when:
       - path: action.name
-        operator: eq
-        expected: stripe.charge
+        eq: stripe.refund
       - path: context.amount
-        operator: lte
-        expected: 500
+        lte: 500
       - path: context.currency
-        operator: ieq
-        expected: USD
+        eq: USD
     decision: PAUSE
 
-  - id: block_large_charge
+  - name: block_large_refund
     when:
       - path: action.name
-        operator: eq
-        expected: stripe.charge
+        eq: stripe.refund
       - path: context.amount
-        operator: gt
-        expected: 500
+        gt: 500
       - path: context.currency
-        operator: ieq
-        expected: USD
+        eq: USD
     decision: BLOCK

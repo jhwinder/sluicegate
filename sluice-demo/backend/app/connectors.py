@@ -14,7 +14,7 @@ def stripe_charge_stub(amount: int, currency: str, metadata: Dict[str, Any]) -> 
     }
 
 def execute_action(action: str, amount: int, currency: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
-    if action == "stripe.charge":
+    if action == "stripe.refund":
         # future: if STRIPE_SECRET_KEY exists, use real stripe sdk
         return stripe_charge_stub(amount, currency, metadata)
     return {"ok": False, "error": f"Unknown action '{action}'"}

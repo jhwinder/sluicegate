@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 import os
 
 # Demo-layer models (FastAPI / UI only)
@@ -53,19 +53,64 @@ STORE: Dict[str, StoredRequest] = {}
 
 policy_engine = PolicyEngine(POLICY_PATH)
 
+# These are the only event_type values the demo audit model accepts.
+_ALLOWED_EVENT_TYPES = {
+    "REQUEST_CREATED",
+    "GATE_DECIDED",
+    "NOTIFICATION_ATTEMPTED",
+    "APPROVED",
+    "REJECTED",
+    "EXECUTION_STARTED",
+    "EXECUTION_COMPLETED",
+    "EXECUTION_FAILED",
+}
 
-def audit_sink(evt: Dict) -> None:
+
+def _resolve_request_id_from_resume_token(resume_token: Optional[str]) -> str:
+    if not resume_token:
+        return ""
+    for rid, rec in STORE.items():
+        if getattr(rec, "resume_token", None) == resume_token:
+            return rid
+    return ""
+
+
+def audit_sink(evt: Dict[str, Any]) -> None:
     """
     Translate sg-core audit events into the demo audit log format.
+
+    sg-core emits events shaped like:
+      {"event": "...", "request_id": <str|None>, "summary": "...", "details": {...}}
+
+    The demo expects:
+      event_type in a fixed literal set, and request_id must be a string.
     """
-    log_event(
-        request_id=evt.get("request_id", ""),
-        event_type=evt.get("event_type", "GATE_DECIDED"),
-        actor_type="SYSTEM",
-        actor_id="sg-core",
-        summary=evt.get("summary", ""),
-        details=evt.get("details", {}) or {},
-    )
+    try:
+        # sg-core uses "event", not "event_type"
+        raw_type = evt.get("event") or evt.get("event_type") or "GATE_DECIDED"
+        event_type = raw_type if raw_type in _ALLOWED_EVENT_TYPES else "GATE_DECIDED"
+
+        # sg-core sometimes emits request_id=None (e.g., PAUSE_RESOLVED). Coerce safely.
+        rid = evt.get("request_id")
+        request_id = str(rid) if rid is not None else ""
+
+        # If sg-core didn't include a request_id, try to resolve via resume_token
+        if not request_id:
+            details = evt.get("details") or {}
+            token = details.get("resume_token") if isinstance(details, dict) else None
+            request_id = _resolve_request_id_from_resume_token(token)
+
+        log_event(
+            request_id=request_id or "",
+            event_type=event_type,  # type: ignore[arg-type]
+            actor_type="SYSTEM",
+            actor_id="sg-core",
+            summary=evt.get("summary", "") or "",
+            details=evt.get("details", {}) or {},
+        )
+    except Exception:
+        # Audit must never crash the gate hot-path.
+        return
 
 
 gate = Gate(
@@ -77,6 +122,7 @@ gate = Gate(
 # Helpers
 # ------------------------------------------------------------------------------
 
+
 def ui_redirect(request_id: str) -> RedirectResponse:
     return RedirectResponse(
         url=f"{UI_URL}/?request_id={request_id}",
@@ -84,9 +130,55 @@ def ui_redirect(request_id: str) -> RedirectResponse:
     )
 
 
+def _execute_and_record(request_id: str, r: StoredRequest, summary_suffix: str = "") -> None:
+    """
+    Execute the requested action via the demo connector.
+    Never raise. Always record outcome to r.status / r.executed_result.
+    """
+    suffix = f" {summary_suffix}".rstrip()
+
+    log_event(
+        request_id=request_id,
+        event_type="EXECUTION_STARTED",
+        actor_type="SYSTEM",
+        actor_id="connector",
+        summary=f"Execution started{suffix}",
+        details={"action": r.payload.action},
+    )
+
+    try:
+        r.executed_result = execute_action(
+            r.payload.action,
+            r.payload.amount,
+            r.payload.currency,
+            r.payload.metadata,
+        )
+        r.status = "EXECUTED"
+        log_event(
+            request_id=request_id,
+            event_type="EXECUTION_COMPLETED",
+            actor_type="SYSTEM",
+            actor_id="connector",
+            summary=f"Execution completed{suffix}",
+            details={"result": r.executed_result},
+        )
+    except Exception as e:
+        r.status = "BLOCKED"
+        r.executed_result = {"ok": False, "error": str(e)}
+        log_event(
+            request_id=request_id,
+            event_type="EXECUTION_FAILED",
+            actor_type="SYSTEM",
+            actor_id="connector",
+            summary=f"Execution failed{suffix}",
+            details={"error": str(e)},
+        )
+
+
 # ------------------------------------------------------------------------------
 # Routes
 # ------------------------------------------------------------------------------
+
 
 @app.get("/health")
 def health():
@@ -120,8 +212,6 @@ def decide(req: ActionRequest):
         action={
             "name": req.action,
             "params": {
-                "amount": req.amount,
-                "currency": req.currency,
                 **req.metadata,
             },
         },
@@ -131,10 +221,27 @@ def decide(req: ActionRequest):
         },
         context={
             "demo": True,
+            "amount": req.amount,
+            "currency": (req.currency or "").upper(),
         },
     )
 
     decision = gate.evaluate(gate_request)
+
+    # Always log a decision at the demo layer (in addition to any sg-core audit events)
+    log_event(
+        request_id=request_id,
+        event_type="GATE_DECIDED",
+        actor_type="POLICY",
+        actor_id="sg-core",
+        summary=f"Gate decided: {decision.decision}",
+        details={
+            "decision": decision.decision,
+            "policy_hash": decision.policy_hash,
+            "resume_token": decision.resume_token,
+            "message": getattr(decision, "message", None),
+        },
+    )
 
     status = (
         "PENDING"
@@ -157,40 +264,7 @@ def decide(req: ActionRequest):
 
     # Immediate execution if allowed
     if decision.decision == "ALLOW":
-        log_event(
-            request_id=request_id,
-            event_type="EXECUTION_STARTED",
-            actor_type="SYSTEM",
-            actor_id="connector",
-            summary="Execution started",
-            details={"action": req.action},
-        )
-        try:
-            stored.executed_result = execute_action(
-                req.action,
-                req.amount,
-                req.currency,
-                req.metadata,
-            )
-            stored.status = "EXECUTED"
-            log_event(
-                request_id=request_id,
-                event_type="EXECUTION_COMPLETED",
-                actor_type="SYSTEM",
-                actor_id="connector",
-                summary="Execution completed",
-                details={"result": stored.executed_result},
-            )
-        except Exception as e:
-            stored.status = "BLOCKED"
-            log_event(
-                request_id=request_id,
-                event_type="EXECUTION_FAILED",
-                actor_type="SYSTEM",
-                actor_id="connector",
-                summary="Execution failed",
-                details={"error": str(e)},
-            )
+        _execute_and_record(request_id, stored)
 
     # Human approval required
     if decision.decision == "PAUSE":
@@ -236,16 +310,29 @@ def approve(request_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Not found")
 
     if r.status != "PENDING":
-        return ui_redirect(request_id) if request.method == "GET" else {"ok": True}
+        return ui_redirect(request_id) if request.method == "GET" else {"ok": True, "status": r.status, "note": "No-op (not pending)"}
 
     if not r.resume_token:
         raise HTTPException(status_code=500, detail="Missing resume_token")
 
-    gate.approve(
-        r.resume_token,
-        approver="email_link" if request.method == "GET" else "api_client",
-        comment="approved",
-    )
+    # Resolve the PAUSE inside sg-core (must not 500 the user experience)
+    try:
+        gate.approve(
+            r.resume_token,
+            approver="email_link" if request.method == "GET" else "api_client",
+            comment="approved",
+        )
+    except Exception as e:
+        log_event(
+            request_id=request_id,
+            event_type="EXECUTION_FAILED",
+            actor_type="SYSTEM",
+            actor_id="sg-core",
+            summary="Approval failed inside sg-core",
+            details={"error": str(e)},
+        )
+        # Still redirect to UI instead of showing a stacktrace
+        return ui_redirect(request_id) if request.method == "GET" else {"ok": False, "error": str(e)}
 
     log_event(
         request_id=request_id,
@@ -255,35 +342,10 @@ def approve(request_id: str, request: Request):
         summary="Request approved",
     )
 
-    # Execute after approval
-    log_event(
-        request_id=request_id,
-        event_type="EXECUTION_STARTED",
-        actor_type="SYSTEM",
-        actor_id="connector",
-        summary="Execution started (after approval)",
-        details={"action": r.payload.action},
-    )
-
-    r.executed_result = execute_action(
-        r.payload.action,
-        r.payload.amount,
-        r.payload.currency,
-        r.payload.metadata,
-    )
-    r.status = "EXECUTED"
+    _execute_and_record(request_id, r, summary_suffix="(after approval)")
     STORE[request_id] = r
 
-    log_event(
-        request_id=request_id,
-        event_type="EXECUTION_COMPLETED",
-        actor_type="SYSTEM",
-        actor_id="connector",
-        summary="Execution completed (after approval)",
-        details={"result": r.executed_result},
-    )
-
-    return ui_redirect(request_id) if request.method == "GET" else {"ok": True}
+    return ui_redirect(request_id) if request.method == "GET" else {"ok": True, "status": r.status, "executed_result": r.executed_result}
 
 
 @app.api_route("/api/requests/{request_id}/reject", methods=["GET", "POST"])
@@ -293,16 +355,27 @@ def reject(request_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Not found")
 
     if r.status != "PENDING":
-        return ui_redirect(request_id) if request.method == "GET" else {"ok": True}
+        return ui_redirect(request_id) if request.method == "GET" else {"ok": True, "status": r.status, "note": "No-op (not pending)"}
 
     if not r.resume_token:
         raise HTTPException(status_code=500, detail="Missing resume_token")
 
-    gate.deny(
-        r.resume_token,
-        approver="email_link" if request.method == "GET" else "api_client",
-        comment="rejected",
-    )
+    try:
+        gate.deny(
+            r.resume_token,
+            approver="email_link" if request.method == "GET" else "api_client",
+            comment="rejected",
+        )
+    except Exception as e:
+        log_event(
+            request_id=request_id,
+            event_type="EXECUTION_FAILED",
+            actor_type="SYSTEM",
+            actor_id="sg-core",
+            summary="Rejection failed inside sg-core",
+            details={"error": str(e)},
+        )
+        return ui_redirect(request_id) if request.method == "GET" else {"ok": False, "error": str(e)}
 
     r.status = "REJECTED"
     STORE[request_id] = r
@@ -315,7 +388,7 @@ def reject(request_id: str, request: Request):
         summary="Request rejected",
     )
 
-    return ui_redirect(request_id) if request.method == "GET" else {"ok": True}
+    return ui_redirect(request_id) if request.method == "GET" else {"ok": True, "status": r.status}
 
 
 @app.get("/api/audit")
