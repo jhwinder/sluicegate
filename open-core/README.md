@@ -1,3 +1,8 @@
+> 🚀 **SluiceGate is now public (v0.1.3).**
+> This is an early open-core release; interfaces may evolve.
+> Feedback welcome via GitHub Issues.
+
+
 # SluiceGate Open Core
 
 This directory contains the SluiceGate Open Core: a pure, deterministic policy engine for governing actions taken by autonomous systems (AI agents, services, workflows, humans-in-the-loop).

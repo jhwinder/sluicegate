@@ -1,85 +1,175 @@
 import os
+from typing import Any, Dict, Optional
+
+import resend
+from sg_core.adapters import ApprovalAdapter, ApprovalRequest
+
+# -----------------------------------------------------------------------------
+# Configuration
+# -----------------------------------------------------------------------------
 
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
 APPROVER_EMAIL = os.environ.get("APPROVER_EMAIL", "").strip()
+RESEND_FROM = os.environ.get("RESEND_FROM", "onboarding@resend.dev").strip()
 
-def maybe_send_email_approval(request_id: str, action: str, amount: int, currency: str, base_url: str) -> None:
+# UI link (for informational emails / convenience)
+UI_URL = os.environ.get("UI_URL", "http://localhost:8080").rstrip("/")
+
+# -----------------------------------------------------------------------------
+# Demo Email Approval Adapter (implements sg_core.adapters.ApprovalAdapter)
+# -----------------------------------------------------------------------------
+
+class DemoEmailApprovalAdapter(ApprovalAdapter):
     """
-    Sends an email with Approve/Reject links.
-    If env vars aren't present, it becomes a no-op (demo still works via UI).
+    Demo-only email approval adapter.
+
+    This lives in sluice-demo (host app) and implements the sg_core ApprovalAdapter
+    contract. It can later be moved into a separate sg_adapters package unchanged.
     """
-    if not RESEND_API_KEY or not APPROVER_EMAIL:
-        return
 
-    approve_url = f"{base_url}/api/requests/{request_id}/approve"
-    reject_url = f"{base_url}/api/requests/{request_id}/reject"
+    name = "demo-email"
 
-    subject = f"SluiceGate approval required: {action} ({amount} {currency})"
+    def __init__(self) -> None:
+        if not RESEND_API_KEY:
+            raise RuntimeError("RESEND_API_KEY is not set")
+        if not APPROVER_EMAIL:
+            raise RuntimeError("APPROVER_EMAIL is not set")
 
-    text = (
-        "SluiceGate approval required\n\n"
-        f"request_id: {request_id}\n"
-        f"action: {action}\n"
-        f"amount: {amount} {currency}\n\n"
-        f"APPROVE: {approve_url}\n"
-        f"REJECT:  {reject_url}\n\n"
-        "Nothing executes without passing SluiceGate!\n"
-    )
-
-    try:
-        import resend  # type: ignore
         resend.api_key = RESEND_API_KEY
 
-        # Resend requires a verified From address on your account.
-        # Use your verified sender/domain here:
-        from_email = os.environ.get("RESEND_FROM", "onboarding@resend.dev")
+    def send(self, approval: ApprovalRequest) -> None:
+        subject = f"SluiceGate approval required: {approval.action_name} — {approval.summary}"
 
-        resend.Emails.send({
-            "from": from_email,
-            "to": [APPROVER_EMAIL],
-            "subject": subject,
-            "text": text,
-        })
-    except Exception:
-        # Don't break the demo if email fails.
-        pass
-    
-def maybe_send_email_blocked(request_id: str, action: str, amount: int, currency: str, base_url: str, agent_type: str = "Unknown Agent") -> None:
+        text = (
+            "SluiceGate approval required\n\n"
+            f"request_id: {approval.request_id}\n"
+            f"action: {approval.action_name}\n"
+            f"summary: {approval.summary}\n"
+            f"details: {approval.details}\n\n"
+            f"APPROVE: {approval.approve_url}\n"
+            f"REJECT:  {approval.reject_url}\n\n"
+            "Nothing executes without passing SluiceGate.\n"
+        )
+
+        resend.Emails.send(
+            {
+                "from": RESEND_FROM,
+                "to": [APPROVER_EMAIL],
+                "subject": subject,
+                "text": text,
+            }
+        )
+
+
+# Singleton instance (fine for demo)
+_EMAIL_ADAPTER = DemoEmailApprovalAdapter()
+
+# -----------------------------------------------------------------------------
+# Demo-facing functions (called by main.py)
+# -----------------------------------------------------------------------------
+
+def maybe_send_email_approval(
+    request_id: str,
+    action: str,
+    amount: int,
+    currency: str,
+    base_url: str,
+    reason: Optional[str] = None,
+    approver_group: Optional[str] = None,
+) -> None:
     """
-    Sends an informational email when a request is BLOCKED by policy.
+    Send an approval email (Approve/Reject links) for a PAUSE decision.
     """
-    if not RESEND_API_KEY or not APPROVER_EMAIL:
-        return
+    approve_url = f"{base_url.rstrip('/')}/api/requests/{request_id}/approve"
+    reject_url = f"{base_url.rstrip('/')}/api/requests/{request_id}/reject"
 
-    # Link back to UI to view the record (status, audit trail, etc.)
-    ui_base = os.environ.get("UI_URL", "http://localhost:8080").rstrip("/")
-    view_url = f"{ui_base}/?request_id={request_id}"
+    approval = ApprovalRequest(
+        request_id=request_id,
+        action_name=action,
+        summary=f"{amount} {currency}".strip(),
+        details={"amount": amount, "currency": currency},
+        approve_url=approve_url,
+        reject_url=reject_url,
+        reason=reason,
+        approver_group=approver_group,
+    )
 
+    _EMAIL_ADAPTER.send(approval)
+
+
+def maybe_send_email_blocked(
+    request_id: str,
+    action: str,
+    amount: int,
+    currency: str,
+    agent_type: str = "Unknown Agent",
+    policy_hash: Optional[str] = None,
+    message: Optional[str] = None,
+) -> None:
+    """
+    Send an informational email when a request is BLOCKED by policy.
+    (No action required.)
+    """
     subject = f"SluiceGate BLOCKED: {agent_type} → {action} ({amount} {currency})"
 
-    text = (
-        "SluiceGate blocked an autonomous action\n\n"
-        f"request_id: {request_id}\n"
-        f"agent_type: {agent_type}\n"
-        f"action: {action}\n"
-        f"amount: {amount} {currency}\n\n"
-        "Result: BLOCKED by policy\n\n"
-        f"View in demo UI: {view_url}\n"
-        "\n"
-        "Principle: nothing executes without passing the gate.\n"
+    view_url = f"{UI_URL}/?request_id={request_id}"
+
+    lines = [
+        "SluiceGate blocked an autonomous action",
+        "",
+        f"request_id: {request_id}",
+        f"agent_type: {agent_type}",
+        f"action: {action}",
+        f"amount: {amount} {currency}",
+    ]
+    if policy_hash:
+        lines.append(f"policy_hash: {policy_hash}")
+    if message:
+        lines.extend(["", f"message: {message}"])
+
+    lines.extend(
+        [
+            "",
+            "Result: BLOCKED by policy",
+            "",
+            f"View in demo UI: {view_url}",
+            "",
+            "Principle: nothing executes without passing the gate.",
+        ]
     )
 
-    try:
-        import resend  # type: ignore
-        resend.api_key = RESEND_API_KEY
-        from_email = os.environ.get("RESEND_FROM", "onboarding@resend.dev")
-
-        resend.Emails.send({
-            "from": from_email,
+    resend.Emails.send(
+        {
+            "from": RESEND_FROM,
             "to": [APPROVER_EMAIL],
             "subject": subject,
-            "text": text,
-        })
-    except Exception:
-        # Don't break the demo if email fails.
-        pass
+            "text": "\n".join(lines),
+        }
+    )
+
+
+def build_approval_request(
+    request_id: str,
+    action: str,
+    amount: int,
+    currency: str,
+    base_url: str,
+    reason: Optional[str] = None,
+    approver_group: Optional[str] = None,
+) -> ApprovalRequest:
+    """
+    Convenience helper if you prefer to create ApprovalRequest in main.py and call adapter.send().
+    """
+    approve_url = f"{base_url.rstrip('/')}/api/requests/{request_id}/approve"
+    reject_url = f"{base_url.rstrip('/')}/api/requests/{request_id}/reject"
+
+    return ApprovalRequest(
+        request_id=request_id,
+        action_name=action,
+        summary=f"{amount} {currency}".strip(),
+        details={"amount": amount, "currency": currency},
+        approve_url=approve_url,
+        reject_url=reject_url,
+        reason=reason,
+        approver_group=approver_group,
+    )

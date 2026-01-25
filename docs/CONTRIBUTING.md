@@ -3,7 +3,7 @@
 Thanks for your interest in SluiceGate!
 
 ## Scope
-This repo contains the **Open Core**: deterministic policy evaluation, decision loop, and reference adapters.
+This repo contains the **Open Core**: deterministic policy evaluation, decision loop, and reference adapters. This project is early; interfaces may evolve prior to v1.0.
 
 ## How to contribute
 - File issues for bugs, clarity problems, or missing docs

@@ -1,6 +1,12 @@
+🚀 **SluiceGate is now public (v0.1.3).**
+This is an early open-core release; interfaces may evolve.
+Feedback welcome via GitHub Issues.
+
 **SluiceGate**
 
 SluiceGate is a policy-enforcing control plane for autonomous and semi-autonomous software systems.  As AI agents and automated workflows gain the ability to act—spend money, modify systems, trigger real-world effects—SluiceGate ensures that nothing executes without passing through an explicit, auditable gate.  SluiceGate sits in the execution path, not on the sidelines.
+
+This repository contains the open-core of SluiceGate under the SluiceGate Source-Available License.
 
 **The Problem**
 

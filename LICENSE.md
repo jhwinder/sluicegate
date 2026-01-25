@@ -1,7 +1,7 @@
 SluiceGate Source-Available License
 Version 1.0
 
-Copyright (c) 2026 SluiceGate, Inc.
+Copyright (c) 2026 Jason Winder DBA SluiceGate
 All rights reserved.
 
 This software is licensed under the terms below.
@@ -10,7 +10,7 @@ This software is licensed under the terms below.
 1. GRANT OF RIGHTS
 ----------------------------------------------------------------------
 
-Subject to the restrictions in this license, SluiceGate, Inc. (“Licensor”)
+Subject to the restrictions in this license, SluiceGate (“Licensor”)
 grants you a non-exclusive, non-transferable, non-sublicensable license
 to:
 
@@ -60,7 +60,8 @@ Commercial licenses are available from Licensor and may include rights to:
 - redistribution;
 - support, warranties, or indemnification.
 
-Contact: licensing@sluicegate.ai
+Contact: jhwinder@gmail.com
+         (Ensure "SluiceGate" is in the Subject line)
 
 ----------------------------------------------------------------------
 5. CONTRIBUTIONS
