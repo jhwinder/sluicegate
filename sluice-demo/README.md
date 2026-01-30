@@ -46,6 +46,19 @@ All execution paths flow through the gate.
       frontend/
         index.html        # Minimal UI for demoing decisions
 
+## Email approvals (optional)
+
+The demo supports human-in-the-loop approvals via email using Resend.
+
+To enable approval emails, set the following environment variables in `docker-compose.yml`:
+
+- `RESEND_API_KEY` – your Resend API key
+- `APPROVER_EMAIL` – email address that will receive approval requests
+- `RESEND_FROM` – verified sender address in Resend (optional)
+
+If these variables are not set, the demo will still work, however
+approvals must be completed via the web UI instead of via email.
+
 **Running the Demo Locally**
 
 <ins>Prerequisites</ins>
@@ -59,7 +72,7 @@ Docker Desktop
 From open-core:
 
     docker compose -f sluice-demo/docker-compose.yml build --no-cache backend
-    docker compose -f sluice-demo/docker-compose.yml up
+    docker compose -f sluice-demo/docker-compose.yml up --force-recreate
 
 Then open:
 
@@ -81,6 +94,6 @@ Approvals can be performed directly in the UI.
 **Important Notes**
 
 * Stripe execution is stubbed (no real charges)
-* Data is stored in memory only
+* Data/auditing is stored in memory only
 * Policies can be edited live and reloaded
 * This demo is intentionally minimal and auditable
