@@ -1,11 +1,16 @@
-**SluiceGate Demo**
+## SluiceGate Demo
 
-SluiceGate is a policy-enforcing control plane for autonomous and semi-autonomous software actions.
-This demo illustrates how SluiceGate sits in the execution path of sensitive operations (e.g., payments), evaluates them against explicit policies, and either allows, pauses for approval, or blocks execution.
+SluiceGate is a policy-enforcing control plane for autonomous and
+semi-autonomous software actions. This demo illustrates how SluiceGate
+sits in the execution path of sensitive operations (e.g., payments),
+evaluates them against explicit policies, and either allows, pauses for
+approval, or blocks execution.
 
-This repository contains a local, runnable reference demo intended for product exploration, investor walkthroughs, and early customer conversations. It is not the production core engine.
+This repository contains a local, runnable reference demo intended for
+product exploration, investor walkthroughs, and early customer
+conversations. It is not the production core engine.
 
-**What This Demo Shows**
+## What This Demo Shows
 
 The demo implements an end-to-end transaction gating flow:
 
@@ -21,7 +26,7 @@ Approved requests execute via a connector (stubbed for safety).
 
 This demonstrates human-in-the-loop control without removing autonomy.
 
-**Architecture Overview**
+## Architecture Overview
 
     Browser UI
       │
@@ -35,22 +40,23 @@ This demonstrates human-in-the-loop control without removing autonomy.
 
 All execution paths flow through the gate.
 
-**Repo Structure**
+## Repo Top-level Structure
 
-    sluicegate-demo/
-      docker-compose.yml
-      policies/
-        policy.yml        # Human-readable policy rules
-      backend/
-        app/              # SluiceGate API + enforcement logic
-      frontend/
-        index.html        # Minimal UI for demoing decisions
+    sluice-demo
+    ├── backend
+    │   └── app/           # SluiceGate API + enforcement logic
+    ├── docker-compose.yml
+    ├── frontend
+    │   └── index.html     # Minimal UI for demoing decisions
+    └── policies
+        └── policy.yml     # Human-readable policy rules
 
 ## Email approvals (optional)
 
 The demo supports human-in-the-loop approvals via email using Resend.
 
-To enable approval emails, set the following environment variables in `docker-compose.yml`:
+To enable approval emails, set the following environment variables in
+`docker-compose.yml`:
 
 - `RESEND_API_KEY` – your Resend API key
 - `APPROVER_EMAIL` – email address that will receive approval requests
@@ -59,15 +65,14 @@ To enable approval emails, set the following environment variables in `docker-co
 If these variables are not set, the demo will still work, however
 approvals must be completed via the web UI instead of via email.
 
-**Running the Demo Locally**
+## Running the Demo Locally
 
-<ins>Prerequisites</ins>
+### Prerequisites
 
-macOS
+- macOS
+- Docker Desktop
 
-Docker Desktop
-
-<ins>Start the demo</ins>
+### Start the demo
 
 From open-core:
 
@@ -80,20 +85,20 @@ Then open:
     API Health: http://localhost:8000/health
     API Docs (Swagger): http://localhost:8000/docs
 
-**Demo Scenarios**
+## Demo Scenarios
 
 Use the UI to submit a stripe.charge request:
 
-    Amount	Outcome
-    100     ALLOW → executes immediately
-    500   	PAUSE → requires approval
-    1000  	BLOCK → denied by policy
+    Amount Outcome
+    100  ALLOW → executes immediately
+    500  PAUSE → requires approval
+    1000 BLOCK → denied by policy
 
 Approvals can be performed directly in the UI.
 
-**Important Notes**
+## Important Notes
 
-* Stripe execution is stubbed (no real charges)
-* Data/auditing is stored in memory only
-* Policies can be edited live and reloaded
-* This demo is intentionally minimal and auditable
+- Stripe execution is stubbed (no real charges)
+- Data/auditing is stored in memory only
+- Policies can be edited live and reloaded
+- This demo is intentionally minimal and auditable
