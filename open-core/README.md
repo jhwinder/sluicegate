@@ -46,20 +46,26 @@ open-core/
 ├── pyproject.toml
 ├── README.md
 ├── src/
-│   └── sg_core/
+│   ├── sg_core/
+│   │   ├── __init__.py
+│   │   ├── adapters.py
+│   │   ├── decision_loop.py
+│   │   ├── models.py
+│   │   ├── obligation_adapter.py
+│   │   ├── pause_api.py
+│   │   ├── policy.py
+│   │   └── py.typed
+│   └── sg_poledit/
 │       ├── __init__.py
-│       ├── adapters.py
-│       ├── decision_loop.py
-│       ├── models.py
-│       ├── obligation_adapter.py
-│       ├── pause_api.py
-│       ├── policy.py
-│       └── py.typed
+│       ├── cli.py
+│       ├── io.py
+│       ├── schema.py
+│       ├── templates.py
+│       └── validate.py
 ├── examples/
 │   └── run_local_decision.py
 ├── policies/
 │   └── example-policy.yml
-└── tests/            (future pytest tests)
 
 ----------------------------------------------------------------
 
@@ -137,6 +143,28 @@ All conditions within a rule must match (AND-only in Beta).
 The first matching rule wins; otherwise the policy default applies.
 
 See docs/Policy_DSL.md at the repo root for the full DSL specification.
+
+----------------------------------------------------------------
+
+POLICY AUTHORING TOOL
+
+`sg_poledit` is an optional companion CLI for creating and validating policy YAML. It is packaged in this repo, but `sg_core` does not depend on it at runtime.
+
+This utility does only very basic policy file structural validation, i.e., it does not perform any semantic linting to validate that policies are logical/sensible.
+
+This utility can be used to create a blank starter policy, with sample `ALLOW`/`PAUSE`/`BLOCK` policies that can be used as a starting point for robust policy development.
+
+This utility supports three command line swiches:
+
+`new`: creates a new bare-bones policy.yml file
+`validate`: checks a policy.yml file for proper semantics
+`format`: reads an existing policy file, parses it,validates it, and then writes it back out as normalized YAML. (Note - only does minor formatting; it's not magic!)
+
+Example commands:
+
+  uv run sg-poledit new --out ./policy.yml
+  uv run sg-poledit validate ./policy.yml
+  uv run sg-poledit format ./policy.yml
 
 ----------------------------------------------------------------
 

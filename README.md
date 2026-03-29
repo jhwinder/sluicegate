@@ -94,6 +94,7 @@ In all cases, SluiceGate ensures that AI autonomy operates only within explicitl
     open-core/             # SluiceGate Open Core
         src/
             sg_core/
+            sg_poledit/
         policies/
         examples/
     sluice-demo/           # Runnable reference demo

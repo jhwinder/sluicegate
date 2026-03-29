@@ -1,0 +1,39 @@
+# SluiceGate starter policy
+# Replace these example rules with rules that match your own actors, actions, targets, and context.
+# Rules are evaluated top-to-bottom. The first matching rule wins.
+# Each rule below shows one possible decision: ALLOW, PAUSE, or BLOCK.
+
+# Example ALLOW rule: edit or replace to permit low-risk requests.
+# Example PAUSE rule: edit or replace to require approval for sensitive requests.
+# Example BLOCK rule: edit or replace to deny disallowed requests.
+version: 1
+default:
+  decision: PAUSE
+rules:
+- name: Example allow rule
+  when:
+  - path: actor.role
+    eq: trusted
+  - path: context.risk_score
+    lte: 20
+- name: Example pause rule
+  when:
+  - path: action.name
+    eq: change.apply
+  - path: context.env
+    eq: prod
+  decision: PAUSE
+  obligations:
+  - type: require_approval
+    approver_group: Operators
+    reason: Production changes require approval
+- name: Example block rule
+  when:
+  - path: action.name
+    eq: data.export
+  - path: context.sensitivity
+    in:
+    - PHI
+    - PII
+    - CONFIDENTIAL
+  decision: BLOCK
