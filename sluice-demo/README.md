@@ -74,7 +74,7 @@ approvals must be completed via the web UI instead of via email.
 
 ### Start the demo
 
-From open-core:
+From project root:
 
     docker compose -f sluice-demo/docker-compose.yml build --no-cache backend
     docker compose -f sluice-demo/docker-compose.yml up --force-recreate
