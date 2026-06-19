@@ -1,0 +1,12 @@
+version: '3.8'
+services:
+  sg-poledit:
+    build:
+      context: ../../../../
+      dockerfile: open-core/src/sg_poledit/editor/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - POLICIES_DIR=/policies
+    volumes:
+      - ../../../policies:/policies:rw
