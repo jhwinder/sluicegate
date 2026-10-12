@@ -81,6 +81,34 @@ class UpdateAgentRequest(BaseModel):
     poll_rate_limit_per_minute: int | None = None
 
 
+class RegisterMinionRequest(BaseModel):
+    minion_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    description: str = ""
+    runtime_type: str = "powershell"
+    version: str = "1.0"
+    environment: str = "prod"
+    capabilities: list[str] = Field(default_factory=lambda: ["windows.patch.reconcile"])
+    scope_metadata: dict[str, Any] = Field(default_factory=dict)
+    transport_type: str = "pull"
+    endpoint_info: str = ""
+    public_key: str = Field(min_length=1)
+
+
+class UpdateMinionRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    runtime_type: str | None = None
+    version: str | None = None
+    environment: str | None = None
+    capabilities: list[str] | None = None
+    scope_metadata: dict[str, Any] | None = None
+    transport_type: str | None = None
+    endpoint_info: str | None = None
+    enabled: bool | None = None
+    public_key: str | None = None
+
+
 def connect() -> sqlite3.Connection:
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DATABASE_PATH, timeout=15)
@@ -121,9 +149,20 @@ def initialize() -> None:
             );
             CREATE TABLE IF NOT EXISTS minions (
                 minion_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL DEFAULT '',
+                description TEXT DEFAULT '',
+                runtime_type TEXT DEFAULT 'powershell',
+                version TEXT DEFAULT '1.0',
+                environment TEXT DEFAULT 'prod',
+                capabilities TEXT NOT NULL DEFAULT '["windows.patch.reconcile"]',
+                scope_metadata TEXT DEFAULT '{}',
+                transport_type TEXT DEFAULT 'pull',
+                endpoint_info TEXT DEFAULT '',
                 public_key TEXT NOT NULL,
                 enabled INTEGER NOT NULL DEFAULT 1,
-                created_at REAL NOT NULL
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL DEFAULT 0,
+                last_contact_at REAL
             );
             CREATE TABLE IF NOT EXISTS missions (
                 mission_id TEXT PRIMARY KEY,
@@ -174,6 +213,23 @@ def initialize() -> None:
             connection.execute("ALTER TABLE missions ADD COLUMN raw_request TEXT")
         except sqlite3.OperationalError:
             pass
+        for col, col_def in [
+            ("name", "TEXT NOT NULL DEFAULT ''"),
+            ("description", "TEXT DEFAULT ''"),
+            ("runtime_type", "TEXT DEFAULT 'powershell'"),
+            ("version", "TEXT DEFAULT '1.0'"),
+            ("environment", "TEXT DEFAULT 'prod'"),
+            ("capabilities", "TEXT NOT NULL DEFAULT '[\"windows.patch.reconcile\"]'"),
+            ("scope_metadata", "TEXT DEFAULT '{}'"),
+            ("transport_type", "TEXT DEFAULT 'pull'"),
+            ("endpoint_info", "TEXT DEFAULT ''"),
+            ("updated_at", "REAL NOT NULL DEFAULT 0"),
+            ("last_contact_at", "REAL"),
+        ]:
+            try:
+                connection.execute(f"ALTER TABLE minions ADD COLUMN {col} {col_def}")
+            except sqlite3.OperationalError:
+                pass
         bootstrap_admin_key = os.environ.get("SG_BOOTSTRAP_ADMIN_KEY", "")
         if bootstrap_admin_key:
             connection.execute(
@@ -186,9 +242,14 @@ def initialize() -> None:
             development_public_key = os.environ.get("SG_DEV_MINION_PUBLIC_KEY_PATH", "")
             if development_public_key and Path(development_public_key).is_file():
                 public_key = Path(development_public_key).read_text(encoding="utf-8")
+                now = time.time()
                 connection.execute(
-                    "INSERT OR IGNORE INTO minions (minion_id, public_key, created_at) VALUES (?, ?, ?)",
-                    ("DEMO-STUB-01", public_key, time.time()),
+                    """
+                    INSERT INTO minions (minion_id, name, capabilities, public_key, created_at, updated_at)
+                    VALUES ('DEMO-STUB-01', 'Demo Stub Minion', '["windows.patch.reconcile", "demo.action"]', ?, ?, ?)
+                    ON CONFLICT(minion_id) DO UPDATE SET public_key = excluded.public_key, capabilities = excluded.capabilities, enabled = 1
+                    """,
+                    (public_key, now, now),
                 )
 
 
@@ -319,6 +380,25 @@ def validate_transition(current: str, new: str) -> None:
         raise HTTPException(status_code=409, detail=f"Invalid Mission status transition: {current} -> {new}")
 
 
+def resolve_minion(capability: str, environment: str = "prod", scope_target: dict[str, Any] | None = None) -> str:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT minion_id, capabilities, environment, scope_metadata FROM minions WHERE enabled = 1 ORDER BY created_at ASC"
+        ).fetchall()
+        for r in rows:
+            if r["environment"] != environment:
+                continue
+            caps = json.loads(r["capabilities"] or "[]")
+            if capability in caps:
+                return str(r["minion_id"])
+    if PATCH_MINION_ID:
+        return PATCH_MINION_ID
+    raise HTTPException(
+        status_code=503,
+        detail=f"No eligible Minion found for capability '{capability}' in environment '{environment}'",
+    )
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -361,6 +441,12 @@ def create_patch_request(request: PatchRequest, principal: str = Depends(require
                     "status": "ACCEPTED",
                 }
 
+    assigned_minion_id = resolve_minion(
+        capability="windows.patch.reconcile",
+        environment="prod",
+        scope_target={"servers": request.servers},
+    )
+
     request_id = f"REQ-{uuid.uuid4().hex}"
     mission_id = f"MISSION-{uuid.uuid4().hex}"
     if policy_engine is None:
@@ -392,7 +478,7 @@ def create_patch_request(request: PatchRequest, principal: str = Depends(require
         "protocol_version": "1.0",
         "request_id": request_id,
         "mission_id": mission_id,
-        "minion_id": PATCH_MINION_ID,
+        "minion_id": assigned_minion_id,
         "capability": "windows.patch.reconcile",
         "target": {"servers": request.servers},
         "parameters": {
@@ -417,7 +503,7 @@ def create_patch_request(request: PatchRequest, principal: str = Depends(require
     with transaction() as connection:
         connection.execute(
             "INSERT INTO missions (mission_id, request_id, agent_id, minion_id, envelope, status, raw_request, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (mission_id, request_id, principal, PATCH_MINION_ID, json.dumps(envelope), mission_state, raw_req_json, time.time(), time.time()),
+            (mission_id, request_id, principal, assigned_minion_id, json.dumps(envelope), mission_state, raw_req_json, time.time(), time.time()),
         )
     return {"request_id": request_id, "status": "ACCEPTED" if decision != "BLOCK" else "CLOSED"}
 
@@ -426,7 +512,10 @@ def create_patch_request(request: PatchRequest, principal: str = Depends(require
 def minion_check_in(minion_id: str, principal: str = Depends(require_minion)) -> dict[str, Any]:
     if minion_id != principal:
         raise HTTPException(status_code=403, detail="Minion identity not authorized")
-    return {"minion_id": minion_id, "status": "CONNECTED", "server_time": time.time()}
+    now = time.time()
+    with transaction() as connection:
+        connection.execute("UPDATE minions SET last_contact_at = ? WHERE minion_id = ?", (now, minion_id))
+    return {"minion_id": minion_id, "status": "CONNECTED", "server_time": now}
 
 
 @app.post("/internal/v1/minions/{minion_id}/missions/claim")
@@ -736,6 +825,181 @@ def revoke_credential(key_id: str, _admin: str = Depends(require_admin)) -> dict
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail="Active credential not found")
     return {"key_id": key_id, "status": "REVOKED"}
+
+
+@app.post("/admin/v1/minions", status_code=status.HTTP_201_CREATED)
+def register_minion(body: RegisterMinionRequest, _admin: str = Depends(require_admin)) -> dict[str, Any]:
+    try:
+        key = serialization.load_pem_public_key(body.public_key.encode("utf-8"))
+        if not isinstance(key, ed25519.Ed25519PublicKey):
+            raise ValueError("Expected Ed25519 public key")
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid Ed25519 public key") from None
+
+    token = secrets.token_urlsafe(48)
+    key_id = f"KEY-{uuid.uuid4().hex}"
+    now = time.time()
+    with transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO minions (minion_id, name, description, runtime_type, version, environment, capabilities, scope_metadata, transport_type, endpoint_info, public_key, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(minion_id) DO UPDATE SET
+                name = excluded.name,
+                description = excluded.description,
+                runtime_type = excluded.runtime_type,
+                version = excluded.version,
+                environment = excluded.environment,
+                capabilities = excluded.capabilities,
+                scope_metadata = excluded.scope_metadata,
+                transport_type = excluded.transport_type,
+                endpoint_info = excluded.endpoint_info,
+                public_key = excluded.public_key,
+                enabled = 1,
+                updated_at = excluded.updated_at
+            """,
+            (
+                body.minion_id,
+                body.name,
+                body.description,
+                body.runtime_type,
+                body.version,
+                body.environment,
+                json.dumps(body.capabilities),
+                json.dumps(body.scope_metadata),
+                body.transport_type,
+                body.endpoint_info,
+                body.public_key,
+                now,
+                now,
+            ),
+        )
+        connection.execute(
+            "UPDATE api_keys SET enabled = 0, revoked_at = ? WHERE principal_id = ? AND kind = 'minion' AND enabled = 1",
+            (now, body.minion_id),
+        )
+        connection.execute(
+            "INSERT INTO api_keys (key_id, principal_id, secret_hash, kind, created_at) VALUES (?, ?, ?, 'minion', ?)",
+            (key_id, body.minion_id, _token_hash(token), now),
+        )
+
+    return {
+        "minion_id": body.minion_id,
+        "name": body.name,
+        "capabilities": body.capabilities,
+        "environment": body.environment,
+        "api_key": token,
+        "key_id": key_id,
+    }
+
+
+@app.get("/admin/v1/minions")
+def list_minions(_admin: str = Depends(require_admin)) -> list[dict[str, Any]]:
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT minion_id, name, description, runtime_type, version, environment, capabilities, scope_metadata, transport_type, endpoint_info, enabled, created_at, updated_at, last_contact_at FROM minions ORDER BY created_at DESC"
+        ).fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["capabilities"] = json.loads(d["capabilities"] or "[]")
+        d["scope_metadata"] = json.loads(d["scope_metadata"] or "{}")
+        result.append(d)
+    return result
+
+
+@app.get("/admin/v1/minions/{minion_id}")
+def get_minion(minion_id: str, _admin: str = Depends(require_admin)) -> dict[str, Any]:
+    with connect() as connection:
+        row = connection.execute(
+            "SELECT minion_id, name, description, runtime_type, version, environment, capabilities, scope_metadata, transport_type, endpoint_info, enabled, created_at, updated_at, last_contact_at FROM minions WHERE minion_id = ?",
+            (minion_id,),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Minion not found")
+    d = dict(row)
+    d["capabilities"] = json.loads(d["capabilities"] or "[]")
+    d["scope_metadata"] = json.loads(d["scope_metadata"] or "{}")
+    return d
+
+
+@app.patch("/admin/v1/minions/{minion_id}")
+def update_minion(minion_id: str, body: UpdateMinionRequest, _admin: str = Depends(require_admin)) -> dict[str, Any]:
+    with transaction() as connection:
+        row = connection.execute("SELECT * FROM minions WHERE minion_id = ?", (minion_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Minion not found")
+
+        updates: list[str] = []
+        params: list[Any] = []
+        if body.name is not None:
+            updates.append("name = ?")
+            params.append(body.name)
+        if body.description is not None:
+            updates.append("description = ?")
+            params.append(body.description)
+        if body.runtime_type is not None:
+            updates.append("runtime_type = ?")
+            params.append(body.runtime_type)
+        if body.version is not None:
+            updates.append("version = ?")
+            params.append(body.version)
+        if body.environment is not None:
+            updates.append("environment = ?")
+            params.append(body.environment)
+        if body.capabilities is not None:
+            updates.append("capabilities = ?")
+            params.append(json.dumps(body.capabilities))
+        if body.scope_metadata is not None:
+            updates.append("scope_metadata = ?")
+            params.append(json.dumps(body.scope_metadata))
+        if body.transport_type is not None:
+            updates.append("transport_type = ?")
+            params.append(body.transport_type)
+        if body.endpoint_info is not None:
+            updates.append("endpoint_info = ?")
+            params.append(body.endpoint_info)
+        if body.enabled is not None:
+            updates.append("enabled = ?")
+            params.append(1 if body.enabled else 0)
+            if not body.enabled:
+                connection.execute("UPDATE api_keys SET enabled = 0 WHERE principal_id = ? AND kind = 'minion'", (minion_id,))
+            else:
+                connection.execute("UPDATE api_keys SET enabled = 1 WHERE principal_id = ? AND kind = 'minion' AND revoked_at IS NULL", (minion_id,))
+        if body.public_key is not None:
+            try:
+                key = serialization.load_pem_public_key(body.public_key.encode("utf-8"))
+                if not isinstance(key, ed25519.Ed25519PublicKey):
+                    raise ValueError("Expected Ed25519 public key")
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=400, detail="Invalid Ed25519 public key") from None
+            updates.append("public_key = ?")
+            params.append(body.public_key)
+
+        if updates:
+            updates.append("updated_at = ?")
+            params.append(time.time())
+            params.append(minion_id)
+            connection.execute(f"UPDATE minions SET {', '.join(updates)} WHERE minion_id = ?", params)
+
+    return get_minion(minion_id, _admin)
+
+
+@app.post("/admin/v1/minions/{minion_id}/rotate-key")
+def rotate_minion_key(minion_id: str, _admin: str = Depends(require_admin)) -> dict[str, str]:
+    token = secrets.token_urlsafe(48)
+    key_id = f"KEY-{uuid.uuid4().hex}"
+    now = time.time()
+    with transaction() as connection:
+        row = connection.execute("SELECT minion_id FROM minions WHERE minion_id = ?", (minion_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Minion not found")
+        connection.execute("UPDATE api_keys SET enabled = 0, revoked_at = ? WHERE principal_id = ? AND kind = 'minion' AND enabled = 1", (now, minion_id))
+        connection.execute(
+            "INSERT INTO api_keys (key_id, principal_id, secret_hash, kind, created_at) VALUES (?, ?, ?, 'minion', ?)",
+            (key_id, minion_id, _token_hash(token), now),
+        )
+    return {"minion_id": minion_id, "key_id": key_id, "api_key": token}
 
 
 @app.post("/admin/v1/minions/{minion_id}/enroll", status_code=status.HTTP_201_CREATED)
