@@ -116,6 +116,33 @@ class UpdateMinionRequest(BaseModel):
     public_key: str | None = None
 
 
+class CreateNotificationAdapterRequest(BaseModel):
+    adapter_id: str = Field(min_length=1)
+    adapter_type: str = Field(default="mock")
+    name: str = Field(min_length=1)
+    config: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class CreateNotificationProfileRequest(BaseModel):
+    profile_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    event_types: list[str] = Field(min_length=1)
+    adapter_id: str = Field(min_length=1)
+    recipients: list[str] = Field(default_factory=list)
+    template: str = ""
+    enabled: bool = True
+
+
+class UpdateNotificationProfileRequest(BaseModel):
+    name: str | None = None
+    event_types: list[str] | None = None
+    adapter_id: str | None = None
+    recipients: list[str] | None = None
+    template: str | None = None
+    enabled: bool | None = None
+
+
 def connect() -> sqlite3.Connection:
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DATABASE_PATH, timeout=15)
@@ -214,6 +241,36 @@ def initialize() -> None:
             );
             CREATE INDEX IF NOT EXISTS agent_rate_limits_idx
                 ON agent_rate_limits(agent_id, action_type, timestamp);
+            CREATE TABLE IF NOT EXISTS notification_adapters (
+                adapter_id TEXT PRIMARY KEY,
+                adapter_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                config TEXT NOT NULL DEFAULT '{}',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS notification_profiles (
+                profile_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                event_types TEXT NOT NULL,
+                adapter_id TEXT NOT NULL,
+                recipients TEXT NOT NULL DEFAULT '[]',
+                template TEXT DEFAULT '',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS notification_deliveries (
+                delivery_id TEXT PRIMARY KEY,
+                profile_id TEXT NOT NULL,
+                adapter_id TEXT NOT NULL,
+                request_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                detail TEXT DEFAULT '{}',
+                delivered_at REAL NOT NULL
+            );
             """
         )
         try:
@@ -406,6 +463,60 @@ def resolve_minion(capability: str, environment: str = "prod", scope_target: dic
     )
 
 
+def dispatch_notifications(event_type: str, request_id: str, summary: str, details: dict[str, Any]) -> None:
+    now = time.time()
+    try:
+        with connect() as conn:
+            profiles = conn.execute(
+                """
+                SELECT p.profile_id, p.event_types, p.adapter_id, p.recipients, p.template,
+                       a.adapter_type, a.config, a.enabled AS adapter_enabled
+                FROM notification_profiles p
+                JOIN notification_adapters a ON p.adapter_id = a.adapter_id
+                WHERE p.enabled = 1 AND a.enabled = 1
+                """
+            ).fetchall()
+
+            for prof in profiles:
+                ev_types = json.loads(prof["event_types"] or "[]")
+                if event_type not in ev_types:
+                    continue
+
+                recipients = json.loads(prof["recipients"] or "[]")
+                adapter_type = prof["adapter_type"]
+                config = json.loads(prof["config"] or "{}")
+
+                delivery_id = f"DELIV-{uuid.uuid4().hex}"
+                deliv_status = "DELIVERED"
+                deliv_detail: dict[str, Any] = {"recipients": recipients, "summary": summary}
+
+                try:
+                    if adapter_type == "webhook":
+                        url = config.get("url")
+                        if url:
+                            import httpx
+                            httpx.post(
+                                url,
+                                json={"event": event_type, "request_id": request_id, "summary": summary, "details": details},
+                                timeout=5.0,
+                            )
+                except Exception as ex:
+                    deliv_status = "FAILED"
+                    deliv_detail = {"error": str(ex), "recipients": recipients}
+
+                with transaction() as write_conn:
+                    write_conn.execute(
+                        """
+                        INSERT INTO notification_deliveries (delivery_id, profile_id, adapter_id, request_id, event_type, status, detail, delivered_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (delivery_id, prof["profile_id"], prof["adapter_id"], request_id, event_type, deliv_status, json.dumps(deliv_detail), now),
+                    )
+    except Exception:
+        # Notifications must never crash core policy/mission path
+        pass
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -512,6 +623,8 @@ def create_patch_request(request: PatchRequest, principal: str = Depends(require
             "INSERT INTO missions (mission_id, request_id, agent_id, minion_id, envelope, status, raw_request, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (mission_id, request_id, principal, assigned_minion_id, json.dumps(envelope), mission_state, raw_req_json, time.time(), time.time()),
         )
+    if decision == "PAUSE":
+        dispatch_notifications("PAUSE_CREATED", request_id, "Patch reconciliation paused pending approval", {"servers": request.servers})
     return {"request_id": request_id, "status": "ACCEPTED" if decision != "BLOCK" else "CLOSED"}
 
 
@@ -604,6 +717,8 @@ def create_action(request: CanonicalActionRequest, principal: str = Depends(requ
             "INSERT INTO missions (mission_id, request_id, agent_id, minion_id, envelope, status, raw_request, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (mission_id, request_id, principal, assigned_minion_id, json.dumps(envelope), mission_state, raw_req_json, time.time(), time.time()),
         )
+    if decision == "PAUSE":
+        dispatch_notifications("PAUSE_CREATED", request_id, f"Action '{request.capability}' paused pending approval", {"capability": request.capability, "target": target_dict})
     return {"request_id": request_id, "status": "ACCEPTED" if decision != "BLOCK" else "CLOSED"}
 
 
@@ -706,6 +821,7 @@ def mission_result(
             "UPDATE missions SET status = ?, updated_at = ? WHERE mission_id = ?",
             (request.status, received, mission_id),
         )
+    dispatch_notifications(request.status, mission_id, f"Mission {mission_id} reached terminal state {request.status}", {"minion_id": minion_id, "result": request.result})
     return {"status": "RECORDED"}
 
 
@@ -858,6 +974,8 @@ def approve_request(
             (f"EVT-APPROVE-{uuid.uuid4().hex}", row["mission_id"], new_status, json.dumps({"decision": new_decision, "approval": approval_evidence}), now, now),
         )
 
+    dispatch_notifications("REQUEST_APPROVED", request_id, f"Request {request_id} approved by {approver_name}", {"decision": new_decision, "approver": approver_name})
+
     return {
         "request_id": request_id,
         "decision": new_decision,
@@ -905,6 +1023,8 @@ def reject_request(
             "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
             (f"EVT-REJECT-{uuid.uuid4().hex}", row["mission_id"], "CLOSED", json.dumps({"decision": "REJECTED", "rejection": rejection_evidence}), now, now),
         )
+
+    dispatch_notifications("REQUEST_REJECTED", request_id, f"Request {request_id} rejected by {approver_name}", {"approver": approver_name})
 
     return {
         "request_id": request_id,
@@ -1138,6 +1258,168 @@ def enroll_minion(minion_id: str, public_key: str, _admin: str = Depends(require
             (minion_id, public_key, time.time()),
         )
     return {"minion_id": minion_id, "status": "ENROLLED"}
+
+
+@app.post("/admin/v1/notification-adapters", status_code=status.HTTP_201_CREATED)
+def create_notification_adapter(body: CreateNotificationAdapterRequest, _admin: str = Depends(require_admin)) -> dict[str, Any]:
+    now = time.time()
+    with transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO notification_adapters (adapter_id, adapter_type, name, config, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(adapter_id) DO UPDATE SET
+                adapter_type = excluded.adapter_type,
+                name = excluded.name,
+                config = excluded.config,
+                enabled = excluded.enabled,
+                updated_at = excluded.updated_at
+            """,
+            (body.adapter_id, body.adapter_type, body.name, json.dumps(body.config), 1 if body.enabled else 0, now, now),
+        )
+    return body.model_dump()
+
+
+@app.get("/admin/v1/notification-adapters")
+def list_notification_adapters(_admin: str = Depends(require_admin)) -> list[dict[str, Any]]:
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT adapter_id, adapter_type, name, config, enabled, created_at, updated_at FROM notification_adapters ORDER BY created_at DESC"
+        ).fetchall()
+    res = []
+    for r in rows:
+        d = dict(r)
+        d["config"] = json.loads(d["config"] or "{}")
+        res.append(d)
+    return res
+
+
+@app.post("/admin/v1/notification-profiles", status_code=status.HTTP_201_CREATED)
+def create_notification_profile(body: CreateNotificationProfileRequest, _admin: str = Depends(require_admin)) -> dict[str, Any]:
+    now = time.time()
+    with transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO notification_profiles (profile_id, name, event_types, adapter_id, recipients, template, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(profile_id) DO UPDATE SET
+                name = excluded.name,
+                event_types = excluded.event_types,
+                adapter_id = excluded.adapter_id,
+                recipients = excluded.recipients,
+                template = excluded.template,
+                enabled = excluded.enabled,
+                updated_at = excluded.updated_at
+            """,
+            (
+                body.profile_id,
+                body.name,
+                json.dumps(body.event_types),
+                body.adapter_id,
+                json.dumps(body.recipients),
+                body.template,
+                1 if body.enabled else 0,
+                now,
+                now,
+            ),
+        )
+    return body.model_dump()
+
+
+@app.get("/admin/v1/notification-profiles")
+def list_notification_profiles(_admin: str = Depends(require_admin)) -> list[dict[str, Any]]:
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT profile_id, name, event_types, adapter_id, recipients, template, enabled, created_at, updated_at FROM notification_profiles ORDER BY created_at DESC"
+        ).fetchall()
+    res = []
+    for r in rows:
+        d = dict(r)
+        d["event_types"] = json.loads(d["event_types"] or "[]")
+        d["recipients"] = json.loads(d["recipients"] or "[]")
+        res.append(d)
+    return res
+
+
+@app.get("/admin/v1/notification-profiles/{profile_id}")
+def get_notification_profile(profile_id: str, _admin: str = Depends(require_admin)) -> dict[str, Any]:
+    with connect() as connection:
+        row = connection.execute(
+            "SELECT profile_id, name, event_types, adapter_id, recipients, template, enabled, created_at, updated_at FROM notification_profiles WHERE profile_id = ?",
+            (profile_id,),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Notification profile not found")
+    d = dict(row)
+    d["event_types"] = json.loads(d["event_types"] or "[]")
+    d["recipients"] = json.loads(d["recipients"] or "[]")
+    return d
+
+
+@app.patch("/admin/v1/notification-profiles/{profile_id}")
+def update_notification_profile(profile_id: str, body: UpdateNotificationProfileRequest, _admin: str = Depends(require_admin)) -> dict[str, Any]:
+    with transaction() as connection:
+        row = connection.execute("SELECT * FROM notification_profiles WHERE profile_id = ?", (profile_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Notification profile not found")
+
+        updates: list[str] = []
+        params: list[Any] = []
+        if body.name is not None:
+            updates.append("name = ?")
+            params.append(body.name)
+        if body.event_types is not None:
+            updates.append("event_types = ?")
+            params.append(json.dumps(body.event_types))
+        if body.adapter_id is not None:
+            updates.append("adapter_id = ?")
+            params.append(body.adapter_id)
+        if body.recipients is not None:
+            updates.append("recipients = ?")
+            params.append(json.dumps(body.recipients))
+        if body.template is not None:
+            updates.append("template = ?")
+            params.append(body.template)
+        if body.enabled is not None:
+            updates.append("enabled = ?")
+            params.append(1 if body.enabled else 0)
+
+        if updates:
+            updates.append("updated_at = ?")
+            params.append(time.time())
+            params.append(profile_id)
+            connection.execute(f"UPDATE notification_profiles SET {', '.join(updates)} WHERE profile_id = ?", params)
+
+    return get_notification_profile(profile_id, _admin)
+
+
+@app.delete("/admin/v1/notification-profiles/{profile_id}")
+def delete_notification_profile(profile_id: str, _admin: str = Depends(require_admin)) -> dict[str, str]:
+    with transaction() as connection:
+        result = connection.execute("DELETE FROM notification_profiles WHERE profile_id = ?", (profile_id,))
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Notification profile not found")
+    return {"profile_id": profile_id, "status": "DELETED"}
+
+
+@app.get("/admin/v1/notification-deliveries")
+def list_notification_deliveries(request_id: str | None = None, _admin: str = Depends(require_admin)) -> list[dict[str, Any]]:
+    with connect() as connection:
+        if request_id:
+            rows = connection.execute(
+                "SELECT delivery_id, profile_id, adapter_id, request_id, event_type, status, detail, delivered_at FROM notification_deliveries WHERE request_id = ? ORDER BY delivered_at DESC",
+                (request_id,),
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                "SELECT delivery_id, profile_id, adapter_id, request_id, event_type, status, detail, delivered_at FROM notification_deliveries ORDER BY delivered_at DESC LIMIT 100"
+            ).fetchall()
+    res = []
+    for r in rows:
+        d = dict(r)
+        d["detail"] = json.loads(d["detail"] or "{}")
+        res.append(d)
+    return res
 
 
 @app.post("/admin/v1/agents", status_code=status.HTTP_201_CREATED)
