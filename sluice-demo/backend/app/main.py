@@ -1,29 +1,20 @@
+from __future__ import annotations
+
+import os
+from typing import Any, Dict, List, Optional
+
+import requests
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from typing import Dict, Optional, Any
-import os
 
-# Demo-layer models (FastAPI / UI only)
+from app.approvals import maybe_send_email_approval
 from app.models import (
     ActionRequest,
     CreateDecisionResponse,
-    StoredRequest,
-    new_request_id,
-    now_ts,
 )
 
-# sg-core primitives (published package)
-from sg_core import PolicyEngine
-from sg_core.decision_loop import Gate
-from sg_core.models import GateRequest
-
-# Demo glue
-from app.audit import AUDIT_LOG, log_event
-from app.connectors import execute_action
-from app.approvals import maybe_send_email_approval
-
-app = FastAPI(title="SluiceGate Demo (powered by sg-core)")
+app = FastAPI(title="SluiceGate Demo BFF (connected to sg_service)")
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,90 +28,12 @@ app.add_middleware(
 # Configuration
 # ------------------------------------------------------------------------------
 
-POLICY_PATH = os.environ.get("POLICY_PATH", "/policies/policy.yml")
+SG_SERVICE_URL = os.environ.get("SG_SERVICE_URL", "http://sg-service:8443").rstrip("/")
+SG_AGENT_API_KEY = os.environ.get("SG_AGENT_API_KEY", "")
+SG_ADMIN_API_KEY = os.environ.get("SG_ADMIN_API_KEY", "")
+
 BASE_URL = os.environ.get("BASE_URL", "http://localhost:8000").rstrip("/")
 UI_URL = os.environ.get("UI_URL", "http://localhost:8080").rstrip("/")
-
-# ------------------------------------------------------------------------------
-# In-memory demo store (UI convenience only)
-# ------------------------------------------------------------------------------
-
-STORE: Dict[str, StoredRequest] = {}
-
-# ------------------------------------------------------------------------------
-# sg-core initialization
-# ------------------------------------------------------------------------------
-
-policy_engine = PolicyEngine(POLICY_PATH)
-
-# These are the only event_type values the demo audit model accepts.
-_ALLOWED_EVENT_TYPES = {
-    "REQUEST_CREATED",
-    "GATE_DECIDED",
-    "NOTIFICATION_ATTEMPTED",
-    "APPROVED",
-    "REJECTED",
-    "EXECUTION_STARTED",
-    "EXECUTION_COMPLETED",
-    "EXECUTION_FAILED",
-}
-
-
-def _resolve_request_id_from_resume_token(resume_token: Optional[str]) -> str:
-    if not resume_token:
-        return ""
-    for rid, rec in STORE.items():
-        if getattr(rec, "resume_token", None) == resume_token:
-            return rid
-    return ""
-
-
-def audit_sink(evt: Dict[str, Any]) -> None:
-    """
-    Translate sg-core audit events into the demo audit log format.
-
-    sg-core emits events shaped like:
-      {"event": "...", "request_id": <str|None>, "summary": "...", "details": {...}}
-
-    The demo expects:
-      event_type in a fixed literal set, and request_id must be a string.
-    """
-    try:
-        # sg-core uses "event", not "event_type"
-        raw_type = evt.get("event") or evt.get("event_type") or "GATE_DECIDED"
-        event_type = raw_type if raw_type in _ALLOWED_EVENT_TYPES else "GATE_DECIDED"
-
-        # sg-core sometimes emits request_id=None (e.g., PAUSE_RESOLVED). Coerce safely.
-        rid = evt.get("request_id")
-        request_id = str(rid) if rid is not None else ""
-
-        # If sg-core didn't include a request_id, try to resolve via resume_token
-        if not request_id:
-            details = evt.get("details") or {}
-            token = details.get("resume_token") if isinstance(details, dict) else None
-            request_id = _resolve_request_id_from_resume_token(token)
-
-        log_event(
-            request_id=request_id or "",
-            event_type=event_type,  # type: ignore[arg-type]
-            actor_type="SYSTEM",
-            actor_id="sg-core",
-            summary=evt.get("summary", "") or "",
-            details=evt.get("details", {}) or {},
-        )
-    except Exception:
-        # Audit must never crash the gate hot-path.
-        return
-
-
-gate = Gate(
-    policy_engine=policy_engine,
-    audit_sink=audit_sink,
-)
-
-# ------------------------------------------------------------------------------
-# Helpers
-# ------------------------------------------------------------------------------
 
 
 def ui_redirect(request_id: str) -> RedirectResponse:
@@ -130,49 +43,18 @@ def ui_redirect(request_id: str) -> RedirectResponse:
     )
 
 
-def _execute_and_record(request_id: str, r: StoredRequest, summary_suffix: str = "") -> None:
-    """
-    Execute the requested action via the demo connector.
-    Never raise. Always record outcome to r.status / r.executed_result.
-    """
-    suffix = f" {summary_suffix}".rstrip()
+def agent_headers() -> Dict[str, str]:
+    return {
+        "Authorization": f"Bearer {SG_AGENT_API_KEY}",
+        "Content-Type": "application/json",
+    }
 
-    log_event(
-        request_id=request_id,
-        event_type="EXECUTION_STARTED",
-        actor_type="SYSTEM",
-        actor_id="connector",
-        summary=f"Execution started{suffix}",
-        details={"action": r.payload.action},
-    )
 
-    try:
-        r.executed_result = execute_action(
-            r.payload.action,
-            r.payload.amount,
-            r.payload.currency,
-            r.payload.metadata,
-        )
-        r.status = "EXECUTED"
-        log_event(
-            request_id=request_id,
-            event_type="EXECUTION_COMPLETED",
-            actor_type="SYSTEM",
-            actor_id="connector",
-            summary=f"Execution completed{suffix}",
-            details={"result": r.executed_result},
-        )
-    except Exception as e:
-        r.status = "BLOCKED"
-        r.executed_result = {"ok": False, "error": str(e)}
-        log_event(
-            request_id=request_id,
-            event_type="EXECUTION_FAILED",
-            actor_type="SYSTEM",
-            actor_id="connector",
-            summary=f"Execution failed{suffix}",
-            details={"error": str(e)},
-        )
+def admin_headers() -> Dict[str, str]:
+    return {
+        "Authorization": f"Bearer {SG_ADMIN_API_KEY}",
+        "Content-Type": "application/json",
+    }
 
 
 # ------------------------------------------------------------------------------
@@ -182,100 +64,78 @@ def _execute_and_record(request_id: str, r: StoredRequest, summary_suffix: str =
 
 @app.get("/health")
 def health():
-    return {"ok": True}
+    service_ok = False
+    try:
+        r = requests.get(f"{SG_SERVICE_URL}/health", timeout=3.0)
+        service_ok = (r.status_code == 200)
+    except Exception:
+        pass
+    return {"ok": True, "sg_service_connected": service_ok}
 
 
 @app.post("/api/decide", response_model=CreateDecisionResponse)
 def decide(req: ActionRequest):
-    request_id = new_request_id()
-
-    log_event(
-        request_id=request_id,
-        event_type="REQUEST_CREATED",
-        actor_type="SYSTEM",
-        actor_id="api",
-        summary="Execution request created",
-        details={
-            "action": req.action,
+    action_payload = {
+        "capability": req.action,
+        "target": {"type": "API", "id": req.action},
+        "parameters": {
             "amount": req.amount,
-            "currency": req.currency,
-            "metadata": req.metadata,
+            "currency": (req.currency or "USD").upper(),
+            **req.metadata,
         },
-    )
-
-    # Build sg-core GateRequest
-    gate_request = GateRequest(
-        actor={
-            "type": "AGENT",
-            "id": req.metadata.get("agent_type", "Unknown"),
-        },
-        action={
-            "name": req.action,
-            "params": {
-                **req.metadata,
-            },
-        },
-        target={
-            "type": "API",
-            "id": req.action,
-        },
-        context={
+        "context": {
             "demo": True,
             "amount": req.amount,
-            "currency": (req.currency or "").upper(),
+            "currency": (req.currency or "USD").upper(),
+            "agent_type": req.metadata.get("agent_type", "Billing Agent"),
         },
-    )
+    }
 
-    decision = gate.evaluate(gate_request)
-
-    # Always log a decision at the demo layer (in addition to any sg-core audit events)
-    log_event(
-        request_id=request_id,
-        event_type="GATE_DECIDED",
-        actor_type="POLICY",
-        actor_id="sg-core",
-        summary=f"Gate decided: {decision.decision}",
-        details={
-            "decision": decision.decision,
-            "policy_hash": decision.policy_hash,
-            "resume_token": decision.resume_token,
-            "message": getattr(decision, "message", None),
-        },
-    )
-
-    status = (
-        "PENDING"
-        if decision.decision == "PAUSE"
-        else "BLOCKED"
-        if decision.decision == "BLOCK"
-        else "EXECUTED"
-    )
-
-    stored = StoredRequest(
-        request_id=request_id,
-        created_at=now_ts(),
-        payload=req,
-        decision=decision.decision,
-        status=status,
-        policy_hash=decision.policy_hash,
-        resume_token=decision.resume_token,
-        executed_result=None,
-    )
-
-    # Immediate execution if allowed
-    if decision.decision == "ALLOW":
-        _execute_and_record(request_id, stored)
-
-    # Human approval required
-    if decision.decision == "PAUSE":
-        log_event(
-            request_id=request_id,
-            event_type="NOTIFICATION_ATTEMPTED",
-            actor_type="SYSTEM",
-            actor_id="email",
-            summary="Approval notification attempted",
-            details={"approver": os.environ.get("APPROVER_EMAIL", "")},
+    try:
+        submit_resp = requests.post(
+            f"{SG_SERVICE_URL}/api/v1/actions",
+            json=action_payload,
+            headers=agent_headers(),
+            timeout=10.0,
         )
+        if submit_resp.status_code not in (200, 202):
+            raise HTTPException(status_code=submit_resp.status_code, detail=submit_resp.text)
+        data = submit_resp.json()
+        request_id = data["request_id"]
+    except requests.RequestException as e:
+        raise HTTPException(status_code=503, detail=f"Failed to communicate with sg_service: {e}")
+
+    try:
+        admin_resp = requests.get(
+            f"{SG_SERVICE_URL}/admin/v1/requests/{request_id}",
+            headers=admin_headers(),
+            timeout=10.0,
+        )
+        admin_data = admin_resp.json() if admin_resp.status_code == 200 else {}
+    except requests.RequestException:
+        admin_data = {}
+
+    decision = admin_data.get("policy_decision", "ALLOW" if data.get("status") == "ACCEPTED" else "BLOCK")
+    mission_status = admin_data.get("status", "QUEUED")
+
+    if decision == "PAUSE" or mission_status == "WAITING_FOR_APPROVAL":
+        ui_status = "PENDING"
+    elif decision == "BLOCK" or mission_status in ("CLOSED", "MISSION_REJECTED"):
+        ui_status = "BLOCKED"
+    elif mission_status == "MISSION_COMPLETE_SUCCEEDED":
+        ui_status = "EXECUTED"
+    else:
+        ui_status = "EXECUTED" if decision == "ALLOW" else "PENDING"
+
+    message = (
+        "Allowed by policy."
+        if decision == "ALLOW"
+        else "Paused pending approval."
+        if decision == "PAUSE"
+        else "Blocked by policy."
+    )
+
+    if decision == "PAUSE":
         maybe_send_email_approval(
             request_id=request_id,
             action=req.action,
@@ -284,123 +144,140 @@ def decide(req: ActionRequest):
             base_url=BASE_URL,
         )
 
-    STORE[request_id] = stored
-
     return CreateDecisionResponse(
         request_id=request_id,
-        decision=decision.decision,
-        status=stored.status,
-        message=decision.message,
-        resume_token=decision.resume_token,
+        decision=decision,
+        status=ui_status,
+        message=message,
+        resume_token=request_id,
     )
 
 
 @app.get("/api/requests/{request_id}")
 def get_request(request_id: str):
-    r = STORE.get(request_id)
-    if not r:
-        raise HTTPException(status_code=404, detail="Not found")
-    return r.model_dump()
+    try:
+        r = requests.get(
+            f"{SG_SERVICE_URL}/admin/v1/requests/{request_id}",
+            headers=admin_headers(),
+            timeout=10.0,
+        )
+        if r.status_code == 404:
+            raise HTTPException(status_code=404, detail="Not found")
+        data = r.json()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=503, detail=f"sg_service error: {e}")
+
+    decision = data.get("policy_decision", "BLOCK")
+    mission_status = data.get("status", "")
+
+    if mission_status == "WAITING_FOR_APPROVAL":
+        ui_status = "PENDING"
+    elif mission_status in ("CLOSED", "MISSION_REJECTED", "MISSION_COMPLETE_FAILED"):
+        ui_status = "REJECTED" if decision == "REJECTED" else "BLOCKED"
+    elif mission_status in ("MISSION_COMPLETE_SUCCEEDED", "QUEUED", "CLAIMED", "MISSION_ACKNOWLEDGED", "MISSION_IN_PROGRESS"):
+        ui_status = "EXECUTED"
+    else:
+        ui_status = "PENDING"
+
+    return {
+        "request_id": request_id,
+        "created_at": data.get("created_at", 0),
+        "payload": {
+            "action": "stripe.refund",
+            "amount": 0,
+            "currency": "USD",
+            "metadata": {},
+        },
+        "decision": decision,
+        "status": ui_status,
+        "policy_hash": data.get("policy_hash", ""),
+        "resume_token": request_id,
+        "executed_result": {"status": mission_status, "minion_id": data.get("minion_id")},
+    }
 
 
 @app.api_route("/api/requests/{request_id}/approve", methods=["GET", "POST"])
 def approve(request_id: str, request: Request):
-    r = STORE.get(request_id)
-    if not r:
-        raise HTTPException(status_code=404, detail="Not found")
-
-    if r.status != "PENDING":
-        return ui_redirect(request_id) if request.method == "GET" else {"ok": True, "status": r.status, "note": "No-op (not pending)"}
-
-    if not r.resume_token:
-        raise HTTPException(status_code=500, detail="Missing resume_token")
-
-    # Resolve the PAUSE inside sg-core (must not 500 the user experience)
+    approver = "email_link" if request.method == "GET" else "admin_user"
     try:
-        gate.approve(
-            r.resume_token,
-            approver="email_link" if request.method == "GET" else "api_client",
-            comment="approved",
+        r = requests.post(
+            f"{SG_SERVICE_URL}/admin/v1/requests/{request_id}/approve",
+            json={"approver": approver, "comment": "Approved via SluiceGate Demo UI"},
+            headers=admin_headers(),
+            timeout=10.0,
         )
-    except Exception as e:
-        log_event(
-            request_id=request_id,
-            event_type="EXECUTION_FAILED",
-            actor_type="SYSTEM",
-            actor_id="sg-core",
-            summary="Approval failed inside sg-core",
-            details={"error": str(e)},
-        )
-        # Still redirect to UI instead of showing a stacktrace
-        return ui_redirect(request_id) if request.method == "GET" else {"ok": False, "error": str(e)}
+        if r.status_code == 404:
+            raise HTTPException(status_code=404, detail="Not found")
+        data = r.json()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=503, detail=f"sg_service error: {e}")
 
-    log_event(
-        request_id=request_id,
-        event_type="APPROVED",
-        actor_type="HUMAN",
-        actor_id="email_link" if request.method == "GET" else "api_client",
-        summary="Request approved",
-    )
-
-    _execute_and_record(request_id, r, summary_suffix="(after approval)")
-    STORE[request_id] = r
-
-    return ui_redirect(request_id) if request.method == "GET" else {"ok": True, "status": r.status, "executed_result": r.executed_result}
+    if request.method == "GET":
+        return ui_redirect(request_id)
+    return {"ok": True, "status": data.get("status")}
 
 
 @app.api_route("/api/requests/{request_id}/reject", methods=["GET", "POST"])
 def reject(request_id: str, request: Request):
-    r = STORE.get(request_id)
-    if not r:
-        raise HTTPException(status_code=404, detail="Not found")
-
-    if r.status != "PENDING":
-        return ui_redirect(request_id) if request.method == "GET" else {"ok": True, "status": r.status, "note": "No-op (not pending)"}
-
-    if not r.resume_token:
-        raise HTTPException(status_code=500, detail="Missing resume_token")
-
+    approver = "email_link" if request.method == "GET" else "admin_user"
     try:
-        gate.deny(
-            r.resume_token,
-            approver="email_link" if request.method == "GET" else "api_client",
-            comment="rejected",
+        r = requests.post(
+            f"{SG_SERVICE_URL}/admin/v1/requests/{request_id}/reject",
+            json={"approver": approver, "comment": "Rejected via SluiceGate Demo UI"},
+            headers=admin_headers(),
+            timeout=10.0,
         )
-    except Exception as e:
-        log_event(
-            request_id=request_id,
-            event_type="EXECUTION_FAILED",
-            actor_type="SYSTEM",
-            actor_id="sg-core",
-            summary="Rejection failed inside sg-core",
-            details={"error": str(e)},
-        )
-        return ui_redirect(request_id) if request.method == "GET" else {"ok": False, "error": str(e)}
+        if r.status_code == 404:
+            raise HTTPException(status_code=404, detail="Not found")
+        data = r.json()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=503, detail=f"sg_service error: {e}")
 
-    r.status = "REJECTED"
-    STORE[request_id] = r
-
-    log_event(
-        request_id=request_id,
-        event_type="REJECTED",
-        actor_type="HUMAN",
-        actor_id="email_link" if request.method == "GET" else "api_client",
-        summary="Request rejected",
-    )
-
-    return ui_redirect(request_id) if request.method == "GET" else {"ok": True, "status": r.status}
+    if request.method == "GET":
+        return ui_redirect(request_id)
+    return {"ok": True, "status": data.get("status")}
 
 
 @app.get("/api/audit")
 def get_audit(request_id: Optional[str] = None, limit: int = 200):
-    events = AUDIT_LOG[::-1]
-    if request_id:
-        events = [e for e in events if e.request_id == request_id]
-    limit = max(1, min(int(limit), 1000))
-    return [e.model_dump() for e in events[:limit]]
+    try:
+        r = requests.get(
+            f"{SG_SERVICE_URL}/admin/v1/missions",
+            headers=admin_headers(),
+            timeout=10.0,
+        )
+        missions = r.json() if r.status_code == 200 else []
+    except Exception:
+        missions = []
+
+    events = []
+    for m in missions:
+        rid = m.get("request_id", "")
+        if request_id and rid != request_id:
+            continue
+        events.append({
+            "request_id": rid,
+            "event_type": "GATE_DECIDED" if m.get("status") in ("QUEUED", "WAITING_FOR_APPROVAL") else "EXECUTION_COMPLETED",
+            "actor_type": "SYSTEM",
+            "actor_id": "sg_service",
+            "summary": f"Mission {m.get('mission_id')}: {m.get('status')}",
+            "details": {"minion_id": m.get("minion_id"), "status": m.get("status")},
+            "timestamp": m.get("updated_at", 0),
+        })
+
+    return events[:limit]
 
 
 @app.post("/api/policy/reload")
 def reload_policy():
-    policy_engine.reload()
-    return {"ok": True, "message": "Policy reloaded"}
+    try:
+        r = requests.post(
+            f"{SG_SERVICE_URL}/admin/v1/policy/reload",
+            headers=admin_headers(),
+            timeout=10.0,
+        )
+        if r.status_code == 200:
+            return {"ok": True, "message": "Policy reloaded in sg_service"}
+        raise HTTPException(status_code=r.status_code, detail=r.text)
+    except requests.RequestException as e:
+        raise HTTPException(status_code=503, detail=f"Failed to reload policy: {e}")

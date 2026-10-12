@@ -312,7 +312,7 @@ def initialize() -> None:
                 connection.execute(
                     """
                     INSERT INTO minions (minion_id, name, capabilities, public_key, created_at, updated_at)
-                    VALUES ('DEMO-STUB-01', 'Demo Stub Minion', '["windows.patch.reconcile", "demo.action"]', ?, ?, ?)
+                    VALUES ('DEMO-STUB-01', 'Demo Stub Minion', '["windows.patch.reconcile", "demo.action", "stripe.refund", "stripe.charge"]', ?, ?, ?)
                     ON CONFLICT(minion_id) DO UPDATE SET public_key = excluded.public_key, capabilities = excluded.capabilities, enabled = 1
                     """,
                     (public_key, now, now),

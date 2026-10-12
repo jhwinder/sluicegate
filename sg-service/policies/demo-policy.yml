@@ -4,6 +4,7 @@ default:
   decision: BLOCK
 
 rules:
+  # Patching demo rules
   - name: allow-demo-security-patching-without-reboot
     when:
       - path: action.name
@@ -24,3 +25,46 @@ rules:
       - path: action.params.allow_reboot
         eq: true
     decision: PAUSE
+
+  # Stripe demo rules
+  - name: allow_small_refund
+    when:
+      - path: action.name
+        in: [stripe.refund, stripe.charge]
+      - path: action.params.amount
+        lte: 100
+      - path: action.params.currency
+        eq: USD
+    decision: ALLOW
+
+  - name: allow_approved_refund
+    when:
+      - path: action.name
+        in: [stripe.refund, stripe.charge]
+      - path: action.params.amount
+        lte: 500
+      - path: action.params.currency
+        eq: USD
+      - path: context.approval.approved
+        eq: true
+    decision: ALLOW
+
+  - name: pause_mid_refund
+    when:
+      - path: action.name
+        in: [stripe.refund, stripe.charge]
+      - path: action.params.amount
+        lte: 500
+      - path: action.params.currency
+        eq: USD
+    decision: PAUSE
+
+  - name: block_large_refund
+    when:
+      - path: action.name
+        in: [stripe.refund, stripe.charge]
+      - path: action.params.amount
+        gt: 500
+      - path: action.params.currency
+        eq: USD
+    decision: BLOCK
