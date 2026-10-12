@@ -16,6 +16,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sg_core import GateRequest, PolicyEngine
 
@@ -23,6 +24,7 @@ DATABASE_PATH = Path(os.environ.get("SG_DATABASE_PATH", "/data/sg-service.sqlite
 SIGNING_KEY_PATH = Path(os.environ.get("SG_SIGNING_KEY_PATH", "/run/secrets/sg-signing-key.pem"))
 PATCH_MINION_ID = os.environ.get("SG_PATCH_MINION_ID", "PATCH-01")
 POLICY_PATH = Path(os.environ.get("SG_POLICY_PATH", "/config/policy.yml"))
+ADMIN_HTML_PATH = Path(__file__).resolve().parent / "static" / "admin.html"
 
 
 @asynccontextmanager
@@ -520,6 +522,18 @@ def dispatch_notifications(event_type: str, request_id: str, summary: str, detai
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/admin", include_in_schema=False)
+def admin_redirect() -> RedirectResponse:
+    return RedirectResponse(url="/admin/ui", status_code=307)
+
+
+@app.get("/admin/ui", response_class=HTMLResponse)
+def admin_ui() -> HTMLResponse:
+    if not ADMIN_HTML_PATH.is_file():
+        raise HTTPException(status_code=404, detail="Admin UI file not found")
+    return HTMLResponse(content=ADMIN_HTML_PATH.read_text(encoding="utf-8"))
 
 
 @app.post("/api/v1/patch-requests", status_code=status.HTTP_202_ACCEPTED)

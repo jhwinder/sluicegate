@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SluiceGate Administrative Console</title>
+  <style>
+    :root {
+      --bg-color: #f8fafc;
+      --card-bg: #ffffff;
+      --border-color: #e2e8f0;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --text-main: #0f172a;
+      --text-muted: #64748b;
+      --success: #16a34a;
+      --warning: #d97706;
+      --danger: #dc2626;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg-color);
+      color: var(--text-main);
+      margin: 0;
+      padding: 24px;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border-color);
+    }
+    h1 { margin: 0; font-size: 24px; display: flex; align-items: center; gap: 8px; }
+    .badge {
+      display: inline-block;
+      padding: 3px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 9999px;
+      text-transform: uppercase;
+    }
+    .badge-success { background: #dcfce7; color: var(--success); }
+    .badge-warning { background: #fef3c7; color: var(--warning); }
+    .badge-danger { background: #fee2e2; color: var(--danger); }
+    .badge-info { background: #e0f2fe; color: #0284c7; }
+    .auth-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--card-bg);
+      padding: 8px 16px;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+    }
+    input, select, button, textarea {
+      font-family: inherit;
+      font-size: 14px;
+      padding: 8px 12px;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+    }
+    button {
+      cursor: pointer;
+      background: var(--primary);
+      color: white;
+      border: none;
+      font-weight: 500;
+      transition: background 0.15s ease;
+    }
+    button:hover { background: var(--primary-hover); }
+    button.secondary { background: #e2e8f0; color: #334155; }
+    button.secondary:hover { background: #cbd5e1; }
+    button.danger { background: var(--danger); color: white; }
+    button.danger:hover { background: #b91c1c; }
+    .nav-tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+    .nav-tab {
+      padding: 8px 16px;
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 500;
+      color: var(--text-muted);
+    }
+    .nav-tab.active {
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary);
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 24px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    .card-header h2 { margin: 0; font-size: 18px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border-color);
+    }
+    th {
+      background: #f1f5f9;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+    tr:hover td { background: #f8fafc; }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+    }
+    .modal-backdrop {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 50;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal {
+      background: white;
+      padding: 24px;
+      border-radius: 8px;
+      width: 100%;
+      max-width: 540px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+    }
+    .form-group {
+      margin-bottom: 16px;
+    }
+    .form-group label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .form-group input, .form-group textarea, .form-group select {
+      width: 100%;
+    }
+    .json-viewer {
+      background: #0f172a;
+      color: #38bdf8;
+      padding: 12px;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 12px;
+      overflow-x: auto;
+      max-height: 250px;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div>
+      <h1>SluiceGate Control Plane <span class="badge badge-info">v0.1.0</span></h1>
+      <small style="color:var(--text-muted);">Administrative Console & Decision Ledger</small>
+    </div>
+    <div class="auth-bar">
+      <span style="font-size:13px; font-weight:500;">Admin Bearer Token:</span>
+      <input type="password" id="adminTokenInput" placeholder="Bearer Key" style="width:220px;" />
+      <button onclick="saveAdminToken()">Save</button>
+      <button class="secondary" onclick="reloadPolicy()">Reload Policy</button>
+    </div>
+  </header>
+
+  <nav class="nav-tabs">
+    <div class="nav-tab active" onclick="switchTab('missions')">Missions & Audit</div>
+    <div class="nav-tab" onclick="switchTab('approvals')">Pending Approvals (<span id="pendingCount">0</span>)</div>
+    <div class="nav-tab" onclick="switchTab('agents')">Agent Registry</div>
+    <div class="nav-tab" onclick="switchTab('minions')">Minion Registry</div>
+    <div class="nav-tab" onclick="switchTab('notifications')">Notification Profiles</div>
+  </nav>
+
+  <!-- TAB: MISSIONS & AUDIT -->
+  <section id="tab-missions" class="tab-content">
+    <div class="card">
+      <div class="card-header">
+        <h2>Transactions & Execution Ledger</h2>
+        <button class="secondary" onclick="loadMissions()">Refresh</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Request ID</th>
+            <th>Mission ID</th>
+            <th>Minion</th>
+            <th>Status</th>
+            <th>Updated</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="missionsTableBody">
+          <tr><td colspan="6" style="text-align:center; color:var(--text-muted);">Loading missions...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- TAB: PENDING APPROVALS -->
+  <section id="tab-approvals" class="tab-content" style="display:none;">
+    <div class="card">
+      <div class="card-header">
+        <h2>Paused Actions Awaiting Authorization</h2>
+        <button class="secondary" onclick="loadApprovals()">Refresh</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Request ID</th>
+            <th>Agent</th>
+            <th>Capability</th>
+            <th>Target</th>
+            <th>Created</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="approvalsTableBody">
+          <tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No actions currently paused.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- TAB: AGENTS -->
+  <section id="tab-agents" class="tab-content" style="display:none;">
+    <div class="card">
+      <div class="card-header">
+        <h2>Registered Autonomous Agents</h2>
+        <button onclick="openModal('registerAgentModal')">+ Register New Agent</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Agent ID</th>
+            <th>Name</th>
+            <th>Team</th>
+            <th>Environment</th>
+            <th>Rate Limits (Sub/Poll)</th>
+            <th>Status</th>
+            <th>Last Used</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="agentsTableBody">
+          <tr><td colspan="8" style="text-align:center; color:var(--text-muted);">Loading agents...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- TAB: MINIONS -->
+  <section id="tab-minions" class="tab-content" style="display:none;">
+    <div class="card">
+      <div class="card-header">
+        <h2>Registered Minion Runtimes</h2>
+        <button onclick="openModal('registerMinionModal')">+ Register New Minion</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Minion ID</th>
+            <th>Name</th>
+            <th>Capabilities</th>
+            <th>Transport</th>
+            <th>Last Contact</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="minionsTableBody">
+          <tr><td colspan="7" style="text-align:center; color:var(--text-muted);">Loading minions...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- TAB: NOTIFICATIONS -->
+  <section id="tab-notifications" class="tab-content" style="display:none;">
+    <div class="card">
+      <div class="card-header">
+        <h2>Notification Profiles & Routing</h2>
+        <div>
+          <button class="secondary" onclick="openModal('registerAdapterModal')">+ New Adapter</button>
+          <button onclick="openModal('createProfileModal')">+ New Profile</button>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Profile ID</th>
+            <th>Name</th>
+            <th>Event Types</th>
+            <th>Adapter ID</th>
+            <th>Recipients</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="profilesTableBody">
+          <tr><td colspan="7" style="text-align:center; color:var(--text-muted);">Loading profiles...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Recent Delivery Audit Log</h2>
+        <button class="secondary" onclick="loadDeliveries()">Refresh</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Delivery ID</th>
+            <th>Event</th>
+            <th>Request ID</th>
+            <th>Adapter</th>
+            <th>Status</th>
+            <th>Delivered At</th>
+          </tr>
+        </thead>
+        <tbody id="deliveriesTableBody">
+          <tr><td colspan="6" style="text-align:center; color:var(--text-muted);">Loading delivery log...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- MODAL: REGISTER AGENT -->
+  <div id="registerAgentModal" class="modal-backdrop">
+    <div class="modal">
+      <h3>Register New Agent</h3>
+      <div class="form-group">
+        <label>Agent Name</label>
+        <input type="text" id="newAgentName" placeholder="e.g. Incident Response Bot" />
+      </div>
+      <div class="form-group">
+        <label>Owner Team</label>
+        <input type="text" id="newAgentTeam" placeholder="e.g. SecOps" />
+      </div>
+      <div class="form-group">
+        <label>Environment</label>
+        <select id="newAgentEnv">
+          <option value="prod">Production</option>
+          <option value="stage">Staging</option>
+          <option value="dev">Development</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Rate Limits (Submits / Polls per min)</label>
+        <div style="display:flex; gap:8px;">
+          <input type="number" id="newAgentSubmitLimit" value="60" placeholder="Submit/min" />
+          <input type="number" id="newAgentPollLimit" value="120" placeholder="Poll/min" />
+        </div>
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:8px;">
+        <button class="secondary" onclick="closeModal('registerAgentModal')">Cancel</button>
+        <button onclick="submitRegisterAgent()">Register</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: REGISTER MINION -->
+  <div id="registerMinionModal" class="modal-backdrop">
+    <div class="modal">
+      <h3>Register New Minion</h3>
+      <div class="form-group">
+        <label>Minion ID</label>
+        <input type="text" id="newMinionId" placeholder="e.g. PATCH-01" />
+      </div>
+      <div class="form-group">
+        <label>Minion Name</label>
+        <input type="text" id="newMinionName" placeholder="e.g. Windows Server Patcher" />
+      </div>
+      <div class="form-group">
+        <label>Capabilities (comma separated)</label>
+        <input type="text" id="newMinionCaps" value="windows.patch.reconcile, windows.patch.status" />
+      </div>
+      <div class="form-group">
+        <label>Public Key (Ed25519 PEM)</label>
+        <textarea id="newMinionPubKey" rows="4" placeholder="-----BEGIN PUBLIC KEY-----..."></textarea>
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:8px;">
+        <button class="secondary" onclick="closeModal('registerMinionModal')">Cancel</button>
+        <button onclick="submitRegisterMinion()">Register</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: CREATE NOTIFICATION ADAPTER -->
+  <div id="registerAdapterModal" class="modal-backdrop">
+    <div class="modal">
+      <h3>Register Notification Adapter</h3>
+      <div class="form-group">
+        <label>Adapter ID</label>
+        <input type="text" id="newAdapterId" placeholder="e.g. slack-security-alerts" />
+      </div>
+      <div class="form-group">
+        <label>Adapter Name</label>
+        <input type="text" id="newAdapterName" placeholder="e.g. Security Slack Channel" />
+      </div>
+      <div class="form-group">
+        <label>Adapter Type</label>
+        <select id="newAdapterType">
+          <option value="mock">Mock / Audit-only</option>
+          <option value="webhook">Webhook HTTP POST</option>
+          <option value="email">Email</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Config (JSON)</label>
+        <textarea id="newAdapterConfig" rows="3">{}</textarea>
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:8px;">
+        <button class="secondary" onclick="closeModal('registerAdapterModal')">Cancel</button>
+        <button onclick="submitRegisterAdapter()">Save Adapter</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: CREATE NOTIFICATION PROFILE -->
+  <div id="createProfileModal" class="modal-backdrop">
+    <div class="modal">
+      <h3>Create Notification Profile</h3>
+      <div class="form-group">
+        <label>Profile ID</label>
+        <input type="text" id="newProfileId" placeholder="e.g. approval-alerts" />
+      </div>
+      <div class="form-group">
+        <label>Profile Name</label>
+        <input type="text" id="newProfileName" placeholder="e.g. Action Approval Alerts" />
+      </div>
+      <div class="form-group">
+        <label>Adapter ID</label>
+        <input type="text" id="newProfileAdapterId" placeholder="e.g. slack-security-alerts" />
+      </div>
+      <div class="form-group">
+        <label>Event Types (comma separated)</label>
+        <input type="text" id="newProfileEvents" value="PAUSE_CREATED, REQUEST_APPROVED, REQUEST_REJECTED" />
+      </div>
+      <div class="form-group">
+        <label>Recipients (comma separated)</label>
+        <input type="text" id="newProfileRecipients" placeholder="approvers@example.gov" />
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:8px;">
+        <button class="secondary" onclick="closeModal('createProfileModal')">Cancel</button>
+        <button onclick="submitCreateProfile()">Create Profile</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: MISSION DETAIL VIEWER -->
+  <div id="missionDetailModal" class="modal-backdrop">
+    <div class="modal" style="max-width: 680px;">
+      <h3 id="detailTitle">Mission Details</h3>
+      <pre id="detailContent" class="json-viewer"></pre>
+      <div style="display:flex; justify-content:flex-end; margin-top:16px;">
+        <button class="secondary" onclick="closeModal('missionDetailModal')">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = "";
+
+    function getAuthHeaders() {
+      const token = localStorage.getItem("sg_admin_token") || "";
+      return {
+        "Authorization": "Bearer " + token,
+        "Content-Type": "application/json"
+      };
+    }
+
+    function saveAdminToken() {
+      const t = document.getElementById("adminTokenInput").value.trim();
+      localStorage.setItem("sg_admin_token", t);
+      alert("Admin token saved!");
+      loadAll();
+    }
+
+    function switchTab(tabId) {
+      document.querySelectorAll(".tab-content").forEach(el => el.style.display = "none");
+      document.querySelectorAll(".nav-tab").forEach(el => el.classList.remove("active"));
+      document.getElementById("tab-" + tabId).style.display = "block";
+      event.target.classList.add("active");
+    }
+
+    function openModal(id) {
+      document.getElementById(id).style.display = "flex";
+    }
+
+    function closeModal(id) {
+      document.getElementById(id).style.display = "none";
+    }
+
+    function formatTs(ts) {
+      if (!ts) return "—";
+      return new Date(ts * 1000).toLocaleString();
+    }
+
+    function statusBadge(status) {
+      const map = {
+        "MISSION_COMPLETE_SUCCEEDED": "badge-success",
+        "QUEUED": "badge-info",
+        "CLAIMED": "badge-info",
+        "MISSION_IN_PROGRESS": "badge-info",
+        "WAITING_FOR_APPROVAL": "badge-warning",
+        "MISSION_WAITING_FOR_REBOOT": "badge-warning",
+        "CLOSED": "badge-danger",
+        "MISSION_COMPLETE_FAILED": "badge-danger",
+        "MISSION_REJECTED": "badge-danger",
+        "DELIVERED": "badge-success",
+        "FAILED": "badge-danger"
+      };
+      const cls = map[status] || "badge-info";
+      return `<span class="badge ${cls}">${status}</span>`;
+    }
+
+    async function loadMissions() {
+      try {
+        const res = await fetch("/admin/v1/missions", { headers: getAuthHeaders() });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        const tbody = document.getElementById("missionsTableBody");
+        if (data.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No missions recorded.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = data.map(m => `
+          <tr>
+            <td class="mono"><b>${m.request_id}</b></td>
+            <td class="mono">${m.mission_id}</td>
+            <td>${m.minion_id}</td>
+            <td>${statusBadge(m.status)}</td>
+            <td>${formatTs(m.updated_at)}</td>
+            <td><button class="secondary" onclick="viewMissionDetail('${m.request_id}')">Inspect</button></td>
+          </tr>
+        `).join("");
+      } catch (err) {
+        document.getElementById("missionsTableBody").innerHTML = `<tr><td colspan="6" style="color:var(--danger);">Error: ${err.message}</td></tr>`;
+      }
+    }
+
+    async function viewMissionDetail(requestId) {
+      try {
+        const res = await fetch(`/admin/v1/requests/${requestId}`, { headers: getAuthHeaders() });
+        const data = await res.json();
+        document.getElementById("detailTitle").innerText = "Request: " + requestId;
+        document.getElementById("detailContent").innerText = JSON.stringify(data, null, 2);
+        openModal("missionDetailModal");
+      } catch (err) {
+        alert("Failed to load details: " + err.message);
+      }
+    }
+
+    async function loadApprovals() {
+      try {
+        const res = await fetch("/admin/v1/missions", { headers: getAuthHeaders() });
+        const data = await res.json();
+        const pending = data.filter(m => m.status === "WAITING_FOR_APPROVAL");
+        document.getElementById("pendingCount").innerText = pending.length;
+        const tbody = document.getElementById("approvalsTableBody");
+        if (pending.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No actions currently paused.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = pending.map(m => `
+          <tr>
+            <td class="mono"><b>${m.request_id}</b></td>
+            <td>${m.minion_id}</td>
+            <td><span class="badge badge-warning">PAUSED</span></td>
+            <td>—</td>
+            <td>${formatTs(m.created_at)}</td>
+            <td style="display:flex; gap:6px;">
+              <button onclick="approveRequest('${m.request_id}')">Approve</button>
+              <button class="danger" onclick="rejectRequest('${m.request_id}')">Reject</button>
+            </td>
+          </tr>
+        `).join("");
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    async function approveRequest(reqId) {
+      const comment = prompt("Enter approval comment:", "Approved by administrative operator");
+      if (comment === null) return;
+      try {
+        const res = await fetch(`/admin/v1/requests/${reqId}/approve`, {
+          method: "POST",
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ comment })
+        });
+        if (!res.ok) throw new Error(await res.text());
+        alert("Request approved and queued for execution!");
+        loadAll();
+      } catch (err) {
+        alert("Error approving request: " + err.message);
+      }
+    }
+
+    async function rejectRequest(reqId) {
+      const comment = prompt("Enter rejection reason:", "Rejected by administrative operator");
+      if (comment === null) return;
+      try {
+        const res = await fetch(`/admin/v1/requests/${reqId}/reject`, {
+          method: "POST",
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ comment })
+        });
+        if (!res.ok) throw new Error(await res.text());
+        alert("Request rejected and closed.");
+        loadAll();
+      } catch (err) {
+        alert("Error rejecting request: " + err.message);
+      }
+    }
+
+    async function loadAgents() {
+      try {
+        const res = await fetch("/admin/v1/agents", { headers: getAuthHeaders() });
+        const data = await res.json();
+        const tbody = document.getElementById("agentsTableBody");
+        if (data.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color:var(--text-muted);">No agents registered.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = data.map(a => `
+          <tr>
+            <td class="mono"><b>${a.agent_id}</b></td>
+            <td>${a.name}</td>
+            <td>${a.owner_team || '—'}</td>
+            <td><span class="badge badge-info">${a.environment}</span></td>
+            <td>${a.rate_limit_per_minute}/m | ${a.poll_rate_limit_per_minute}/m</td>
+            <td>${a.enabled ? '<span class="badge badge-success">ACTIVE</span>' : '<span class="badge badge-danger">DISABLED</span>'}</td>
+            <td>${formatTs(a.last_used_at)}</td>
+            <td style="display:flex; gap:6px;">
+              <button class="secondary" onclick="toggleAgent('${a.agent_id}', ${!a.enabled})">${a.enabled ? 'Disable' : 'Enable'}</button>
+              <button class="secondary" onclick="rotateAgentKey('${a.agent_id}')">Rotate Key</button>
+            </td>
+          </tr>
+        `).join("");
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    async function submitRegisterAgent() {
+      const name = document.getElementById("newAgentName").value.trim();
+      const owner_team = document.getElementById("newAgentTeam").value.trim();
+      const environment = document.getElementById("newAgentEnv").value;
+      const rate_limit_per_minute = parseInt(document.getElementById("newAgentSubmitLimit").value, 10);
+      const poll_rate_limit_per_minute = parseInt(document.getElementById("newAgentPollLimit").value, 10);
+
+      try {
+        const res = await fetch("/admin/v1/agents", {
+          method: "POST",
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ name, owner_team, environment, rate_limit_per_minute, poll_rate_limit_per_minute })
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        closeModal("registerAgentModal");
+        prompt("Agent registered! Copy this API Key (it will not be shown again):", data.api_key);
+        loadAgents();
+      } catch (err) {
+        alert("Registration failed: " + err.message);
+      }
+    }
+
+    async function toggleAgent(id, enable) {
+      await fetch(`/admin/v1/agents/${id}`, {
+        method: "PATCH",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ enabled: enable })
+      });
+      loadAgents();
+    }
+
+    async function rotateAgentKey(id) {
+      if (!confirm("Are you sure? Existing keys will be immediately revoked.")) return;
+      const res = await fetch(`/admin/v1/agents/${id}/rotate-key`, { method: "POST", headers: getAuthHeaders() });
+      const data = await res.json();
+      prompt("New Agent API Key (copy now):", data.api_key);
+      loadAgents();
+    }
+
+    async function loadMinions() {
+      try {
+        const res = await fetch("/admin/v1/minions", { headers: getAuthHeaders() });
+        const data = await res.json();
+        const tbody = document.getElementById("minionsTableBody");
+        if (data.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No minions registered.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = data.map(m => `
+          <tr>
+            <td class="mono"><b>${m.minion_id}</b></td>
+            <td>${m.name}</td>
+            <td>${(m.capabilities || []).map(c => `<span class="badge badge-info">${c}</span>`).join(" ")}</td>
+            <td>${m.transport_type}</td>
+            <td>${formatTs(m.last_contact_at)}</td>
+            <td>${m.enabled ? '<span class="badge badge-success">READY</span>' : '<span class="badge badge-danger">DISABLED</span>'}</td>
+            <td style="display:flex; gap:6px;">
+              <button class="secondary" onclick="toggleMinion('${m.minion_id}', ${!m.enabled})">${m.enabled ? 'Disable' : 'Enable'}</button>
+              <button class="secondary" onclick="rotateMinionKey('${m.minion_id}')">Rotate Key</button>
+            </td>
+          </tr>
+        `).join("");
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    async function submitRegisterMinion() {
+      const minion_id = document.getElementById("newMinionId").value.trim();
+      const name = document.getElementById("newMinionName").value.trim();
+      const capabilities = document.getElementById("newMinionCaps").value.split(",").map(c => c.trim()).filter(Boolean);
+      const public_key = document.getElementById("newMinionPubKey").value.trim();
+
+      try {
+        const res = await fetch("/admin/v1/minions", {
+          method: "POST",
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ minion_id, name, capabilities, public_key })
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        closeModal("registerMinionModal");
+        prompt("Minion enrolled! Copy this Central Command API Key for minion.config.json:", data.api_key);
+        loadMinions();
+      } catch (err) {
+        alert("Registration failed: " + err.message);
+      }
+    }
+
+    async function toggleMinion(id, enable) {
+      await fetch(`/admin/v1/minions/${id}`, {
+        method: "PATCH",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ enabled: enable })
+      });
+      loadMinions();
+    }
+
+    async function rotateMinionKey(id) {
+      if (!confirm("Are you sure? Existing keys will be immediately revoked.")) return;
+      const res = await fetch(`/admin/v1/minions/${id}/rotate-key`, { method: "POST", headers: getAuthHeaders() });
+      const data = await res.json();
+      prompt("New Minion API Key (copy now):", data.api_key);
+      loadMinions();
+    }
+
+    async function loadNotifications() {
+      try {
+        const res = await fetch("/admin/v1/notification-profiles", { headers: getAuthHeaders() });
+        const data = await res.json();
+        const tbody = document.getElementById("profilesTableBody");
+        if (data.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No notification profiles configured.</td></tr>';
+        } else {
+          tbody.innerHTML = data.map(p => `
+            <tr>
+              <td class="mono"><b>${p.profile_id}</b></td>
+              <td>${p.name}</td>
+              <td>${(p.event_types || []).map(e => `<span class="badge badge-info">${e}</span>`).join(" ")}</td>
+              <td>${p.adapter_id}</td>
+              <td>${(p.recipients || []).join(", ") || '—'}</td>
+              <td>${p.enabled ? '<span class="badge badge-success">ACTIVE</span>' : '<span class="badge badge-danger">MUTED</span>'}</td>
+              <td><button class="danger" onclick="deleteProfile('${p.profile_id}')">Delete</button></td>
+            </tr>
+          `).join("");
+        }
+        await loadDeliveries();
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    async function loadDeliveries() {
+      try {
+        const res = await fetch("/admin/v1/notification-deliveries", { headers: getAuthHeaders() });
+        const data = await res.json();
+        const tbody = document.getElementById("deliveriesTableBody");
+        if (data.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No notification deliveries recorded.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = data.map(d => `
+          <tr>
+            <td class="mono">${d.delivery_id}</td>
+            <td><span class="badge badge-info">${d.event_type}</span></td>
+            <td class="mono">${d.request_id}</td>
+            <td>${d.adapter_id}</td>
+            <td>${statusBadge(d.status)}</td>
+            <td>${formatTs(d.delivered_at)}</td>
+          </tr>
+        `).join("");
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    async function submitRegisterAdapter() {
+      const adapter_id = document.getElementById("newAdapterId").value.trim();
+      const name = document.getElementById("newAdapterName").value.trim();
+      const adapter_type = document.getElementById("newAdapterType").value;
+      let config = {};
+      try { config = JSON.parse(document.getElementById("newAdapterConfig").value); } catch(e){}
+
+      try {
+        const res = await fetch("/admin/v1/notification-adapters", {
+          method: "POST",
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ adapter_id, name, adapter_type, config })
+        });
+        if (!res.ok) throw new Error(await res.text());
+        closeModal("registerAdapterModal");
+        alert("Adapter created!");
+      } catch (err) {
+        alert("Failed to save adapter: " + err.message);
+      }
+    }
+
+    async function submitCreateProfile() {
+      const profile_id = document.getElementById("newProfileId").value.trim();
+      const name = document.getElementById("newProfileName").value.trim();
+      const adapter_id = document.getElementById("newProfileAdapterId").value.trim();
+      const event_types = document.getElementById("newProfileEvents").value.split(",").map(e => e.trim()).filter(Boolean);
+      const recipients = document.getElementById("newProfileRecipients").value.split(",").map(r => r.trim()).filter(Boolean);
+
+      try {
+        const res = await fetch("/admin/v1/notification-profiles", {
+          method: "POST",
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ profile_id, name, adapter_id, event_types, recipients })
+        });
+        if (!res.ok) throw new Error(await res.text());
+        closeModal("createProfileModal");
+        loadNotifications();
+      } catch (err) {
+        alert("Failed to create profile: " + err.message);
+      }
+    }
+
+    async function deleteProfile(id) {
+      if (!confirm("Delete profile " + id + "?")) return;
+      await fetch(`/admin/v1/notification-profiles/${id}`, { method: "DELETE", headers: getAuthHeaders() });
+      loadNotifications();
+    }
+
+    async function reloadPolicy() {
+      try {
+        const res = await fetch("/admin/v1/policy/reload", { method: "POST", headers: getAuthHeaders() });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        alert("Policy successfully reloaded! Active Hash: " + data.policy_hash);
+      } catch (err) {
+        alert("Failed to reload policy: " + err.message);
+      }
+    }
+
+    function loadAll() {
+      loadMissions();
+      loadApprovals();
+      loadAgents();
+      loadMinions();
+      loadNotifications();
+    }
+
+    // Auto-init on page load
+    const saved = localStorage.getItem("sg_admin_token");
+    if (saved) {
+      document.getElementById("adminTokenInput").value = saved;
+    }
+    loadAll();
+  </script>
+</body>
+</html>
