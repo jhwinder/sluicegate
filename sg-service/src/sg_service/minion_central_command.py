@@ -62,6 +62,25 @@ class ApprovalActionRequest(BaseModel):
     comment: str = ""
 
 
+class RegisterAgentRequest(BaseModel):
+    name: str = Field(min_length=1)
+    description: str = ""
+    owner_team: str = ""
+    environment: str = "prod"
+    rate_limit_per_minute: int = 60
+    poll_rate_limit_per_minute: int = 120
+
+
+class UpdateAgentRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    owner_team: str | None = None
+    environment: str | None = None
+    enabled: bool | None = None
+    rate_limit_per_minute: int | None = None
+    poll_rate_limit_per_minute: int | None = None
+
+
 def connect() -> sqlite3.Connection:
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DATABASE_PATH, timeout=15)
@@ -128,6 +147,27 @@ def initialize() -> None:
                 received_at REAL NOT NULL,
                 UNIQUE(mission_id, event_id)
             );
+            CREATE TABLE IF NOT EXISTS agents (
+                agent_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                owner_team TEXT DEFAULT '',
+                environment TEXT DEFAULT 'prod',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                auth_method TEXT NOT NULL DEFAULT 'api_key',
+                rate_limit_per_minute INTEGER DEFAULT 60,
+                poll_rate_limit_per_minute INTEGER DEFAULT 120,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                last_used_at REAL
+            );
+            CREATE TABLE IF NOT EXISTS agent_rate_limits (
+                agent_id TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                timestamp REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS agent_rate_limits_idx
+                ON agent_rate_limits(agent_id, action_type, timestamp);
             """
         )
         try:
@@ -171,14 +211,59 @@ def authenticated_principal(kind: str, authorization: str | None) -> str:
     token = authorization.removeprefix("Bearer ")
     with connect() as connection:
         rows = connection.execute(
-            "SELECT principal_id, secret_hash FROM api_keys WHERE kind = ? AND enabled = 1 AND revoked_at IS NULL",
+            "SELECT principal_id, secret_hash, enabled FROM api_keys WHERE kind = ? AND revoked_at IS NULL",
             (kind,),
         ).fetchall()
     token_hash = _token_hash(token)
     for row in rows:
         if hmac.compare_digest(token_hash, row["secret_hash"]):
-            return str(row["principal_id"])
+            if not bool(row["enabled"]):
+                raise HTTPException(status_code=403, detail=f"{kind.capitalize()} is disabled")
+            principal_id = str(row["principal_id"])
+            if kind == "agent":
+                with connect() as conn:
+                    agent_row = conn.execute("SELECT enabled FROM agents WHERE agent_id = ?", (principal_id,)).fetchone()
+                    if agent_row is not None and not bool(agent_row["enabled"]):
+                        raise HTTPException(status_code=403, detail="Agent is disabled")
+                with transaction() as conn:
+                    conn.execute("UPDATE agents SET last_used_at = ? WHERE agent_id = ?", (time.time(), principal_id))
+            return principal_id
     raise HTTPException(status_code=401, detail="Invalid credentials")
+
+
+def check_agent_rate_limit(agent_id: str, action_type: str) -> None:
+    now = time.time()
+    cutoff = now - 60.0
+    limit = 60 if action_type == "submit" else 120
+
+    with connect() as conn:
+        agent_row = conn.execute(
+            "SELECT rate_limit_per_minute, poll_rate_limit_per_minute FROM agents WHERE agent_id = ?",
+            (agent_id,),
+        ).fetchone()
+        if agent_row:
+            limit = (
+                agent_row["rate_limit_per_minute"]
+                if action_type == "submit"
+                else agent_row["poll_rate_limit_per_minute"]
+            )
+
+    with transaction() as connection:
+        connection.execute("DELETE FROM agent_rate_limits WHERE timestamp < ?", (cutoff,))
+        count = connection.execute(
+            "SELECT COUNT(*) FROM agent_rate_limits WHERE agent_id = ? AND action_type = ? AND timestamp >= ?",
+            (agent_id, action_type, cutoff),
+        ).fetchone()[0]
+        if count >= limit:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Rate limit exceeded for {action_type}. Limit is {limit} req/min.",
+                headers={"Retry-After": "60"},
+            )
+        connection.execute(
+            "INSERT INTO agent_rate_limits (agent_id, action_type, timestamp) VALUES (?, ?, ?)",
+            (agent_id, action_type, now),
+        )
 
 
 def require_agent(authorization: str | None = Header(default=None)) -> str:
@@ -241,6 +326,41 @@ def health() -> dict[str, str]:
 
 @app.post("/api/v1/patch-requests", status_code=status.HTTP_202_ACCEPTED)
 def create_patch_request(request: PatchRequest, principal: str = Depends(require_agent)) -> dict[str, Any]:
+    check_agent_rate_limit(principal, "submit")
+
+    # Idempotent deduplication check: associate matching open request
+    normalized_params = json.dumps({
+        "servers": sorted(request.servers),
+        "patch_sources": sorted(request.patch_sources),
+        "allowed_patch_types": sorted(request.allowed_patch_types),
+        "allow_reboot": request.allow_reboot,
+        "maintenance_window": request.maintenance_window,
+    }, sort_keys=True)
+
+    with connect() as connection:
+        open_rows = connection.execute(
+            """
+            SELECT request_id, raw_request FROM missions
+            WHERE agent_id = ? AND status IN ('QUEUED', 'WAITING_FOR_APPROVAL', 'CLAIMED', 'MISSION_ACKNOWLEDGED', 'MISSION_IN_PROGRESS', 'MISSION_WAITING_FOR_REBOOT')
+            ORDER BY created_at DESC
+            """,
+            (principal,),
+        ).fetchall()
+        for open_row in open_rows:
+            raw = json.loads(open_row["raw_request"] or "{}")
+            raw_normalized = json.dumps({
+                "servers": sorted(raw.get("servers", [])),
+                "patch_sources": sorted(raw.get("patch_sources", [])),
+                "allowed_patch_types": sorted(raw.get("allowed_patch_types", [])),
+                "allow_reboot": raw.get("allow_reboot", False),
+                "maintenance_window": raw.get("maintenance_window"),
+            }, sort_keys=True)
+            if raw_normalized == normalized_params:
+                return {
+                    "request_id": open_row["request_id"],
+                    "status": "ACCEPTED",
+                }
+
     request_id = f"REQ-{uuid.uuid4().hex}"
     mission_id = f"MISSION-{uuid.uuid4().hex}"
     if policy_engine is None:
@@ -403,6 +523,7 @@ def mission_result(
 
 @app.get("/api/v1/requests/{request_id}")
 def request_status(request_id: str, principal: str = Depends(require_agent)) -> dict[str, str]:
+    check_agent_rate_limit(principal, "poll")
     with connect() as connection:
         row = connection.execute("SELECT status FROM missions WHERE request_id = ? AND agent_id = ?", (request_id, principal)).fetchone()
     if row is None:
@@ -631,3 +752,115 @@ def enroll_minion(minion_id: str, public_key: str, _admin: str = Depends(require
             (minion_id, public_key, time.time()),
         )
     return {"minion_id": minion_id, "status": "ENROLLED"}
+
+
+@app.post("/admin/v1/agents", status_code=status.HTTP_201_CREATED)
+def register_agent(body: RegisterAgentRequest, _admin: str = Depends(require_admin)) -> dict[str, Any]:
+    agent_id = f"AGENT-{uuid.uuid4().hex[:12]}"
+    token = secrets.token_urlsafe(48)
+    key_id = f"KEY-{uuid.uuid4().hex}"
+    now = time.time()
+    with transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO agents (agent_id, name, description, owner_team, environment, enabled, auth_method, rate_limit_per_minute, poll_rate_limit_per_minute, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 1, 'api_key', ?, ?, ?, ?)
+            """,
+            (agent_id, body.name, body.description, body.owner_team, body.environment, body.rate_limit_per_minute, body.poll_rate_limit_per_minute, now, now),
+        )
+        connection.execute(
+            "INSERT INTO api_keys (key_id, principal_id, secret_hash, kind, created_at) VALUES (?, ?, ?, 'agent', ?)",
+            (key_id, agent_id, _token_hash(token), now),
+        )
+    return {
+        "agent_id": agent_id,
+        "name": body.name,
+        "api_key": token,
+        "key_id": key_id,
+        "rate_limit_per_minute": body.rate_limit_per_minute,
+        "poll_rate_limit_per_minute": body.poll_rate_limit_per_minute,
+    }
+
+
+@app.get("/admin/v1/agents")
+def list_agents(_admin: str = Depends(require_admin)) -> list[dict[str, Any]]:
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT agent_id, name, description, owner_team, environment, enabled, auth_method, rate_limit_per_minute, poll_rate_limit_per_minute, created_at, updated_at, last_used_at FROM agents ORDER BY created_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.get("/admin/v1/agents/{agent_id}")
+def get_agent(agent_id: str, _admin: str = Depends(require_admin)) -> dict[str, Any]:
+    with connect() as connection:
+        row = connection.execute(
+            "SELECT agent_id, name, description, owner_team, environment, enabled, auth_method, rate_limit_per_minute, poll_rate_limit_per_minute, created_at, updated_at, last_used_at FROM agents WHERE agent_id = ?",
+            (agent_id,),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return dict(row)
+
+
+@app.patch("/admin/v1/agents/{agent_id}")
+def update_agent(agent_id: str, body: UpdateAgentRequest, _admin: str = Depends(require_admin)) -> dict[str, Any]:
+    with transaction() as connection:
+        row = connection.execute("SELECT * FROM agents WHERE agent_id = ?", (agent_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Agent not found")
+
+        updates: list[str] = []
+        params: list[Any] = []
+        if body.name is not None:
+            updates.append("name = ?")
+            params.append(body.name)
+        if body.description is not None:
+            updates.append("description = ?")
+            params.append(body.description)
+        if body.owner_team is not None:
+            updates.append("owner_team = ?")
+            params.append(body.owner_team)
+        if body.environment is not None:
+            updates.append("environment = ?")
+            params.append(body.environment)
+        if body.enabled is not None:
+            updates.append("enabled = ?")
+            params.append(1 if body.enabled else 0)
+            if not body.enabled:
+                connection.execute("UPDATE api_keys SET enabled = 0 WHERE principal_id = ? AND kind = 'agent'", (agent_id,))
+            else:
+                connection.execute("UPDATE api_keys SET enabled = 1 WHERE principal_id = ? AND kind = 'agent' AND revoked_at IS NULL", (agent_id,))
+        if body.rate_limit_per_minute is not None:
+            updates.append("rate_limit_per_minute = ?")
+            params.append(body.rate_limit_per_minute)
+        if body.poll_rate_limit_per_minute is not None:
+            updates.append("poll_rate_limit_per_minute = ?")
+            params.append(body.poll_rate_limit_per_minute)
+
+        if updates:
+            updates.append("updated_at = ?")
+            params.append(time.time())
+            params.append(agent_id)
+            connection.execute(f"UPDATE agents SET {', '.join(updates)} WHERE agent_id = ?", params)
+
+    return get_agent(agent_id, _admin)
+
+
+@app.post("/admin/v1/agents/{agent_id}/rotate-key")
+def rotate_agent_key(agent_id: str, _admin: str = Depends(require_admin)) -> dict[str, str]:
+    token = secrets.token_urlsafe(48)
+    key_id = f"KEY-{uuid.uuid4().hex}"
+    now = time.time()
+    with transaction() as connection:
+        row = connection.execute("SELECT agent_id FROM agents WHERE agent_id = ?", (agent_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        # Revoke existing active keys
+        connection.execute("UPDATE api_keys SET enabled = 0, revoked_at = ? WHERE principal_id = ? AND kind = 'agent' AND enabled = 1", (now, agent_id))
+        # Insert new key
+        connection.execute(
+            "INSERT INTO api_keys (key_id, principal_id, secret_hash, kind, created_at) VALUES (?, ?, ?, 'agent', ?)",
+            (key_id, agent_id, _token_hash(token), now),
+        )
+    return {"agent_id": agent_id, "key_id": key_id, "api_key": token}
