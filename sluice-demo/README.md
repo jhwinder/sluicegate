@@ -74,16 +74,27 @@ approvals must be completed via the web UI instead of via email.
 
 ### Start the demo
 
-From project root:
+The local stack runs the legacy demo UI/BFF alongside `sg_service` and a safe no-op demo Minion. It does not access Windows servers or install patches. The demo Minion claims Missions and reports signed results, but intentionally performs no external action.
 
-    docker compose -f sluice-demo/docker-compose.yml build --no-cache backend
-    docker compose -f sluice-demo/docker-compose.yml up --force-recreate
+From the repository root, create the development signing keys and local environment file:
+
+```powershell
+./deployment/compose/Generate-DemoKeys.ps1
+Copy-Item sluice-demo/.env.example sluice-demo/.env
+```
+
+Edit `sluice-demo/.env` and replace all three placeholder API keys with unique local-only values. Then start the stack:
+
+```sh
+docker compose --env-file sluice-demo/.env -f sluice-demo/docker-compose.yml up --build
+```
 
 Then open:
 
     UI: http://localhost:8080
     API Health: http://localhost:8000/health
     API Docs (Swagger): http://localhost:8000/docs
+    Minion Central Command: http://127.0.0.1:8443/health
 
 ## Demo Scenarios
 
@@ -102,3 +113,5 @@ Approvals can be performed directly in the UI.
 - Data/auditing is stored in memory only
 - Policies can be edited live and reloaded
 - This demo is intentionally minimal and auditable
+- `sg_core` is built from the local monorepo source; demo containers do not install `sg-core` from PyPI
+- The `demo-minion` service only acknowledges and completes no-op Missions; patching uses the separate Windows deployment package

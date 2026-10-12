@@ -3,7 +3,16 @@
 Thanks for your interest in SluiceGate!
 
 ## Scope
-This repo contains the **Open Core**: deterministic policy evaluation, decision loop, and reference adapters. This project is early; interfaces may evolve prior to v1.0.
+This repository is a monorepo containing the `open-core` policy library, `sg-service`, Minion protocols/implementations, deployment tooling, and a reference demo. Keep changes within the owning project boundary; policy semantics belong in Core, durable transactions and Mission Central Command in Service, privileged target operations in Minions, and host installation/build logic in `deployment/`.
+
+Use the root uv workspace to build and test the Python distributions:
+
+```sh
+uv sync --all-packages
+uv build --package sg-core
+uv build --package sg-service
+uv run --package sg-service --group dev pytest -q sg-service/tests
+```
 
 ## How to contribute
 - File issues for bugs, clarity problems, or missing docs

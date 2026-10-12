@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sluicegate.example/schemas/mission-envelope-1.0.json",
+  "title": "SluiceGate Mission Envelope",
+  "type": "object",
+  "required": ["protocol_version", "request_id", "mission_id", "minion_id", "capability", "target", "parameters", "issued_at", "expires_at", "nonce", "requested_by", "signing_key_id", "signature"],
+  "properties": {
+    "protocol_version": {"const": "1.0"},
+    "request_id": {"type": "string", "minLength": 1},
+    "mission_id": {"type": "string", "minLength": 1},
+    "minion_id": {"type": "string", "minLength": 1},
+    "capability": {"type": "string", "minLength": 1},
+    "target": {
+      "type": "object",
+      "required": ["servers"],
+      "properties": {"servers": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}},
+      "additionalProperties": false
+    },
+    "parameters": {
+      "type": "object",
+      "required": ["patch_sources", "patch_constraints"],
+      "properties": {
+        "patch_sources": {"type": "array", "items": {"enum": ["wsus", "nessus_catalog"]}},
+        "patch_constraints": {
+          "type": "object",
+          "required": ["allowed_patch_types", "allow_reboot"],
+          "properties": {
+            "allowed_patch_types": {"type": "array", "items": {"type": "string"}},
+            "allow_reboot": {"type": "boolean"}
+          },
+          "additionalProperties": false
+        },
+        "maintenance_window": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "issued_at": {"type": "number"},
+    "expires_at": {"type": "number"},
+    "nonce": {"type": "string", "minLength": 16},
+    "requested_by": {"type": "string", "minLength": 1},
+    "signing_key_id": {"type": "string"},
+    "signature": {"type": "string", "minLength": 1}
+  },
+  "additionalProperties": false
+}

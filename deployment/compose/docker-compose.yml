@@ -1,0 +1,19 @@
+services:
+  sg-service:
+    build:
+      context: ../..
+      dockerfile: sg-service/Dockerfile
+    image: sluicegate/sg-service:local
+    environment:
+      SG_DATABASE_PATH: /data/sg-service.sqlite3
+      SG_SIGNING_KEY_PATH: /run/secrets/sg-signing-key.pem
+      SG_BOOTSTRAP_ADMIN_KEY: ${SG_BOOTSTRAP_ADMIN_KEY:?set SG_BOOTSTRAP_ADMIN_KEY in the local environment}
+    ports:
+      - "127.0.0.1:8443:8443"
+    volumes:
+      - sg-service-data:/data
+      - ./secrets/sg-signing-key.pem:/run/secrets/sg-signing-key.pem:ro
+    restart: unless-stopped
+
+volumes:
+  sg-service-data:

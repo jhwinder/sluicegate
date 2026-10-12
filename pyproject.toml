@@ -1,0 +1,5 @@
+[tool.uv.workspace]
+members = ["open-core", "sg-service"]
+
+[tool.uv.sources]
+sg-core = { workspace = true }

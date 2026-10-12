@@ -11,6 +11,11 @@ wheels/
 .venv
 .env
 .env.*
+!.env.example
+!**/.env.example
+sluice-demo/.env
+sluice-demo/secrets/
+deployment/compose/secrets/
 
 #Mac files
 .DS_Store
@@ -18,3 +23,4 @@ wheels/
 run/
 .init/
 scratch/
+docs/planning

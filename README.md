@@ -6,7 +6,7 @@ Feedback welcome via GitHub Issues.
 
 SluiceGate is a policy-enforcing control plane for autonomous and semi-autonomous software systems.  As AI agents and automated workflows gain the ability to act—spend money, modify systems, trigger real-world effects—SluiceGate ensures that nothing executes without passing through an explicit, auditable gate.  SluiceGate sits in the execution path, not on the sidelines.
 
-This repository contains the open-core of SluiceGate under the SluiceGate Source-Available License.
+This monorepo contains the source-available `sg_core` policy library, the first-party `sg_service` application, Minion protocol/reference implementations, deployment tooling, and a runnable demo. `sg_core` remains a distinct Python distribution, but first-party builds resolve it from this repository rather than requiring a PyPI release.
 
 **The Problem**
 
@@ -88,20 +88,35 @@ In all cases, SluiceGate ensures that AI autonomy operates only within explicitl
 
 **Repository Structure**
 
-    sluice/
-    README.md              # This file
-    docs/                  # Architecture, policy model, design notes (future)
-    open-core/             # SluiceGate Open Core
-        src/
-            sg_core/
-            sg_poledit/
-        policies/
-        examples/
-    sluice-demo/           # Runnable reference demo
-        backend/
-        frontend/
-        policies/
+```text
+sluice/
+  open-core/              # sg_core policy library and sg_poledit
+  sg-service/             # API, durable Mission queue, Minion Central Command
+  minion-registry/        # protocol schemas and Minion implementations
+  deployment/             # Compose and Windows deployment tooling
+  sluice-demo/             # UI/BFF and local reference stack
+  docs/
+  planning/
+```
 
+**Development**
+
+Use `uv` from the repository root to resolve the local workspace packages:
+
+```sh
+uv sync --all-packages
+uv build --package sg-core
+uv build --package sg-service
+uv run --package sg-service --group dev pytest -q sg-service/tests
+```
+
+To run the local demo stack, generate development signing keys with `deployment/compose/Generate-DemoKeys.ps1`, copy `sluice-demo/.env.example` to `sluice-demo/.env`, replace the development placeholders, then run:
+
+```sh
+docker compose --env-file sluice-demo/.env -f sluice-demo/docker-compose.yml up --build
+```
+
+The demo Minion is a safe no-op; it does not patch servers or perform real payments. The Windows Server 2022 deployment scripts are under `deployment/windows/`; a complete release bundle also requires the signed Windows Minion service executable.
 
 **Status**
 

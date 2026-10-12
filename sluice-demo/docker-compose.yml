@@ -1,21 +1,70 @@
 services:
-  backend:
-    build: ./backend
-    ports:
-      - "8000:8000"
+  sg-service:
+    build:
+      context: ..
+      dockerfile: sg-service/Dockerfile
+    image: sluicegate/sg-service:demo
     environment:
-      - POLICY_PATH=/policies/policy.yml
-      - BASE_URL=http://localhost:8000
-      - UI_URL=http://localhost:8080
-      - RESEND_API_KEY={YOURKEY}
-      - APPROVER_EMAIL=approver@domain.com
-      - RESEND_FROM=onboarding@resend.dev
+      SG_DATABASE_PATH: /data/sg-service.sqlite3
+      SG_SIGNING_KEY_PATH: /run/secrets/sg-signing-key.pem
+      SG_POLICY_PATH: /config/demo-policy.yml
+      SG_PATCH_MINION_ID: DEMO-STUB-01
+      SG_BOOTSTRAP_ADMIN_KEY: ${SG_BOOTSTRAP_ADMIN_KEY:?create a local .env file}
+      SG_DEV_BOOTSTRAP: "true"
+      SG_DEV_AGENT_KEY: ${SG_DEMO_AGENT_KEY:?create a local .env file}
+      SG_DEV_MINION_KEY: ${SG_DEMO_MINION_KEY:?create a local .env file}
+      SG_DEV_MINION_PUBLIC_KEY_PATH: /run/secrets/demo-minion-public.pem
+    ports:
+      - "127.0.0.1:8443:8443"
+    volumes:
+      - sg-service-data:/data
+      - ./secrets/sg-signing-key.pem:/run/secrets/sg-signing-key.pem:ro
+      - ./secrets/demo-minion-public.pem:/run/secrets/demo-minion-public.pem:ro
+      - ../sg-service/policies/demo-policy.yml:/config/demo-policy.yml:ro
+    restart: unless-stopped
+
+  demo-minion:
+    build:
+      context: ..
+      dockerfile: minion-registry/minions/demo_stub/Dockerfile
+    environment:
+      MINION_CENTRAL_COMMAND_URL: http://sg-service:8443
+      MINION_ID: DEMO-STUB-01
+      MINION_API_KEY: ${SG_DEMO_MINION_KEY:?create a local .env file}
+      MINION_PRIVATE_KEY_PATH: /run/secrets/demo-minion-key.pem
+      MINION_POLL_INTERVAL_SECONDS: "2"
+    volumes:
+      - ./secrets/demo-minion-key.pem:/run/secrets/demo-minion-key.pem:ro
+    depends_on:
+      - sg-service
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ..
+      dockerfile: sluice-demo/backend/Dockerfile
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      POLICY_PATH: /policies/policy.yml
+      BASE_URL: http://localhost:8000
+      UI_URL: http://localhost:8080
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      APPROVER_EMAIL: ${APPROVER_EMAIL:-}
+      RESEND_FROM: ${RESEND_FROM:-}
     volumes:
       - ./policies:/policies:ro
+    depends_on:
+      - sg-service
 
   frontend:
     image: nginx:alpine
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
     volumes:
       - ./frontend:/usr/share/nginx/html:ro
+    depends_on:
+      - backend
+
+volumes:
+  sg-service-data:

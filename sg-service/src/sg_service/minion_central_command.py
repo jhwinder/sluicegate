@@ -1,0 +1,484 @@
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import os
+import secrets
+import sqlite3
+import time
+import uuid
+from contextlib import asynccontextmanager, contextmanager
+from pathlib import Path
+from typing import Any, AsyncGenerator, Generator
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from fastapi import Depends, FastAPI, Header, HTTPException, status
+from pydantic import BaseModel, Field
+from sg_core import GateRequest, PolicyEngine
+
+DATABASE_PATH = Path(os.environ.get("SG_DATABASE_PATH", "/data/sg-service.sqlite3"))
+SIGNING_KEY_PATH = Path(os.environ.get("SG_SIGNING_KEY_PATH", "/run/secrets/sg-signing-key.pem"))
+PATCH_MINION_ID = os.environ.get("SG_PATCH_MINION_ID", "PATCH-01")
+POLICY_PATH = Path(os.environ.get("SG_POLICY_PATH", "/config/policy.yml"))
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
+    initialize()
+    yield
+
+
+app = FastAPI(title="SluiceGate Service", version="0.1.0", lifespan=lifespan)
+policy_engine: PolicyEngine | None = None
+
+
+class PatchRequest(BaseModel):
+    servers: list[str] = Field(min_length=1)
+    patch_sources: list[str] = Field(default_factory=lambda: ["wsus", "nessus_catalog"])
+    allowed_patch_types: list[str] = Field(default_factory=lambda: ["SECURITY"])
+    allow_reboot: bool = False
+    maintenance_window: str | None = None
+
+
+class MissionStatusRequest(BaseModel):
+    event_id: str = Field(min_length=1, max_length=160)
+    status: str
+    detail: dict[str, Any] = Field(default_factory=dict)
+    occurred_at: float | None = None
+
+
+class MissionResultRequest(BaseModel):
+    event_id: str = Field(min_length=1, max_length=160)
+    status: str
+    result: dict[str, Any] = Field(default_factory=dict)
+    signature: str
+
+
+def connect() -> sqlite3.Connection:
+    DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(DATABASE_PATH, timeout=15)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+@contextmanager
+def transaction() -> Generator[sqlite3.Connection, None, None]:
+    connection = connect()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def initialize() -> None:
+    global policy_engine
+    if not POLICY_PATH.is_file():
+        raise RuntimeError(f"Policy file does not exist: {POLICY_PATH}")
+    policy_engine = PolicyEngine(str(POLICY_PATH))
+    with transaction() as connection:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS api_keys (
+                key_id TEXT PRIMARY KEY,
+                principal_id TEXT NOT NULL,
+                secret_hash TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at REAL NOT NULL,
+                revoked_at REAL
+            );
+            CREATE TABLE IF NOT EXISTS minions (
+                minion_id TEXT PRIMARY KEY,
+                public_key TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS missions (
+                mission_id TEXT PRIMARY KEY,
+                request_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                minion_id TEXT NOT NULL,
+                envelope TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS missions_claim_idx
+                ON missions(minion_id, status, created_at);
+            CREATE TABLE IF NOT EXISTS mission_events (
+                event_id TEXT PRIMARY KEY,
+                mission_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                detail TEXT NOT NULL,
+                occurred_at REAL,
+                received_at REAL NOT NULL,
+                UNIQUE(mission_id, event_id)
+            );
+            """
+        )
+        bootstrap_admin_key = os.environ.get("SG_BOOTSTRAP_ADMIN_KEY", "")
+        if bootstrap_admin_key:
+            connection.execute(
+                "INSERT OR IGNORE INTO api_keys (key_id, principal_id, secret_hash, kind, created_at) VALUES (?, ?, ?, ?, ?)",
+                ("KEY-BOOTSTRAP-ADMIN", "admin", _token_hash(bootstrap_admin_key), "admin", time.time()),
+            )
+        if os.environ.get("SG_DEV_BOOTSTRAP", "false").lower() == "true":
+            _insert_environment_key(connection, "agent", os.environ.get("SG_DEV_AGENT_KEY", ""), "demo-agent")
+            _insert_environment_key(connection, "minion", os.environ.get("SG_DEV_MINION_KEY", ""), "DEMO-STUB-01")
+            development_public_key = os.environ.get("SG_DEV_MINION_PUBLIC_KEY_PATH", "")
+            if development_public_key and Path(development_public_key).is_file():
+                public_key = Path(development_public_key).read_text(encoding="utf-8")
+                connection.execute(
+                    "INSERT OR IGNORE INTO minions (minion_id, public_key, created_at) VALUES (?, ?, ?)",
+                    ("DEMO-STUB-01", public_key, time.time()),
+                )
+
+
+def _insert_environment_key(connection: sqlite3.Connection, kind: str, token: str, principal_id: str) -> None:
+    if not token:
+        return
+    connection.execute(
+        "INSERT OR IGNORE INTO api_keys (key_id, principal_id, secret_hash, kind, created_at) VALUES (?, ?, ?, ?, ?)",
+        (f"KEY-DEV-{kind.upper()}", principal_id, _token_hash(token), kind, time.time()),
+    )
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def authenticated_principal(kind: str, authorization: str | None) -> str:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Bearer token required")
+    token = authorization.removeprefix("Bearer ")
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT principal_id, secret_hash FROM api_keys WHERE kind = ? AND enabled = 1 AND revoked_at IS NULL",
+            (kind,),
+        ).fetchall()
+    token_hash = _token_hash(token)
+    for row in rows:
+        if hmac.compare_digest(token_hash, row["secret_hash"]):
+            return str(row["principal_id"])
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
+
+def require_agent(authorization: str | None = Header(default=None)) -> str:
+    return authenticated_principal("agent", authorization)
+
+
+def require_minion(authorization: str | None = Header(default=None)) -> str:
+    return authenticated_principal("minion", authorization)
+
+
+def require_admin(authorization: str | None = Header(default=None)) -> str:
+    return authenticated_principal("admin", authorization)
+
+
+def signing_private_key() -> ed25519.Ed25519PrivateKey:
+    if not SIGNING_KEY_PATH.is_file():
+        raise HTTPException(status_code=503, detail="SluiceGate signing key is not configured")
+    key = serialization.load_pem_private_key(SIGNING_KEY_PATH.read_bytes(), password=None)
+    if not isinstance(key, ed25519.Ed25519PrivateKey):
+        raise HTTPException(status_code=503, detail="SluiceGate signing key must be Ed25519")
+    return key
+
+
+def canonical_json(payload: dict[str, Any]) -> bytes:
+    return json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def verify_minion_signature(minion_id: str, payload: dict[str, Any], signature: str) -> None:
+    with connect() as connection:
+        row = connection.execute(
+            "SELECT public_key FROM minions WHERE minion_id = ? AND enabled = 1",
+            (minion_id,),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=403, detail="Minion is not enrolled or enabled")
+    try:
+        public_key = serialization.load_pem_public_key(row["public_key"].encode("utf-8"))
+        if not isinstance(public_key, ed25519.Ed25519PublicKey):
+            raise ValueError("Minion public key must be Ed25519")
+        public_key.verify(bytes.fromhex(signature), canonical_json(payload))
+    except (InvalidSignature, ValueError, TypeError):
+        raise HTTPException(status_code=401, detail="Invalid Mission Result signature") from None
+
+
+def validate_transition(current: str, new: str) -> None:
+    transitions = {
+        "CLAIMED": {"MISSION_ACKNOWLEDGED", "MISSION_REJECTED"},
+        "MISSION_ACKNOWLEDGED": {"MISSION_IN_PROGRESS", "MISSION_REJECTED", "MISSION_EXPIRED", "MISSION_CANCELLED"},
+        "MISSION_IN_PROGRESS": {"MISSION_IN_PROGRESS", "MISSION_WAITING_FOR_REBOOT", "MISSION_COMPLETE_SUCCEEDED", "MISSION_COMPLETE_PARTIAL", "MISSION_COMPLETE_FAILED", "MISSION_EXPIRED", "MISSION_CANCELLED"},
+        "MISSION_WAITING_FOR_REBOOT": {"MISSION_IN_PROGRESS", "MISSION_COMPLETE_SUCCEEDED", "MISSION_COMPLETE_PARTIAL", "MISSION_COMPLETE_FAILED", "MISSION_EXPIRED", "MISSION_CANCELLED"},
+    }
+    if new not in transitions.get(current, set()):
+        raise HTTPException(status_code=409, detail=f"Invalid Mission status transition: {current} -> {new}")
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.post("/api/v1/patch-requests", status_code=status.HTTP_202_ACCEPTED)
+def create_patch_request(request: PatchRequest, principal: str = Depends(require_agent)) -> dict[str, Any]:
+    request_id = f"REQ-{uuid.uuid4().hex}"
+    mission_id = f"MISSION-{uuid.uuid4().hex}"
+    if policy_engine is None:
+        raise HTTPException(status_code=503, detail="Policy engine is not initialized")
+    policy_request = GateRequest(
+        actor={"type": "AGENT", "id": principal},
+        action={
+            "name": "windows.patch.reconcile",
+            "params": {
+                "patch_sources": request.patch_sources,
+                "allowed_patch_types": request.allowed_patch_types,
+                "allow_reboot": request.allow_reboot,
+            },
+        },
+        target={"servers": request.servers},
+        context={"maintenance_window": request.maintenance_window},
+    )
+    decision, obligations, policy_hash = policy_engine.decide(
+        {
+            "actor": policy_request.actor,
+            "action": policy_request.action,
+            "target": policy_request.target,
+            "context": policy_request.context,
+        }
+    )
+    status_by_decision = {"ALLOW": "QUEUED", "PAUSE": "WAITING_FOR_APPROVAL", "BLOCK": "CLOSED"}
+    mission_state = status_by_decision.get(decision, "CLOSED")
+    envelope = {
+        "protocol_version": "1.0",
+        "request_id": request_id,
+        "mission_id": mission_id,
+        "minion_id": PATCH_MINION_ID,
+        "capability": "windows.patch.reconcile",
+        "target": {"servers": request.servers},
+        "parameters": {
+            "patch_sources": request.patch_sources,
+            "patch_constraints": {
+                "allowed_patch_types": request.allowed_patch_types,
+                "allow_reboot": request.allow_reboot,
+            },
+            "maintenance_window": request.maintenance_window,
+        },
+        "issued_at": time.time(),
+        "expires_at": time.time() + 86400,
+        "nonce": secrets.token_urlsafe(24),
+        "requested_by": principal,
+        "policy_hash": policy_hash,
+        "policy_decision": decision,
+        "obligations": [{"type": item.type, "data": item.data} for item in obligations],
+    }
+    envelope["signing_key_id"] = "sg-service-ed25519-v1"
+    envelope["signature"] = signing_private_key().sign(canonical_json(envelope)).hex()
+    with transaction() as connection:
+        connection.execute(
+            "INSERT INTO missions (mission_id, request_id, agent_id, minion_id, envelope, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (mission_id, request_id, principal, PATCH_MINION_ID, json.dumps(envelope), mission_state, time.time(), time.time()),
+        )
+    return {"request_id": request_id, "status": "ACCEPTED" if decision != "BLOCK" else "CLOSED"}
+
+
+@app.post("/internal/v1/minions/{minion_id}/check-in")
+def minion_check_in(minion_id: str, principal: str = Depends(require_minion)) -> dict[str, Any]:
+    if minion_id != principal:
+        raise HTTPException(status_code=403, detail="Minion identity not authorized")
+    return {"minion_id": minion_id, "status": "CONNECTED", "server_time": time.time()}
+
+
+@app.post("/internal/v1/minions/{minion_id}/missions/claim")
+def claim_mission(minion_id: str, principal: str = Depends(require_minion)) -> dict[str, Any] | None:
+    if minion_id != principal:
+        raise HTTPException(status_code=403, detail="Minion identity not authorized")
+    with transaction() as connection:
+        row = connection.execute(
+            "SELECT mission_id, envelope FROM missions WHERE minion_id = ? AND status = 'QUEUED' ORDER BY created_at LIMIT 1",
+            (minion_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        connection.execute(
+            "UPDATE missions SET status = 'CLAIMED', updated_at = ? WHERE mission_id = ? AND status = 'QUEUED'",
+            (time.time(), row["mission_id"]),
+        )
+        return {"mission_id": row["mission_id"], "envelope": json.loads(row["envelope"])}
+
+
+@app.post("/internal/v1/minions/{minion_id}/missions/{mission_id}/status")
+def mission_status(
+    minion_id: str,
+    mission_id: str,
+    request: MissionStatusRequest,
+    principal: str = Depends(require_minion),
+) -> dict[str, str]:
+    if minion_id != principal:
+        raise HTTPException(status_code=403, detail="Minion identity not authorized")
+    received = time.time()
+    with transaction() as connection:
+        row = connection.execute(
+            "SELECT status FROM missions WHERE mission_id = ? AND minion_id = ?",
+            (mission_id, minion_id),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Mission not found")
+        validate_transition(str(row["status"]), request.status)
+        try:
+            connection.execute(
+                "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (request.event_id, mission_id, request.status, json.dumps(request.detail), request.occurred_at, received),
+            )
+        except sqlite3.IntegrityError:
+            return {"event_id": request.event_id, "status": "ALREADY_RECORDED"}
+        connection.execute(
+            "UPDATE missions SET status = ?, updated_at = ? WHERE mission_id = ?",
+            (request.status, received, mission_id),
+        )
+    return {"event_id": request.event_id, "status": "RECORDED"}
+
+
+@app.post("/internal/v1/minions/{minion_id}/missions/{mission_id}/result")
+def mission_result(
+    minion_id: str,
+    mission_id: str,
+    request: MissionResultRequest,
+    principal: str = Depends(require_minion),
+) -> dict[str, str]:
+    if minion_id != principal:
+        raise HTTPException(status_code=403, detail="Minion identity not authorized")
+    if request.status not in {"MISSION_COMPLETE_SUCCEEDED", "MISSION_COMPLETE_PARTIAL", "MISSION_COMPLETE_FAILED", "MISSION_REJECTED", "MISSION_CANCELLED", "MISSION_EXPIRED"}:
+        raise HTTPException(status_code=400, detail="Result status must be terminal")
+    received = time.time()
+    with transaction() as connection:
+        row = connection.execute(
+            "SELECT status FROM missions WHERE mission_id = ? AND minion_id = ?",
+            (mission_id, minion_id),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Mission not found")
+        validate_transition(str(row["status"]), request.status)
+        signed_payload = {
+            "event_id": request.event_id,
+            "mission_id": mission_id,
+            "minion_id": minion_id,
+            "status": request.status,
+            "result": request.result,
+        }
+        verify_minion_signature(minion_id, signed_payload, request.signature)
+        try:
+            connection.execute(
+                "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (request.event_id, mission_id, request.status, json.dumps({"result": request.result, "signature": request.signature}), received, received),
+            )
+        except sqlite3.IntegrityError:
+            return {"status": "ALREADY_RECORDED"}
+        connection.execute(
+            "UPDATE missions SET status = ?, updated_at = ? WHERE mission_id = ?",
+            (request.status, received, mission_id),
+        )
+    return {"status": "RECORDED"}
+
+
+@app.get("/api/v1/requests/{request_id}")
+def request_status(request_id: str, principal: str = Depends(require_agent)) -> dict[str, str]:
+    with connect() as connection:
+        row = connection.execute("SELECT status FROM missions WHERE request_id = ? AND agent_id = ?", (request_id, principal)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Request not found")
+    state = row["status"]
+    external = "SUCCEEDED" if state == "MISSION_COMPLETE_SUCCEEDED" else "CLOSED" if state in {"CLOSED", "BLOCKED", "MISSION_COMPLETE_PARTIAL", "MISSION_COMPLETE_FAILED", "MISSION_REJECTED", "MISSION_CANCELLED", "MISSION_EXPIRED"} else "PENDING"
+    return {"request_id": request_id, "status": external, "retry": "false"}
+
+
+@app.get("/admin/v1/missions")
+def list_missions(_admin: str = Depends(require_admin)) -> list[dict[str, Any]]:
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT mission_id, request_id, minion_id, status, created_at, updated_at FROM missions ORDER BY created_at DESC"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.get("/admin/v1/requests/{request_id}")
+def admin_request_status(request_id: str, _admin: str = Depends(require_admin)) -> dict[str, Any]:
+    with connect() as connection:
+        row = connection.execute(
+            "SELECT mission_id, minion_id, envelope, status, created_at, updated_at FROM missions WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Request not found")
+    envelope = json.loads(row["envelope"])
+    return {
+        "request_id": request_id,
+        "mission_id": row["mission_id"],
+        "minion_id": row["minion_id"],
+        "status": row["status"],
+        "policy_decision": envelope.get("policy_decision"),
+        "policy_hash": envelope.get("policy_hash"),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+@app.post("/admin/v1/policy/reload")
+def reload_policy(_admin: str = Depends(require_admin)) -> dict[str, str]:
+    global policy_engine
+    try:
+        policy_engine = PolicyEngine(str(POLICY_PATH))
+    except OSError:
+        raise HTTPException(status_code=503, detail="Configured policy file is unavailable") from None
+    return {"status": "RELOADED", "policy_hash": policy_engine.policy_hash}
+
+
+@app.post("/admin/v1/credentials/{kind}/{principal_id}", status_code=status.HTTP_201_CREATED)
+def issue_credential(kind: str, principal_id: str, _admin: str = Depends(require_admin)) -> dict[str, str]:
+    if kind not in {"agent", "minion", "admin"}:
+        raise HTTPException(status_code=400, detail="Unsupported credential kind")
+    token = secrets.token_urlsafe(48)
+    key_id = f"KEY-{uuid.uuid4().hex}"
+    with transaction() as connection:
+        connection.execute(
+            "INSERT INTO api_keys (key_id, principal_id, secret_hash, kind, created_at) VALUES (?, ?, ?, ?, ?)",
+            (key_id, principal_id, _token_hash(token), kind, time.time()),
+        )
+    return {"key_id": key_id, "principal_id": principal_id, "api_key": token}
+
+
+@app.post("/admin/v1/credentials/{key_id}/revoke")
+def revoke_credential(key_id: str, _admin: str = Depends(require_admin)) -> dict[str, str]:
+    with transaction() as connection:
+        result = connection.execute(
+            "UPDATE api_keys SET enabled = 0, revoked_at = ? WHERE key_id = ? AND enabled = 1",
+            (time.time(), key_id),
+        )
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Active credential not found")
+    return {"key_id": key_id, "status": "REVOKED"}
+
+
+@app.post("/admin/v1/minions/{minion_id}/enroll", status_code=status.HTTP_201_CREATED)
+def enroll_minion(minion_id: str, public_key: str, _admin: str = Depends(require_admin)) -> dict[str, str]:
+    try:
+        key = serialization.load_pem_public_key(public_key.encode("utf-8"))
+        if not isinstance(key, ed25519.Ed25519PublicKey):
+            raise ValueError("Expected Ed25519 public key")
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid Ed25519 public key") from None
+    with transaction() as connection:
+        connection.execute(
+            "INSERT INTO minions (minion_id, public_key, created_at) VALUES (?, ?, ?) ON CONFLICT(minion_id) DO UPDATE SET public_key = excluded.public_key, enabled = 1",
+            (minion_id, public_key, time.time()),
+        )
+    return {"minion_id": minion_id, "status": "ENROLLED"}

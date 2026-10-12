@@ -1,0 +1,26 @@
+version: 1
+
+default:
+  decision: BLOCK
+
+rules:
+  - name: allow-demo-security-patching-without-reboot
+    when:
+      - path: action.name
+        eq: windows.patch.reconcile
+      - path: target.servers
+        exists: true
+      - path: action.params.allowed_patch_types
+        eq: [SECURITY]
+      - path: action.params.allow_reboot
+        eq: false
+    decision: ALLOW
+  - name: pause-when-reboot-is-permitted
+    when:
+      - path: action.name
+        eq: windows.patch.reconcile
+      - path: action.params.allowed_patch_types
+        eq: [SECURITY]
+      - path: action.params.allow_reboot
+        eq: true
+    decision: PAUSE

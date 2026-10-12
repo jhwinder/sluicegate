@@ -61,8 +61,9 @@ class DemoEmailApprovalAdapter(ApprovalAdapter):
         )
 
 
-# Singleton instance (fine for demo)
-_EMAIL_ADAPTER = DemoEmailApprovalAdapter()
+# Construct the provider adapter only when email is configured. The demo UI
+# remains usable without Resend credentials.
+_EMAIL_ADAPTER: Optional[DemoEmailApprovalAdapter] = None
 
 # -----------------------------------------------------------------------------
 # Demo-facing functions (called by main.py)
@@ -80,6 +81,12 @@ def maybe_send_email_approval(
     """
     Send an approval email (Approve/Reject links) for a PAUSE decision.
     """
+    global _EMAIL_ADAPTER
+    if not RESEND_API_KEY or not APPROVER_EMAIL:
+        return
+    if _EMAIL_ADAPTER is None:
+        _EMAIL_ADAPTER = DemoEmailApprovalAdapter()
+
     approve_url = f"{base_url.rstrip('/')}/api/requests/{request_id}/approve"
     reject_url = f"{base_url.rstrip('/')}/api/requests/{request_id}/reject"
 
