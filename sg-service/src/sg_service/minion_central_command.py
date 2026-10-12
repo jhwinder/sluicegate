@@ -43,6 +43,13 @@ class PatchRequest(BaseModel):
     maintenance_window: str | None = None
 
 
+class CanonicalActionRequest(BaseModel):
+    capability: str = Field(min_length=1)
+    target: Any = Field(default_factory=dict)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
 class MissionStatusRequest(BaseModel):
     event_id: str = Field(min_length=1, max_length=160)
     status: str
@@ -508,6 +515,98 @@ def create_patch_request(request: PatchRequest, principal: str = Depends(require
     return {"request_id": request_id, "status": "ACCEPTED" if decision != "BLOCK" else "CLOSED"}
 
 
+@app.post("/api/v1/actions", status_code=status.HTTP_202_ACCEPTED)
+def create_action(request: CanonicalActionRequest, principal: str = Depends(require_agent)) -> dict[str, Any]:
+    check_agent_rate_limit(principal, "submit")
+
+    target_dict = request.target if isinstance(request.target, dict) else {"id": str(request.target)}
+
+    # Idempotent deduplication check: associate matching open request
+    normalized_params = json.dumps({
+        "capability": request.capability,
+        "target": target_dict,
+        "parameters": request.parameters,
+    }, sort_keys=True)
+
+    with connect() as connection:
+        open_rows = connection.execute(
+            """
+            SELECT request_id, raw_request FROM missions
+            WHERE agent_id = ? AND status IN ('QUEUED', 'WAITING_FOR_APPROVAL', 'CLAIMED', 'MISSION_ACKNOWLEDGED', 'MISSION_IN_PROGRESS', 'MISSION_WAITING_FOR_REBOOT')
+            ORDER BY created_at DESC
+            """,
+            (principal,),
+        ).fetchall()
+        for open_row in open_rows:
+            raw = json.loads(open_row["raw_request"] or "{}")
+            if "capability" in raw:
+                raw_target = raw.get("target", {})
+                raw_target_dict = raw_target if isinstance(raw_target, dict) else {"id": str(raw_target)}
+                raw_normalized = json.dumps({
+                    "capability": raw.get("capability"),
+                    "target": raw_target_dict,
+                    "parameters": raw.get("parameters", {}),
+                }, sort_keys=True)
+                if raw_normalized == normalized_params:
+                    return {"request_id": open_row["request_id"], "status": "ACCEPTED"}
+
+    assigned_minion_id = resolve_minion(
+        capability=request.capability,
+        environment="prod",
+        scope_target=target_dict,
+    )
+
+    request_id = f"REQ-{uuid.uuid4().hex}"
+    mission_id = f"MISSION-{uuid.uuid4().hex}"
+    if policy_engine is None:
+        raise HTTPException(status_code=503, detail="Policy engine is not initialized")
+
+    policy_request = GateRequest(
+        actor={"type": "AGENT", "id": principal},
+        action={
+            "name": request.capability,
+            "params": request.parameters,
+        },
+        target=target_dict,
+        context=request.context,
+    )
+    decision, obligations, policy_hash = policy_engine.decide(
+        {
+            "actor": policy_request.actor,
+            "action": policy_request.action,
+            "target": policy_request.target,
+            "context": policy_request.context,
+        }
+    )
+    status_by_decision = {"ALLOW": "QUEUED", "PAUSE": "WAITING_FOR_APPROVAL", "BLOCK": "CLOSED"}
+    mission_state = status_by_decision.get(decision, "CLOSED")
+    envelope = {
+        "protocol_version": "1.0",
+        "request_id": request_id,
+        "mission_id": mission_id,
+        "minion_id": assigned_minion_id,
+        "capability": request.capability,
+        "target": target_dict,
+        "parameters": request.parameters,
+        "issued_at": time.time(),
+        "expires_at": time.time() + 86400,
+        "nonce": secrets.token_urlsafe(24),
+        "requested_by": principal,
+        "policy_hash": policy_hash,
+        "policy_decision": decision,
+        "obligations": [{"type": item.type, "data": item.data} for item in obligations],
+    }
+    envelope["signing_key_id"] = "sg-service-ed25519-v1"
+    envelope["signature"] = signing_private_key().sign(canonical_json(envelope)).hex()
+    raw_req_json = json.dumps(request.model_dump())
+    with transaction() as connection:
+        connection.execute(
+            "INSERT INTO missions (mission_id, request_id, agent_id, minion_id, envelope, status, raw_request, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (mission_id, request_id, principal, assigned_minion_id, json.dumps(envelope), mission_state, raw_req_json, time.time(), time.time()),
+        )
+    return {"request_id": request_id, "status": "ACCEPTED" if decision != "BLOCK" else "CLOSED"}
+
+
 @app.post("/internal/v1/minions/{minion_id}/check-in")
 def minion_check_in(minion_id: str, principal: str = Depends(require_minion)) -> dict[str, Any]:
     if minion_id != principal:
@@ -685,22 +784,44 @@ def approve_request(
         }
 
         # Re-evaluate with current policy version and approval evidence in context
-        policy_request = GateRequest(
-            actor={"type": "AGENT", "id": row["agent_id"]},
-            action={
-                "name": "windows.patch.reconcile",
-                "params": {
-                    "patch_sources": raw_req.get("patch_sources", ["wsus", "nessus_catalog"]),
-                    "allowed_patch_types": raw_req.get("allowed_patch_types", ["SECURITY"]),
-                    "allow_reboot": raw_req.get("allow_reboot", False),
-                },
-            },
-            target={"servers": raw_req.get("servers", [])},
-            context={
-                "maintenance_window": raw_req.get("maintenance_window"),
+        if "capability" in raw_req:
+            target_val = raw_req.get("target", {})
+            target_dict = target_val if isinstance(target_val, dict) else {"id": str(target_val)}
+            context = {
+                **raw_req.get("context", {}),
                 "approval": approval_evidence,
-            },
-        )
+            }
+            policy_request = GateRequest(
+                actor={"type": "AGENT", "id": row["agent_id"]},
+                action={
+                    "name": raw_req["capability"],
+                    "params": raw_req.get("parameters", {}),
+                },
+                target=target_dict,
+                context=context,
+            )
+            capability_name = raw_req["capability"]
+            target_obj = target_dict
+        else:
+            policy_request = GateRequest(
+                actor={"type": "AGENT", "id": row["agent_id"]},
+                action={
+                    "name": "windows.patch.reconcile",
+                    "params": {
+                        "patch_sources": raw_req.get("patch_sources", ["wsus", "nessus_catalog"]),
+                        "allowed_patch_types": raw_req.get("allowed_patch_types", ["SECURITY"]),
+                        "allow_reboot": raw_req.get("allow_reboot", False),
+                    },
+                },
+                target={"servers": raw_req.get("servers", [])},
+                context={
+                    "maintenance_window": raw_req.get("maintenance_window"),
+                    "approval": approval_evidence,
+                },
+            )
+            capability_name = "windows.patch.reconcile"
+            target_obj = {"servers": raw_req.get("servers", [])}
+
         new_decision, new_obligations, new_policy_hash = policy_engine.decide(
             {
                 "actor": policy_request.actor,
@@ -718,6 +839,7 @@ def approve_request(
 
         if new_decision == "ALLOW":
             new_status = "QUEUED"
+            envelope["minion_id"] = resolve_minion(capability_name, environment="prod", scope_target=target_obj)
             envelope["signing_key_id"] = "sg-service-ed25519-v1"
             # Remove previous signature before signing
             envelope.pop("signature", None)
