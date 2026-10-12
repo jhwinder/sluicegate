@@ -57,6 +57,11 @@ class MissionResultRequest(BaseModel):
     signature: str
 
 
+class ApprovalActionRequest(BaseModel):
+    approver: str | None = None
+    comment: str = ""
+
+
 def connect() -> sqlite3.Connection:
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DATABASE_PATH, timeout=15)
@@ -108,6 +113,7 @@ def initialize() -> None:
                 minion_id TEXT NOT NULL,
                 envelope TEXT NOT NULL,
                 status TEXT NOT NULL,
+                raw_request TEXT,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL
             );
@@ -124,6 +130,10 @@ def initialize() -> None:
             );
             """
         )
+        try:
+            connection.execute("ALTER TABLE missions ADD COLUMN raw_request TEXT")
+        except sqlite3.OperationalError:
+            pass
         bootstrap_admin_key = os.environ.get("SG_BOOTSTRAP_ADMIN_KEY", "")
         if bootstrap_admin_key:
             connection.execute(
@@ -283,10 +293,11 @@ def create_patch_request(request: PatchRequest, principal: str = Depends(require
     }
     envelope["signing_key_id"] = "sg-service-ed25519-v1"
     envelope["signature"] = signing_private_key().sign(canonical_json(envelope)).hex()
+    raw_req_json = json.dumps(request.model_dump())
     with transaction() as connection:
         connection.execute(
-            "INSERT INTO missions (mission_id, request_id, agent_id, minion_id, envelope, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (mission_id, request_id, principal, PATCH_MINION_ID, json.dumps(envelope), mission_state, time.time(), time.time()),
+            "INSERT INTO missions (mission_id, request_id, agent_id, minion_id, envelope, status, raw_request, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (mission_id, request_id, principal, PATCH_MINION_ID, json.dumps(envelope), mission_state, raw_req_json, time.time(), time.time()),
         )
     return {"request_id": request_id, "status": "ACCEPTED" if decision != "BLOCK" else "CLOSED"}
 
@@ -429,6 +440,144 @@ def admin_request_status(request_id: str, _admin: str = Depends(require_admin)) 
         "policy_hash": envelope.get("policy_hash"),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+    }
+
+
+@app.post("/admin/v1/requests/{request_id}/approve")
+def approve_request(
+    request_id: str,
+    action: ApprovalActionRequest = ApprovalActionRequest(),
+    admin: str = Depends(require_admin),
+) -> dict[str, Any]:
+    if policy_engine is None:
+        raise HTTPException(status_code=503, detail="Policy engine is not initialized")
+
+    with transaction() as connection:
+        row = connection.execute(
+            "SELECT mission_id, agent_id, minion_id, envelope, status, raw_request FROM missions WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Request not found")
+
+        current_status = row["status"]
+        if current_status != "WAITING_FOR_APPROVAL":
+            raise HTTPException(status_code=409, detail=f"Request is not awaiting approval (current status: {current_status})")
+
+        raw_req = json.loads(row["raw_request"] or "{}")
+        approver_name = action.approver or admin
+        now = time.time()
+        approval_evidence = {
+            "approved": True,
+            "approver": approver_name,
+            "approved_at": now,
+            "comment": action.comment,
+        }
+
+        # Re-evaluate with current policy version and approval evidence in context
+        policy_request = GateRequest(
+            actor={"type": "AGENT", "id": row["agent_id"]},
+            action={
+                "name": "windows.patch.reconcile",
+                "params": {
+                    "patch_sources": raw_req.get("patch_sources", ["wsus", "nessus_catalog"]),
+                    "allowed_patch_types": raw_req.get("allowed_patch_types", ["SECURITY"]),
+                    "allow_reboot": raw_req.get("allow_reboot", False),
+                },
+            },
+            target={"servers": raw_req.get("servers", [])},
+            context={
+                "maintenance_window": raw_req.get("maintenance_window"),
+                "approval": approval_evidence,
+            },
+        )
+        new_decision, new_obligations, new_policy_hash = policy_engine.decide(
+            {
+                "actor": policy_request.actor,
+                "action": policy_request.action,
+                "target": policy_request.target,
+                "context": policy_request.context,
+            }
+        )
+
+        envelope = json.loads(row["envelope"])
+        envelope["policy_decision"] = new_decision
+        envelope["policy_hash"] = new_policy_hash
+        envelope["approval_evidence"] = approval_evidence
+        envelope["obligations"] = [{"type": item.type, "data": item.data} for item in new_obligations]
+
+        if new_decision == "ALLOW":
+            new_status = "QUEUED"
+            envelope["signing_key_id"] = "sg-service-ed25519-v1"
+            # Remove previous signature before signing
+            envelope.pop("signature", None)
+            envelope["signature"] = signing_private_key().sign(canonical_json(envelope)).hex()
+        elif new_decision == "BLOCK":
+            new_status = "CLOSED"
+        else:
+            new_status = "WAITING_FOR_APPROVAL"
+
+        connection.execute(
+            "UPDATE missions SET envelope = ?, status = ?, updated_at = ? WHERE request_id = ?",
+            (json.dumps(envelope), new_status, now, request_id),
+        )
+        connection.execute(
+            "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (f"EVT-APPROVE-{uuid.uuid4().hex}", row["mission_id"], new_status, json.dumps({"decision": new_decision, "approval": approval_evidence}), now, now),
+        )
+
+    return {
+        "request_id": request_id,
+        "decision": new_decision,
+        "status": new_status,
+        "policy_hash": new_policy_hash,
+    }
+
+
+@app.post("/admin/v1/requests/{request_id}/reject")
+def reject_request(
+    request_id: str,
+    action: ApprovalActionRequest = ApprovalActionRequest(),
+    admin: str = Depends(require_admin),
+) -> dict[str, Any]:
+    with transaction() as connection:
+        row = connection.execute(
+            "SELECT mission_id, envelope, status FROM missions WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Request not found")
+
+        current_status = row["status"]
+        if current_status != "WAITING_FOR_APPROVAL":
+            raise HTTPException(status_code=409, detail=f"Request is not awaiting approval (current status: {current_status})")
+
+        now = time.time()
+        approver_name = action.approver or admin
+        rejection_evidence = {
+            "approved": False,
+            "approver": approver_name,
+            "rejected_at": now,
+            "comment": action.comment,
+        }
+
+        envelope = json.loads(row["envelope"])
+        envelope["policy_decision"] = "REJECTED"
+        envelope["rejection_evidence"] = rejection_evidence
+
+        connection.execute(
+            "UPDATE missions SET envelope = ?, status = 'CLOSED', updated_at = ? WHERE request_id = ?",
+            (json.dumps(envelope), now, request_id),
+        )
+        connection.execute(
+            "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (f"EVT-REJECT-{uuid.uuid4().hex}", row["mission_id"], "CLOSED", json.dumps({"decision": "REJECTED", "rejection": rejection_evidence}), now, now),
+        )
+
+    return {
+        "request_id": request_id,
+        "decision": "REJECTED",
+        "status": "CLOSED",
     }
 
 
