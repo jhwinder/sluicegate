@@ -1,6 +1,6 @@
 # SluiceGate Windows Service Host (`SluiceGate.Minion.Service.exe`)
 
-This project contains the C# source for the Windows Service executable host for SluiceGate Minions on Windows Server 2022. The repository also includes a precompiled Windows x64 executable at `../Minion/SluiceGate.Minion.Service.exe` for operators who do not have the .NET SDK.
+This project contains the C# source for the Windows Service executable host for SluiceGate Minions on Windows Server 2022. The repository also includes a precompiled framework-dependent Windows x64 executable at `../Minion/SluiceGate.Minion.Service.exe` for operators who do not have the .NET SDK. The .NET 8 x64 Runtime must be installed on the Windows server where the service runs.
 
 ## How it works
 
@@ -14,7 +14,7 @@ This project contains the C# source for the Windows Service executable host for 
 From this directory with the `.NET 8 SDK`, publish into the tracked deployment directory:
 
 ```powershell
-dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o ..\Minion
+dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=None -o ..\Minion
 ```
 
 The same build can be run from macOS or Linux with Docker; see [../README.md](../README.md#compiling-the-c-windows-service).
