@@ -1,7 +1,7 @@
 [project]
 name = "sg-service"
 version = "0.1.0"
-description = "SluiceGate service and Minion Central Command"
+description = "SluiceGate service and Minion Mission Control"
 requires-python = ">=3.11"
 dependencies = [
   "sg-core",

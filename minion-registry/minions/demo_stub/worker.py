@@ -11,7 +11,7 @@ import httpx
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
-CENTRAL_COMMAND_URL = os.environ.get("MINION_CENTRAL_COMMAND_URL", "http://sg-service:8443")
+MISSION_CONTROL_URL = os.environ.get("MINION_MISSION_CONTROL_URL", os.environ.get("MINION_CENTRAL_COMMAND_URL", "http://sg-service:8443"))
 MINION_ID = os.environ.get("MINION_ID", "DEMO-STUB-01")
 MINION_API_KEY = os.environ.get("MINION_API_KEY", "")
 MINION_PRIVATE_KEY_PATH = Path(os.environ.get("MINION_PRIVATE_KEY_PATH", "/run/secrets/demo-minion-key.pem"))
@@ -69,7 +69,7 @@ def main() -> None:
         raise RuntimeError("MINION_API_KEY must be configured")
     if not MINION_PRIVATE_KEY_PATH.is_file():
         raise RuntimeError(f"Minion signing key is missing: {MINION_PRIVATE_KEY_PATH}")
-    with httpx.Client(base_url=CENTRAL_COMMAND_URL, timeout=20) as client:
+    with httpx.Client(base_url=MISSION_CONTROL_URL, timeout=20) as client:
         while True:
             try:
                 check_in = client.post(f"/internal/v1/minions/{MINION_ID}/check-in", headers=headers())
@@ -80,7 +80,7 @@ def main() -> None:
                 if mission:
                     handle_mission(client, mission)
             except httpx.HTTPError as exc:
-                print(f"Minion Central Command unavailable; retrying: {exc}", flush=True)
+                print(f"Minion Mission Control unavailable; retrying: {exc}", flush=True)
             time.sleep(POLL_INTERVAL_SECONDS)
 
 

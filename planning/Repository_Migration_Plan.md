@@ -5,7 +5,7 @@
 
 ## Recommendation
 
-Execute the repository restructuring **before implementing the new `sg_service`, Minion Central Command, Patching Minion, and deployment-package features**. Do not wait until all new code has been written: building those features inside the legacy layout would create avoidable path changes across imports, package builds, Docker contexts, tests, CI, and deployment artifacts.
+Execute the repository restructuring **before implementing the new `sg_service`, Minion Mission Control, Patching Minion, and deployment-package features**. Do not wait until all new code has been written: building those features inside the legacy layout would create avoidable path changes across imports, package builds, Docker contexts, tests, CI, and deployment artifacts.
 
 First complete an inventory and baseline verification in the current layout. Then perform the structural move as a dedicated, reviewable change and prove that existing Core, policy editor, and demo workflows still build/run. Only after that checkpoint should new service and Minion implementation begin in their intended locations. This is a sequencing recommendation, not a requirement to move all existing files in one risky operation.
 
@@ -28,7 +28,7 @@ sluice/
   sdk/                       # only when supported client SDKs are implemented
 ```
 
-Do not create empty packages solely to fill out the layout. In particular, `sg_cli`, `sg_adapters`, and `sg_sdk` are currently empty scaffolds in the inspected workspace; inventory tracked contents/history before removing or assigning them. Keep policy evaluation in `open-core`; service APIs/transactions/queue/Mission Central Command in `sg-service`; privileged target operations in Minion implementations; and installation/host configuration in `deployment`.
+Do not create empty packages solely to fill out the layout. In particular, `sg_cli`, `sg_adapters`, and `sg_sdk` are currently empty scaffolds in the inspected workspace; inventory tracked contents/history before removing or assigning them. Keep policy evaluation in `open-core`; service APIs/transactions/queue/Minion Mission Control in `sg-service`; privileged target operations in Minion implementations; and installation/host configuration in `deployment`.
 
 ## Migration Sequence
 
@@ -66,10 +66,10 @@ Do not create empty packages solely to fill out the layout. In particular, `sg_c
 ### Phase 3: Introduce New Features in Their Owning Projects
 
 1. Implement `sg_service` in `sg-service/`, consuming the local `sg_core` source from the same repository revision.
-2. Implement Mission Central Command and its persistent Mission lifecycle in `sg_service`; the initial Minion interaction is authenticated Minion polling/check-in and Minion-submitted status updates. Do not implement a service-side Minion polling loop for operational status.
+2. Implement Minion Mission Control and its persistent Mission lifecycle in `sg_service`; the initial Minion interaction is authenticated Minion polling/check-in and Minion-submitted status updates. Do not implement a service-side Minion polling loop for operational status.
 3. Implement the Minion protocol and functional Minion source under `minion-registry/`; do not place privileged operations in `sg_core` or the demo.
 4. Implement the Patching Minion CSV readers, Nessus `PLUGIN_ID,DNS_NAME` join, patch catalog join, SHA-256 verification, remote staging/process execution, reboot resumption, and structured status reporting under the Minion boundary.
-5. Create Windows deployment tooling under `deployment/windows/` for the required Windows Server 2022 target using the latest stable Docker version supported on that platform. Include the Windows SG Minion service installation/configuration, Docker/container startup and configuration, Minion Central Command endpoint configuration, health/logging, and upgrade/uninstall operations. Add deployment scripts, package assets, documentation, and tests as needed; do not defer this tooling to a later project phase. The installer and image-bundle scripts are implemented, but a production Windows Minion service executable is not yet present; building a complete deployable bundle is blocked until that runtime is implemented, signed, and tested.
+5. Create Windows deployment tooling under `deployment/windows/` for the required Windows Server 2022 target using the latest stable Docker version supported on that platform. Include the Windows SG Minion service installation/configuration, Docker/container startup and configuration, Minion Mission Control endpoint configuration, health/logging, and upgrade/uninstall operations. Add deployment scripts, package assets, documentation, and tests as needed; do not defer this tooling to a later project phase. The installer and image-bundle scripts are implemented, but a production Windows Minion service executable is not yet present; building a complete deployable bundle is blocked until that runtime is implemented, signed, and tested.
 6. Migrate the demo to exercise `sg_service` and the safe demo Minion over the same Mission protocol.
 
 **Exit gate:** Focused unit/integration tests cover each owner boundary; the demo demonstrates the complete signed Mission/Result loop; no real payment or unapproved patch operation is possible.
@@ -90,7 +90,7 @@ Do not create empty packages solely to fill out the layout. In particular, `sg_c
 - `sg_poledit` entry point and policy editor work from their intended owner project.
 - No service/API/queue/Minion dispatch implementation is added to the Core package.
 - `sg_service` resolves the local Core package deterministically without a PyPI bootstrap dependency.
-- Minion Central Command and Minion protocol schemas are versioned and covered by tests.
+- Minion Mission Control and Minion protocol schemas are versioned and covered by tests.
 - Demo Compose builds from the repository and uses service-owned authoritative state.
 - Windows deployment tooling installs/configures the SG Minion Windows service and starts/configures the `sg_service` container on Windows Server 2022 with the latest stable Docker version supported on that platform.
 - Windows deployment package tests cover install/configuration, service and container startup, upgrade, and uninstall behavior without provisioning AD credentials or granting target permissions implicitly.

@@ -3,7 +3,7 @@
 Thanks for your interest in SluiceGate!
 
 ## Scope
-This repository is a monorepo containing the `open-core` policy library, `sg-service`, Minion protocols/implementations, deployment tooling, and a reference demo. Keep changes within the owning project boundary; policy semantics belong in Core, durable transactions and Mission Central Command in Service, privileged target operations in Minions, and host installation/build logic in `deployment/`.
+This repository is a monorepo containing the `open-core` policy library, `sg-service`, Minion protocols/implementations, deployment tooling, and a reference demo. Keep changes within the owning project boundary; policy semantics belong in Core, durable transactions and Minion Mission Control in Service, privileged target operations in Minions, and host installation/build logic in `deployment/`.
 
 Use the root uv workspace to build and test the Python distributions:
 

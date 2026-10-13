@@ -5,7 +5,7 @@
 - Windows Server 2022 VM.
 - Latest stable Docker version supported on Windows Server 2022.
 - SG Minion Windows service running under a dedicated, least-privilege AD identity.
-- `sg_service` container hosted on the same VM with Minion Central Command bound to host loopback (`127.0.0.1:8443`).
+- `sg_service` container hosted on the same VM with Minion Mission Control bound to host loopback (`127.0.0.1:8443`).
 
 The `sg_service` container does not need an AD identity. The Minion service identity needs only the approved patch-catalog/mapping/repository access and remote execution/reboot rights for its authorized target scope. Configure service logon identity and ACLs using the organization's approved Windows administration process; the installer does not grant target access.
 
@@ -47,7 +47,7 @@ The builder exports the selected service image and generates SHA-256 records. Im
 .\Install-SluiceGate.ps1 `
   -PackageRoot (Get-Location).Path `
   -ServiceImage 'registry.example.gov/sluice/sg-service:VERSION' `
-  -MinionCentralCommandUrl 'https://127.0.0.1:8443' `
+  -MinionMissionControlUrl 'https://127.0.0.1:8443' `
   -MinionId 'PATCH-01'
 ```
 
@@ -57,7 +57,7 @@ The current script skeleton assumes a service executable and a `service.env` dep
 
 ## Upgrade and Uninstall
 
-Upgrade using a versioned bundle and the same approved configuration process. Stop the Minion service, replace only versioned binaries, update the pinned service image, then restart and verify Minion Central Command check-in. Do not overwrite local secrets with package defaults.
+Upgrade using a versioned bundle and the same approved configuration process. Stop the Minion service, replace only versioned binaries, update the pinned service image, then restart and verify Minion Mission Control check-in. Do not overwrite local secrets with package defaults.
 
 To remove the installation:
 
@@ -70,8 +70,8 @@ The uninstall script removes the Windows service, container, and installation di
 ## Validation Checklist
 
 - Windows Server 2022 and the installed Docker Engine are supported and healthy.
-- The container exposes Mission Central Command only on loopback for the single-VM deployment.
-- The Minion service starts as the configured identity and authenticates to Mission Central Command.
+- The container exposes Minion Mission Control only on loopback for the single-VM deployment.
+- The Minion service starts as the configured identity and authenticates to Minion Mission Control.
 - The Minion can read the configured Nessus mapping/catalog CSVs and patch files, and can perform remote execution only on its authorized target scope.
 - Credentials do not appear in script arguments, process command lines, logs, source control, Mission Envelopes, or package defaults.
 - Install, upgrade, restart/resume, and uninstall behavior has been tested on a clean VM snapshot.

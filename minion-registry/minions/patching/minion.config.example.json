@@ -1,5 +1,5 @@
 {
-  "CentralCommandUrl": "https://127.0.0.1:8443",
+  "MissionControlUrl": "https://127.0.0.1:8443",
   "MinionId": "PATCH-01",
   "ApiKey": "REPLACE_WITH_MINION_API_KEY",
   "SluiceGatePublicKeyPath": "C:\\Program Files\\SluiceGate\\Minion\\keys\\sg-public-key.pem",

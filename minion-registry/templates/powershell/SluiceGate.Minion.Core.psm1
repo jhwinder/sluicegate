@@ -2,7 +2,7 @@
 .SYNOPSIS
     SluiceGate Minion Core PowerShell Module
 .DESCRIPTION
-    Provides reusable functions for Minion Central Command communication,
+    Provides reusable functions for Minion Mission Control communication,
     cryptographic signature verification and signing, nonce replay protection,
     canonical JSON formatting, and envelope validation.
 #>
@@ -246,7 +246,7 @@ function Invoke-MinionCheckIn {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [string]$CentralCommandUrl,
+        [string]$MissionControlUrl,
 
         [Parameter(Mandatory = $true)]
         [string]$MinionId,
@@ -255,7 +255,7 @@ function Invoke-MinionCheckIn {
         [string]$ApiKey
     )
 
-    $url = "$($CentralCommandUrl.TrimEnd('/'))/internal/v1/minions/$MinionId/check-in"
+    $url = "$($MissionControlUrl.TrimEnd('/'))/internal/v1/minions/$MinionId/check-in"
     $headers = @{
         "Authorization" = "Bearer $ApiKey"
         "Content-Type"  = "application/json"
@@ -275,7 +275,7 @@ function Get-MinionMissionClaim {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [string]$CentralCommandUrl,
+        [string]$MissionControlUrl,
 
         [Parameter(Mandatory = $true)]
         [string]$MinionId,
@@ -284,7 +284,7 @@ function Get-MinionMissionClaim {
         [string]$ApiKey
     )
 
-    $url = "$($CentralCommandUrl.TrimEnd('/'))/internal/v1/minions/$MinionId/missions/claim"
+    $url = "$($MissionControlUrl.TrimEnd('/'))/internal/v1/minions/$MinionId/missions/claim"
     $headers = @{
         "Authorization" = "Bearer $ApiKey"
         "Content-Type"  = "application/json"
@@ -304,7 +304,7 @@ function Send-MinionStatus {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [string]$CentralCommandUrl,
+        [string]$MissionControlUrl,
 
         [Parameter(Mandatory = $true)]
         [string]$MinionId,
@@ -321,7 +321,7 @@ function Send-MinionStatus {
         [hashtable]$Detail = @{}
     )
 
-    $url = "$($CentralCommandUrl.TrimEnd('/'))/internal/v1/minions/$MinionId/missions/$MissionId/status"
+    $url = "$($MissionControlUrl.TrimEnd('/'))/internal/v1/minions/$MinionId/missions/$MissionId/status"
     $headers = @{
         "Authorization" = "Bearer $ApiKey"
         "Content-Type"  = "application/json"
@@ -343,7 +343,7 @@ function Send-MinionResult {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [string]$CentralCommandUrl,
+        [string]$MissionControlUrl,
 
         [Parameter(Mandatory = $true)]
         [string]$MinionId,
@@ -364,7 +364,7 @@ function Send-MinionResult {
         [hashtable]$Result
     )
 
-    $url = "$($CentralCommandUrl.TrimEnd('/'))/internal/v1/minions/$MinionId/missions/$MissionId/result"
+    $url = "$($MissionControlUrl.TrimEnd('/'))/internal/v1/minions/$MinionId/missions/$MissionId/result"
     $headers = @{
         "Authorization" = "Bearer $ApiKey"
         "Content-Type"  = "application/json"

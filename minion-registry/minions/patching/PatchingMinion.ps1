@@ -3,7 +3,7 @@
     SluiceGate Windows Patching Minion
 .DESCRIPTION
     Non-autonomous Minion runtime for Windows OS and non-OS IAVM patching.
-    Polls SluiceGate Minion Central Command, claims authorized missions,
+    Polls SluiceGate Minion Mission Control, claims authorized missions,
     intersects Nessus findings with target servers, verifies package hashes,
     and executes policy-constrained patching on target servers.
 #>
@@ -36,7 +36,7 @@ $engineModulePath  = Join-Path $PSScriptRoot "PatchingEngine.psm1"
 Import-Module $catalogModulePath -Force
 Import-Module $engineModulePath -Force
 
-$CentralCommandUrl       = $config.CentralCommandUrl
+$MissionControlUrl       = if ($config.MissionControlUrl) { $config.MissionControlUrl } else { $config.CentralCommandUrl }
 $MinionId                = if ($config.MinionId) { $config.MinionId } else { "PATCH-01" }
 $ApiKey                  = $config.ApiKey
 $SluiceGatePublicKeyPath = $config.SluiceGatePublicKeyPath
@@ -56,7 +56,7 @@ $SupportedCapabilities   = @(
 
 Write-Host "=========================================================="
 Write-Host " SluiceGate Windows Patching Minion: $MinionId"
-Write-Host " Central Command: $CentralCommandUrl"
+Write-Host " Mission Control: $MissionControlUrl"
 Write-Host " Catalog Path:    $CatalogPath"
 Write-Host " Mapping Path:    $NessusMappingPath"
 Write-Host " DryRun Mode:     $DryRun"
@@ -106,15 +106,15 @@ $capabilityHandler = {
 }
 
 function Run-MissionPass {
-    # 1. Check in with Minion Central Command
-    $checkIn = Invoke-MinionCheckIn -CentralCommandUrl $CentralCommandUrl -MinionId $MinionId -ApiKey $ApiKey
+    # 1. Check in with Minion Mission Control
+    $checkIn = Invoke-MinionCheckIn -MissionControlUrl $MissionControlUrl -MinionId $MinionId -ApiKey $ApiKey
     if ($null -eq $checkIn) {
-        Write-Warning "Check-in failed with Minion Central Command. Retrying next cycle..."
+        Write-Warning "Check-in failed with Minion Mission Control. Retrying next cycle..."
         return
     }
 
     # 2. Claim queued mission
-    $claimResponse = Get-MinionMissionClaim -CentralCommandUrl $CentralCommandUrl -MinionId $MinionId -ApiKey $ApiKey
+    $claimResponse = Get-MinionMissionClaim -MissionControlUrl $MissionControlUrl -MinionId $MinionId -ApiKey $ApiKey
     if ($null -eq $claimResponse -or $null -eq $claimResponse.mission_id) {
         # No queued missions
         return
@@ -135,7 +135,7 @@ function Run-MissionPass {
     if (-not $validation.IsValid) {
         Write-Warning "Mission $missionId validation failed: $($validation.Reason) - $($validation.Message)"
         $null = Send-MinionStatus `
-            -CentralCommandUrl $CentralCommandUrl `
+            -MissionControlUrl $MissionControlUrl `
             -MinionId $MinionId `
             -MissionId $missionId `
             -ApiKey $ApiKey `
@@ -149,7 +149,7 @@ function Run-MissionPass {
 
     # 4. Acknowledge Mission
     $null = Send-MinionStatus `
-        -CentralCommandUrl $CentralCommandUrl `
+        -MissionControlUrl $MissionControlUrl `
         -MinionId $MinionId `
         -MissionId $missionId `
         -ApiKey $ApiKey `
@@ -157,7 +157,7 @@ function Run-MissionPass {
 
     # 5. Report In-Progress
     $null = Send-MinionStatus `
-        -CentralCommandUrl $CentralCommandUrl `
+        -MissionControlUrl $MissionControlUrl `
         -MinionId $MinionId `
         -MissionId $missionId `
         -ApiKey $ApiKey `
@@ -189,7 +189,7 @@ function Run-MissionPass {
     # 7. Submit signed result
     Write-Host "Submitting signed result for $missionId ($terminalStatus)..."
     $null = Send-MinionResult `
-        -CentralCommandUrl $CentralCommandUrl `
+        -MissionControlUrl $MissionControlUrl `
         -MinionId $MinionId `
         -MissionId $missionId `
         -ApiKey $ApiKey `

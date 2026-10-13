@@ -4,7 +4,7 @@ This directory contains the SluiceGate Windows Patching Minion runtime, implemen
 
 ## Architecture
 
-- **`PatchingMinion.ps1`**: The main Minion entry point and worker pass. Connects to SluiceGate Minion Central Command via HTTP/TLS, claims missions assigned to `PATCH-01`, validates SluiceGate cryptographic signatures, and executes reconciliation.
+- **`PatchingMinion.ps1`**: The main Minion entry point and worker pass. Connects to SluiceGate Minion Mission Control via HTTP/TLS, claims missions assigned to `PATCH-01`, validates SluiceGate cryptographic signatures, and executes reconciliation.
 - **`PatchingCatalog.psm1`**:
   - `Import-PatchCatalog`: Reads the patch catalog CSV (schema matching Section 3.5 of the Requirements document), enforces that only `APPROVED` rows are processed, and validates uniqueness per `plugin_id`.
   - `Import-NessusMapping`: Reads the separate `PLUGIN_ID,DNS_NAME` CSV mapping.
@@ -24,9 +24,9 @@ This directory contains the SluiceGate Windows Patching Minion runtime, implemen
 ## Configuration
 
 Copy `minion.config.example.json` to `minion.config.json` and configure:
-- `CentralCommandUrl`: URL to SluiceGate Service (e.g. `https://127.0.0.1:8443`).
+- `MissionControlUrl`: URL to SluiceGate Service (e.g. `https://127.0.0.1:8443`).
 - `MinionId`: Registered Minion identifier (`PATCH-01`).
-- `ApiKey`: Per-Minion API key issued by SluiceGate Central Command.
+- `ApiKey`: Per-Minion API key issued by SluiceGate Mission Control.
 - `SluiceGatePublicKeyPath`: Path to SluiceGate's Ed25519 public key.
 - `MinionPrivateKeyPath`: Path to Minion's Ed25519 private key.
 - `CatalogPath`: UNC path to the patch catalog CSV.

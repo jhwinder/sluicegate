@@ -94,7 +94,7 @@ Then open:
     UI: http://localhost:8080
     API Health: http://localhost:8000/health
     API Docs (Swagger): http://localhost:8000/docs
-    Minion Central Command: http://127.0.0.1:8443/health
+    Minion Mission Control: http://127.0.0.1:8443/health
 
 ## Demo Scenarios
 

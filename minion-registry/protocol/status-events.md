@@ -1,6 +1,6 @@
 # Mission Status Events
 
-Minions authenticate to Minion Central Command with a per-Minon API key and submit status events after state changes. Idle claim polling is configurable (initial candidate: one hour). Status updates are event-driven and shall not wait for the next idle poll.
+Minions authenticate to Minion Mission Control with a per-Minon API key and submit status events after state changes. Idle claim polling is configurable (initial candidate: one hour). Status updates are event-driven and shall not wait for the next idle poll.
 
 Initial event names:
 

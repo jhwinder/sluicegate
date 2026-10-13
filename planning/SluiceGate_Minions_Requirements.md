@@ -75,9 +75,9 @@ SluiceGate shall retain a reusable policy library (`sg_core`) and add a service/
 - Expose the versioned Agent API, status endpoint, and shared-authenticated administrative interfaces for Agent and Minion Registry management.
 - Maintain durable transactions and missions, including a persistent queue/outbox so accepted work is not lost on process restart and mission dispatch can be retried safely.
 - Apply policy by calling `sg_core`; own transaction status, pause/resume coordination, idempotency, rate limiting, queue/mission scheduling, Minion routing, and audit correlation.
-- On ALLOW, resolve an eligible Minion through the Minion Registry, create and sign a Mission Envelope, and persist it for that Minion to claim through Minion Central Command.
-- Accept Minion-initiated check-ins, Mission claims, status updates, and results through Minion Central Command. Authenticate/verify each request/update, correlate it to the transaction and Mission, and persist each accepted state transition. The initial deployment shall not require `sg_service` to poll Minions for status.
-- Expose a private Minion check-in API, named **Minion Central Command**, for registered Minion runtimes to authenticate, check in, claim or retrieve assigned Missions, and submit status/results. `sg_service` owns the Mission queue and dispatch authorization; Minion Central Command is the Mission Comms interface, not a second authority.
+- On ALLOW, resolve an eligible Minion through the Minion Registry, create and sign a Mission Envelope, and persist it for that Minion to claim through Minion Mission Control.
+- Accept Minion-initiated check-ins, Mission claims, status updates, and results through Minion Mission Control. Authenticate/verify each request/update, correlate it to the transaction and Mission, and persist each accepted state transition. The initial deployment shall not require `sg_service` to poll Minions for status.
+- Expose a private Minion check-in API, named **Minion Mission Control**, for registered Minion runtimes to authenticate, check in, claim or retrieve assigned Missions, and submit status/results. `sg_service` owns the Mission queue and dispatch authorization; Minion Mission Control is the Mission Comms interface, not a second authority.
 - Keep the transaction `IN_PROGRESS` while an accepted mission is executing or awaiting completion. Close it only when the mission reaches a terminal outcome; expose `SUCCEEDED` only for success and `CLOSED` for every terminal non-success.
 - Provide deliberately limited request status to the originating agent, enforce request ownership, and apply configured request/poll limits and escalating controls for agents that repeatedly resubmit or poll impatiently.
 - Persist policy provenance, transaction/mission history, approval evidence, dispatch attempts, status updates, result signatures and verification outcomes, and administrative changes for authorized review.
@@ -133,10 +133,10 @@ A Minion registration should support, at minimum:
 - Enabled/disabled/revoked state.
 - Supported capabilities.
 - Scope metadata where applicable.
-- Minion Central Command protocol/client configuration and endpoint profile; the initial Minion initiates outbound check-in and work claims.
+- Minion Mission Control protocol/client configuration and endpoint profile; the initial Minion initiates outbound check-in and work claims.
 - Executable/package location or other Minion deployment information.
 - Configured Minion-initiated check-in/Mission polling cadence, status reporting mode, and timeout/stale-contact settings.
-- Minion Central Command API-key identifier/hash, enabled/revoked state, issue/expiry/rotation metadata, and last check-in. The reusable API key itself shall be shown only at issuance and stored by the Minion in protected service configuration.
+- Minion Mission Control API-key identifier/hash, enabled/revoked state, issue/expiry/rotation metadata, and last check-in. The reusable API key itself shall be shown only at issuance and stored by the Minion in protected service configuration.
 - Local operational state needed to resume an accepted Mission after service or target reboot, without storing reusable credentials in Mission data.
 - Execution identity metadata, without requiring storage of the execution identity's reusable password.
 - Minion public key/certificate and fingerprint.
@@ -300,12 +300,12 @@ sluice/
     policies/
   sg-service/                           # first-party SluiceGate service and orchestration runtime
     pyproject.toml
-    src/sg_service/                     # Agent API, admin API, Mission Central Command, transactions/queue
+    src/sg_service/                     # Agent API, admin API, Minion Mission Control, transactions/queue
     tests/
   minion-registry/                      # registry, protocol, templates, and functional Minion sources
     pyproject.toml                      # only if registry code has its own Python distribution
     src/sgm_registry/                   # registry package, if maintained as Python code
-    protocol/                           # versioned Mission/Result and Mission Central Command contracts
+    protocol/                           # versioned Mission/Result and Minion Mission Control contracts
     templates/                          # reusable Minion templates/frameworks
     minions/
       demo_stub/                        # safe reference Minion
@@ -327,7 +327,7 @@ The tree is a target, not a requirement to create empty packages or directories.
 
 - `open-core/` owns `sg_core`: deterministic policy evaluation, policy/request/decision contracts, and Core-scoped tests. It shall not acquire HTTP service hosting, durable transaction/mission storage, authentication, service credentials, Minion dispatch, Notification Adapter selection, or privileged target-system execution.
 - `sg_poledit` may remain in the `open-core` distribution while it is a policy authoring/validation tool directly coupled to Core policy schemas. If it becomes an independently released application, give it its own project boundary rather than making Core depend on it.
-- `sg-service/` owns the `sg_service` Python application: Agent and administrative APIs, Minion Central Command, transaction and Mission lifecycle, durable persistence/queueing, policy orchestration, registries where appropriate, notification selection, and audit coordination. It may depend on `sg_core` from the same repository revision.
+- `sg-service/` owns the `sg_service` Python application: Agent and administrative APIs, Minion Mission Control, transaction and Mission lifecycle, durable persistence/queueing, policy orchestration, registries where appropriate, notification selection, and audit coordination. It may depend on `sg_core` from the same repository revision.
 - `minion-registry/` owns Minion registration/protocol definitions, reusable templates, and functional Minion implementations. The Patching Minion source belongs here; Windows service installation, VM configuration, and container deployment packaging belong under `deployment/windows/`.
 - `sluice-demo/` remains a consumer/reference deployment. It shall not become the authoritative owner of policy, transaction, Mission, or audit state. Demo-specific UI/BFF code and the safe demo Minion may remain together only where that does not duplicate shared service or Minion implementations.
 - SDKs belong under `sdk/` only when they are supported client libraries with their own API compatibility and test expectations. Do not make `sg_service` or `sg_core` depend on an SDK that is intended for external callers.
@@ -352,11 +352,11 @@ The reorganization shall not change policy semantics, public Core behavior, Miss
 
 The initial deployment target shall be a Windows Server 2022 VM hosting both the `sg_service` container and a Windows SG Minion service. Use the latest stable Docker version supported for the required Windows Server 2022 deployment. The container runs the SluiceGate Python service; it does not require a Windows/AD execution identity. The SG Minion runs as a Windows service under a dedicated, least-privilege AD identity (a gMSA is preferred where supported) and performs authorized remote work using that identity. For the Patching Minion, that identity shall have only the required read access to the approved patch catalog/repository and the required remote patching rights on authorized target servers. Other Minion types, such as a production-deployment Minion, shall receive their own appropriately scoped permissions; separate identities per Minion or trust domain are preferred over one shared, broadly privileged account. The identity shall not be embedded in Mission Envelopes or supplied by Agents.
 
-`sg_service` shall expose Minion Central Command as a private authenticated API. On the single-VM deployment, the container API shall be published only to a host-local or otherwise restricted interface reachable by the Windows Minion service, not exposed as a public endpoint. Minion Central Command shall support Minion authentication/check-in, retrieval or claiming of work assigned to that Minion, and authenticated status/result submission. Mission and result signatures remain required protocol protections in addition to transport/API authentication. Minions shall not be able to select arbitrary callback URLs or claim Missions assigned to another Minion.
+`sg_service` shall expose Minion Mission Control as a private authenticated API. On the single-VM deployment, the container API shall be published only to a host-local or otherwise restricted interface reachable by the Windows Minion service, not exposed as a public endpoint. Minion Mission Control shall support Minion authentication/check-in, retrieval or claiming of work assigned to that Minion, and authenticated status/result submission. Mission and result signatures remain required protocol protections in addition to transport/API authentication. Minions shall not be able to select arbitrary callback URLs or claim Missions assigned to another Minion.
 
 The Minion check-in interval, work-claim behavior, heartbeat cadence, status retry cadence, and stale-contact thresholds shall be configurable. An initial idle check-in interval of approximately one hour is a candidate, not a fixed requirement. The Minion shall submit status promptly on Mission acknowledgement, start, wait/reboot, and terminal transitions; a long idle polling interval shall not delay execution-status reporting. Exact heartbeat/stale-contact behavior remains a pilot design decision and shall account for patch duration, reboot/resume behavior, service load, and acceptable dispatch latency.
 
-The Windows deployment package shall install/configure the Windows SG Minion service and start the `sg_service` Docker container on the target Windows Server 2022 VM. It shall include versioned Minion binaries/scripts and container image/build or image-pull configuration, service registration and startup configuration, Minion Central Command endpoint configuration, health/logging setup, and upgrade/uninstall handling. Deployment documentation shall identify prerequisites and the administrator-provided configuration required for AD identity, share/server permissions, certificates or keys, Docker installation/configuration, and network access. The package shall not provision or distribute reusable AD passwords or silently grant target permissions.
+The Windows deployment package shall install/configure the Windows SG Minion service and start the `sg_service` Docker container on the target Windows Server 2022 VM. It shall include versioned Minion binaries/scripts and container image/build or image-pull configuration, service registration and startup configuration, Minion Mission Control endpoint configuration, health/logging setup, and upgrade/uninstall handling. Deployment documentation shall identify prerequisites and the administrator-provided configuration required for AD identity, share/server permissions, certificates or keys, Docker installation/configuration, and network access. The package shall not provision or distribute reusable AD passwords or silently grant target permissions.
 
 ### 3.10 Demo Integration and Compatibility
 
@@ -595,7 +595,7 @@ Denial or expiry shall not dispatch a Mission. An approval shall not be reusable
 
 ### 6.3 ALLOW
 
-An ALLOW decision authorizes Core to continue toward execution. `sg_service` shall resolve an appropriate Minion through the Minion Registry, construct and sign the Mission Envelope, persist it for that Minion to claim through Minion Central Command, verify the returned result, and update the transaction.
+An ALLOW decision authorizes Core to continue toward execution. `sg_service` shall resolve an appropriate Minion through the Minion Registry, construct and sign the Mission Envelope, persist it for that Minion to claim through Minion Mission Control, verify the returned result, and update the transaction.
 
 An ALLOW decision does not authorize arbitrary execution by a Minion; it authorizes the specific action represented by the signed mission.
 
@@ -628,18 +628,18 @@ A future Intune Minion, for example, could potentially expose the same logical `
 
 ## 8. Minion Task/Result Protocol
 
-The Minion Registry shall define/version the common protocol. `sg_service` and all Minion frameworks shall implement it. The initial Windows deployment shall use Minion-initiated check-in and polling through Minion Central Command for Mission retrieval and authenticated status/result updates. The protocol may support service-initiated delivery or callbacks for other deployment environments. Each Minion definition shall specify applicable check-in/status cadence and timeout values; the service shall use that configuration to detect stale or lost Minions and Missions. This Mission Comms contract is for Mission delivery and status/result reporting; it is not a Notification Adapter contract.
+The Minion Registry shall define/version the common protocol. `sg_service` and all Minion frameworks shall implement it. The initial Windows deployment shall use Minion-initiated check-in and polling through Minion Mission Control for Mission retrieval and authenticated status/result updates. The protocol may support service-initiated delivery or callbacks for other deployment environments. Each Minion definition shall specify applicable check-in/status cadence and timeout values; the service shall use that configuration to detect stale or lost Minions and Missions. This Mission Comms contract is for Mission delivery and status/result reporting; it is not a Notification Adapter contract.
 
-### Minion Central Command API
+### Minion Mission Control API
 
-Minion Central Command is the private `sg_service` API used by Minion runtimes for check-in and Mission Comms. At minimum, the API shall support authenticated operations to:
+Minion Mission Control is the private `sg_service` API used by Minion runtimes for check-in and Mission Comms. At minimum, the API shall support authenticated operations to:
 
 - Check in with Minion identity, version, reported runtime capabilities, health, and current execution state. Reported capabilities are informational and shall not modify the Minion Registry's authorized capability set.
 - Claim or retrieve only unexpired Missions assigned to that registered Minion.
 - Acknowledge Mission receipt and report accepted, rejected, or executing state.
 - Submit signed progress updates and terminal Mission Result Envelopes.
 
-The initial Minion Central Command API authentication shall use a per-Minion API key issued and managed by the Minion Registry/service. The service shall store only a verifier/hash, display the key only at issuance/rotation, and support disablement, revocation, and rotation. The Minion shall store the key in protected Windows service configuration/secret storage; it shall not appear in a Mission Envelope, log, command line, or patch catalog. TLS shall protect API traffic even on the single-VM deployment. API-key authentication establishes the Minion identity and is separate from SluiceGate-signed Mission validation and Minion-signed result verification.
+The initial Minion Mission Control API authentication shall use a per-Minion API key issued and managed by the Minion Registry/service. The service shall store only a verifier/hash, display the key only at issuance/rotation, and support disablement, revocation, and rotation. The Minion shall store the key in protected Windows service configuration/secret storage; it shall not appear in a Mission Envelope, log, command line, or patch catalog. TLS shall protect API traffic even on the single-VM deployment. API-key authentication establishes the Minion identity and is separate from SluiceGate-signed Mission validation and Minion-signed result verification.
 
 The API shall authorize every operation by the authenticated registered Minion ID, and verify Mission/result signatures as applicable. Check-in shall not itself grant a Mission or broaden capability. `sg_service` remains the authority for policy, Mission creation, assignment, and terminal transaction state. On a single VM the API shall bind only to a restricted host-local interface reachable by the Windows Minion service; for cross-host traffic it shall use private network exposure and TLS.
 
@@ -694,9 +694,9 @@ Conceptual example:
     "maintenance_window": "approved-window-reference"
   },
   "mission_comms": {
-    "profile_id": "patching-minion-central-command-v1",
+    "profile_id": "patching-minion-mission-control-v1",
     "reporting_mode": "minion-poll",
-    "status_endpoint_ref": "minion-central-command"
+    "status_endpoint_ref": "minion-mission-control"
   },
   "execution": {
     "max_attempts": 3,
@@ -932,9 +932,9 @@ This is a core deployment assumption for SluiceGate to operate as an authoritati
 
 The Patching Minion shall run as a Windows service on the designated SG Windows VM, not as a service installed on each target server. The host shall provide:
 
-- Network access to Minion Central Command, the configured CSV/patch repository, and authorized target servers.
+- Network access to Minion Mission Control, the configured CSV/patch repository, and authorized target servers.
 - A supported Windows service runtime and secure execution under the designated AD service identity.
-- Secure storage for the Minion private signing key and Minion Central Command API key.
+- Secure storage for the Minion private signing key and Minion Mission Control API key.
 - The approved Patching Minion package and required remote-management components.
 
 The deployment target is Windows Server 2022 with the latest stable Docker version supported for that platform. The Windows service installer and container startup/configuration tooling shall be implemented and tested for this target as part of the Windows deployment package.
@@ -1012,7 +1012,7 @@ Existing SluiceGate policy shall determine how these conditions produce PAUSE an
 
 For an authorized patching Mission, the Patching Minion shall conceptually:
 
-1. Authenticate to Minion Central Command, check in, and claim an unexpired Mission addressed to its registered identity.
+1. Authenticate to Minion Mission Control, check in, and claim an unexpired Mission addressed to its registered identity.
 2. Validate the signed Task Envelope, intended Minion ID, protocol/capability, expiration, nonce/replay state, target list, patch constraints, reboot constraints, and execution limits.
 3. Acknowledge the Mission and report `MISSION_ACKNOWLEDGED` before target-system changes.
 4. Read the current patch catalog and Nessus mapping CSV from configured backends/UNC paths using the Minion service identity.
@@ -1020,7 +1020,7 @@ For an authorized patching Mission, the Patching Minion shall conceptually:
 6. For WSUS OS updates, query each authorized target for applicable updates and install only those whose available update metadata satisfies the Mission constraints. For cataloged Nessus/IAVM patches, process each authorized server/plugin pair from the mapping CSV and corresponding approved catalog row; the Minion shall not invent or infer an additional server/plugin association.
 7. Read each candidate patch file from `patch_path` on the approved repository, calculate SHA-256 on the Minion host, and compare it with `patch_sha256` before transfer. Do not transfer or execute a file whose hash fails or whose catalog row is no longer approved.
 8. Establish authenticated remote access to the target, copy the verified patch to a controlled target-local staging path, substitute `%PATCHPATH%` with that staged path, resolve the installer executable from the target's `PATH`, and launch it as a remote process using constrained process creation without an unrestricted shell. Reading and verifying the source file on the Minion host before staging avoids requiring the remote target to make a second-hop connection to the patch UNC share.
-9. Capture process start/exit status and bounded output; report per-target/per-patch progress to Minion Central Command. A zero exit code is installer-reported success, not independent post-install verification.
+9. Capture process start/exit status and bounded output; report per-target/per-patch progress to Minion Mission Control. A zero exit code is installer-reported success, not independent post-install verification.
 10. Reboot only when permitted by the signed Mission and required by the selected patch/install result. Preserve enough local Mission state to resume reporting after the target or Minion host reboots; recheck Mission validity and authorization before any work resumed after expiry or cancellation.
 11. Clean up staged files according to configured retention policy, without deleting files owned by another operation.
 12. Report terminal per-patch/per-server outcomes and aggregate Mission outcome, including reboot performed/required, source path identifier, hash result, process exit code, and structured failures.
@@ -1162,14 +1162,14 @@ The first release/pilot should demonstrate at least the following.
 - A request that becomes BLOCKED under the current policy while paused remains unexecuted after approval and is exposed to the agent as `CLOSED`.
 - ALLOW triggers Minion resolution and signed mission envelope generation.
 - An accepted mission survives service restart, is not duplicated by an equivalent request from the same agent while open, and keeps its transaction `IN_PROGRESS` until a terminal result is recorded.
-- A Minion can authenticate to Minion Central Command, claim only its assigned Mission, and submit authenticated state transitions; the service does not need to poll Minions for status.
+- A Minion can authenticate to Minion Mission Control, claim only its assigned Mission, and submit authenticated state transitions; the service does not need to poll Minions for status.
 - Every terminal non-success is exposed to the originating agent as `CLOSED`, without a failure reason or category.
 - Internal policy reasons are visible to authorized operators but not exposed through the normal agent status API.
 
 ### 19.3 Registry/Cryptography
 
 - An administrator can register a Minion.
-- Minion Central Command can issue, rotate, disable, and revoke a per-Minion API key; the Minion authenticates without exposing that key in Missions, logs, or process command lines.
+- Minion Mission Control can issue, rotate, disable, and revoke a per-Minion API key; the Minion authenticates without exposing that key in Missions, logs, or process command lines.
 - A Minion check-in cannot change its registered capability authorization or claim another Minion's Missions.
 - Idle Mission polling cadence is configurable; state changes are reported promptly, independently of the next idle check-in.
 - The Minion has a unique cryptographic identity.
@@ -1282,7 +1282,7 @@ The following items remain to be resolved/documented during detailed design:
 2. Exact cryptographic algorithms, certificate formats, and key-storage implementation.
 3. Exact Minion enrollment handshake/workflow, beyond host-generated pilot software keys and public-key enrollment.
 4. Exact Windows service implementation and deployment-package format, including Windows container-runtime prerequisites and upgrade/uninstall behavior.
-5. Minion Central Command API local endpoint binding details and TLS certificate provisioning for the selected deployment.
+5. Minion Mission Control API local endpoint binding details and TLS certificate provisioning for the selected deployment.
 6. Per-Minion polling/check-in cadence, retry/backoff, and stale-contact/timeout behavior, including final values suitable for long-running patch/install/reboot operations; approximately hourly idle polling is the initial candidate.
 7. Exact canonical capability naming/schema conventions.
 8. Exact canonicalization/equivalence rules and matching window for idempotency; concurrent equivalent requests from the same agent must never spawn multiple open missions.

@@ -7,7 +7,7 @@ param(
     [string]$ServiceImage,
 
     [Parameter(Mandatory = $true)]
-    [string]$MinionCentralCommandUrl,
+    [string]$MinionMissionControlUrl,
 
     [Parameter(Mandatory = $true)]
     [string]$MinionId,
@@ -89,8 +89,8 @@ if ($PSCmdlet.ShouldProcess($InstallRoot, "Install SluiceGate Minion service and
         Stop-Service -Name $serviceName -Force
         sc.exe delete $serviceName | Out-Null
     }
-    New-Service -Name $serviceName -BinaryPathName ('"{0}" --config "{1}" --minion-id "{2}" --central-command-url "{3}"' -f $serviceExecutable, (Join-Path $InstallRoot "minion.config.json"), $MinionId, $MinionCentralCommandUrl) `
-        -DisplayName "SluiceGate Minion" -Description "SluiceGate Mission Central Command client and execution runtime" `
+    New-Service -Name $serviceName -BinaryPathName ('"{0}" --config "{1}" --minion-id "{2}" --mission-control-url "{3}"' -f $serviceExecutable, (Join-Path $InstallRoot "minion.config.json"), $MinionId, $MinionMissionControlUrl) `
+        -DisplayName "SluiceGate Minion" -Description "SluiceGate Minion Mission Control client and execution runtime" `
         -StartupType Automatic | Out-Null
     Start-Service -Name $serviceName
 }

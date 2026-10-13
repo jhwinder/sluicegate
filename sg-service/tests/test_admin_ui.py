@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 
 def setup_test_service(tmp_path: Path, monkeypatch):
-    from sg_service import minion_central_command as service
+    from sg_service import minion_mission_control as service
 
     database_path = tmp_path / "service.sqlite3"
     signing_key_path = tmp_path / "sg-signing-key.pem"

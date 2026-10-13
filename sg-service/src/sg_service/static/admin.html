@@ -749,7 +749,7 @@
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
         closeModal("registerMinionModal");
-        prompt("Minion enrolled! Copy this Central Command API Key for minion.config.json:", data.api_key);
+        prompt("Minion enrolled! Copy this Mission Control API Key for minion.config.json:", data.api_key);
         loadMinions();
       } catch (err) {
         alert("Registration failed: " + err.message);

@@ -9,9 +9,9 @@ This directory contains the reusable PowerShell Minion template and core library
   - Ed25519 cryptographic signature verification and signing (`Test-MinionSignature`, `New-MinionSignature`).
   - Task Envelope validation against SluiceGate's public key, protocol version, expiration, and Minion identity (`Test-MissionEnvelope`).
   - Nonce replay tracking and persistent storage (`Test-MinionNonce`, `Add-MinionNonce`).
-  - Minion Central Command communication (`Invoke-MinionCheckIn`, `Get-MinionMissionClaim`, `Send-MinionStatus`, `Send-MinionResult`).
+  - Minion Mission Control communication (`Invoke-MinionCheckIn`, `Get-MinionMissionClaim`, `Send-MinionStatus`, `Send-MinionResult`).
 - **`MinionWorkerTemplate.ps1`**: The main execution loop template that handles the complete mission lifecycle:
-  1. Authenticates to Central Command.
+  1. Authenticates to Mission Control.
   2. Claims queued missions for its assigned `minion_id`.
   3. Verifies envelope validity and cryptographic signature.
   4. Records nonce to prevent replay.

@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 
 def test_patch_request_claim_status_ownership_and_signed_result(tmp_path: Path, monkeypatch) -> None:
-    from sg_service import minion_central_command as service
+    from sg_service import minion_mission_control as service
 
     database_path = tmp_path / "service.sqlite3"
     signing_key_path = tmp_path / "sg-signing-key.pem"

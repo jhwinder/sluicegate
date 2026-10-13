@@ -3,7 +3,7 @@
     SluiceGate Generic PowerShell Minion Worker Loop Template
 .DESCRIPTION
     Reusable template for instantiating non-autonomous PowerShell Minions.
-    Handles Central Command polling, envelope authentication, nonce replay protection,
+    Handles Mission Control polling, envelope authentication, nonce replay protection,
     status transition reporting, and signed result return.
 #>
 
@@ -25,7 +25,7 @@ $config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
 $modulePath = Join-Path $PSScriptRoot "SluiceGate.Minion.Core.psm1"
 Import-Module $modulePath -Force
 
-$CentralCommandUrl       = $config.CentralCommandUrl
+$MissionControlUrl       = if ($config.MissionControlUrl) { $config.MissionControlUrl } else { $config.CentralCommandUrl }
 $MinionId                = $config.MinionId
 $ApiKey                  = $config.ApiKey
 $SluiceGatePublicKeyPath = $config.SluiceGatePublicKeyPath
@@ -35,16 +35,16 @@ $PollIntervalSeconds     = if ($config.PollIntervalSeconds) { [int]$config.PollI
 $SupportedCapabilities   = @($config.SupportedCapabilities)
 
 Write-Host "Starting SluiceGate Minion '$MinionId'..."
-Write-Host "Central Command URL: $CentralCommandUrl"
+Write-Host "Mission Control URL: $MissionControlUrl"
 Write-Host "Supported Capabilities: $($SupportedCapabilities -join ', ')"
 
 while ($true) {
     try {
-        # 1. Check in with Minion Central Command
-        $checkIn = Invoke-MinionCheckIn -CentralCommandUrl $CentralCommandUrl -MinionId $MinionId -ApiKey $ApiKey
+        # 1. Check in with Minion Mission Control
+        $checkIn = Invoke-MinionCheckIn -MissionControlUrl $MissionControlUrl -MinionId $MinionId -ApiKey $ApiKey
         if ($null -ne $checkIn) {
             # 2. Check for assigned missions
-            $claimResponse = Get-MinionMissionClaim -CentralCommandUrl $CentralCommandUrl -MinionId $MinionId -ApiKey $ApiKey
+            $claimResponse = Get-MinionMissionClaim -MissionControlUrl $MissionControlUrl -MinionId $MinionId -ApiKey $ApiKey
             if ($null -ne $claimResponse -and $null -ne $claimResponse.mission_id) {
                 $missionId = $claimResponse.mission_id
                 $envelope  = $claimResponse.envelope
@@ -61,7 +61,7 @@ while ($true) {
                 if (-not $validation.IsValid) {
                     Write-Warning "Mission $missionId validation failed: $($validation.Reason) - $($validation.Message)"
                     $null = Send-MinionStatus `
-                        -CentralCommandUrl $CentralCommandUrl `
+                        -MissionControlUrl $MissionControlUrl `
                         -MinionId $MinionId `
                         -MissionId $missionId `
                         -ApiKey $ApiKey `
@@ -75,7 +75,7 @@ while ($true) {
 
                 # 4. Acknowledge Mission
                 $null = Send-MinionStatus `
-                    -CentralCommandUrl $CentralCommandUrl `
+                    -MissionControlUrl $MissionControlUrl `
                     -MinionId $MinionId `
                     -MissionId $missionId `
                     -ApiKey $ApiKey `
@@ -83,7 +83,7 @@ while ($true) {
 
                 # 5. Report Execution Started
                 $null = Send-MinionStatus `
-                    -CentralCommandUrl $CentralCommandUrl `
+                    -MissionControlUrl $MissionControlUrl `
                     -MinionId $MinionId `
                     -MissionId $missionId `
                     -ApiKey $ApiKey `
@@ -119,7 +119,7 @@ while ($true) {
                 # 7. Submit signed result
                 Write-Host "Sending final Mission Result for $missionId ($terminalStatus)..."
                 $null = Send-MinionResult `
-                    -CentralCommandUrl $CentralCommandUrl `
+                    -MissionControlUrl $MissionControlUrl `
                     -MinionId $MinionId `
                     -MissionId $missionId `
                     -ApiKey $ApiKey `
