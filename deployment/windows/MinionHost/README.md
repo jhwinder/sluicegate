@@ -1,6 +1,6 @@
 # SluiceGate Windows Service Host (`SluiceGate.Minion.Service.exe`)
 
-This project compiles the native Windows Service executable host for SluiceGate Minions on Windows Server 2022.
+This project contains the C# source for the Windows Service executable host for SluiceGate Minions on Windows Server 2022. The repository also includes a precompiled Windows x64 executable at `../Minion/SluiceGate.Minion.Service.exe` for operators who do not have the .NET SDK.
 
 ## How it works
 
@@ -11,16 +11,18 @@ This project compiles the native Windows Service executable host for SluiceGate 
 
 ## Building the Executable
 
-From Windows build environment with `.NET 8 SDK`:
+From this directory with the `.NET 8 SDK`, publish into the tracked deployment directory:
 
 ```powershell
-dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o ..\bin\Minion
+dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o ..\Minion
 ```
+
+The same build can be run from macOS or Linux with Docker; see [../README.md](../README.md#compiling-the-c-windows-service).
 
 Then sign the resulting `SluiceGate.Minion.Service.exe` with your Authenticode code-signing certificate:
 
 ```powershell
-Set-AuthenticodeSignature -FilePath ..\bin\Minion\SluiceGate.Minion.Service.exe -Certificate $codeSigningCert
+Set-AuthenticodeSignature -FilePath ..\Minion\SluiceGate.Minion.Service.exe -Certificate $codeSigningCert
 ```
 
 Then invoke `Build-DeploymentBundle.ps1` to produce the final offline installation archive.

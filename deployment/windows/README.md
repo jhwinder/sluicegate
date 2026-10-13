@@ -22,11 +22,13 @@ images/sg-service-image.tar       # optional offline image bundle
 service.env.example              # template only; no secrets
 ```
 
-Build the bundle after the SG Minion Windows service executable has been implemented, signed, and tested:
+The repository includes the compiled, self-contained Windows x64 executable at [deployment/windows/Minion/SluiceGate.Minion.Service.exe](deployment/windows/Minion/SluiceGate.Minion.Service.exe), alongside its C# source in [deployment/windows/MinionHost/](deployment/windows/MinionHost/). This lets operators install it without a local .NET toolchain; developers can rebuild it using the instructions below.
+
+Build the bundle using the repository executable:
 
 ```powershell
 ./Build-DeploymentBundle.ps1 `
-  -MinionExecutable C:\build\SluiceGate.Minion.Service.exe `
+  -MinionExecutable .\Minion\SluiceGate.Minion.Service.exe `
   -ServiceImage sluicegate/sg-service:VERSION
 ```
 
@@ -42,16 +44,17 @@ The Windows Service host source code is located at [deployment/windows/MinionHos
 ```bash
 docker run --rm \
   -v "$PWD/deployment/windows/MinionHost:/src" \
+  -v "$PWD/deployment/windows/Minion:/out" \
   -w /src \
   mcr.microsoft.com/dotnet/sdk:8.0 \
-  dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o /src/bin/Release/net8.0/win-x64/publish
+  dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o /out
 ```
-This generates the self-contained `SluiceGate.Minion.Service.exe` binary in [deployment/windows/MinionHost/bin/Release/net8.0/win-x64/publish/](deployment/windows/MinionHost/bin/Release/net8.0/win-x64/publish/).
+This writes the rebuilt self-contained `SluiceGate.Minion.Service.exe` directly to [deployment/windows/Minion/](deployment/windows/Minion/).
 
 #### Option B: Using local .NET 8 SDK on Windows
 ```powershell
 cd deployment/windows/MinionHost
-dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o ..\Minion
 ```
 
 ## Configuration and Install
