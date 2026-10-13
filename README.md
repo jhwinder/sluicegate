@@ -91,7 +91,7 @@ In all cases, SluiceGate ensures that AI autonomy operates only within explicitl
 ```text
 sluice/
   open-core/              # sg_core policy library and sg_poledit
-  sg-service/             # API, durable Mission queue, Minion Mission Control
+  sg-service/             # API, durable Mission queue, Minion Mission Control (see sg-service/README.md)
   minion-registry/        # protocol schemas and Minion implementations
   deployment/             # Compose and Windows deployment tooling
   sluice-demo/             # UI/BFF and local reference stack
