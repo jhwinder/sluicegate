@@ -3,7 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace SluiceGate.Minion.Host;
+namespace SluiceGate.Minion;
 
 public class Program
 {

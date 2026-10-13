@@ -30,9 +30,29 @@ Build the bundle after the SG Minion Windows service executable has been impleme
   -ServiceImage sluicegate/sg-service:VERSION
 ```
 
+If testing in a lab or development environment without a commercial code-signing certificate, pass `-SkipSignatureCheck` to `Build-DeploymentBundle.ps1` and `Install-SluiceGate.ps1`.
+
 The builder exports the selected service image and generates SHA-256 records. Image tags should be pinned to the SluiceGate release; avoid `latest` for deployed artifacts even though the host Docker Engine is the latest stable supported release.
 
-**Current implementation boundary:** the repository contains the installer/bundle scripts and the Python `sg_service` container. A production Windows SG Minion service executable has not yet been implemented, so a deployable Windows bundle cannot be produced until that runtime exists and is Authenticode-signed.
+### Compiling the C# Windows Service
+
+The Windows Service host source code is located at [deployment/windows/MinionHost/](deployment/windows/MinionHost/). It can be compiled using either the .NET 8 SDK or a standard Docker container.
+
+#### Option A: Using Docker (cross-platform, no local .NET SDK needed)
+```bash
+docker run --rm \
+  -v "$PWD/deployment/windows/MinionHost:/src" \
+  -w /src \
+  mcr.microsoft.com/dotnet/sdk:8.0 \
+  dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o /src/bin/Release/net8.0/win-x64/publish
+```
+This generates the self-contained `SluiceGate.Minion.Service.exe` binary in [deployment/windows/MinionHost/bin/Release/net8.0/win-x64/publish/](deployment/windows/MinionHost/bin/Release/net8.0/win-x64/publish/).
+
+#### Option B: Using local .NET 8 SDK on Windows
+```powershell
+cd deployment/windows/MinionHost
+dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+```
 
 ## Configuration and Install
 
@@ -48,7 +68,8 @@ The builder exports the selected service image and generates SHA-256 records. Im
   -PackageRoot (Get-Location).Path `
   -ServiceImage 'registry.example.gov/sluice/sg-service:VERSION' `
   -MinionMissionControlUrl 'https://127.0.0.1:8443' `
-  -MinionId 'PATCH-01'
+  -MinionId 'PATCH-01' `
+  -SkipSignatureCheck
 ```
 
 After installation, configure the Windows service to run as the approved AD identity and confirm it can read its protected Minion configuration. Restrict ACLs so only administrators and that identity can access the configuration and private key.

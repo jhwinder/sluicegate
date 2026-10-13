@@ -6,16 +6,22 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ServiceImage,
 
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot "out")
+    [string]$OutputDirectory = (Join-Path $PSScriptRoot "out"),
+
+    [switch]$SkipSignatureCheck
 )
 
 $ErrorActionPreference = "Stop"
 if (-not (Test-Path -LiteralPath $MinionExecutable -PathType Leaf)) {
-    throw "Signed Minion executable not found: $MinionExecutable"
+    throw "Minion executable not found: $MinionExecutable"
 }
 $signature = Get-AuthenticodeSignature -FilePath $MinionExecutable
 if ($signature.Status -ne "Valid") {
-    throw "Minion executable must be Authenticode-signed before bundling."
+    if ($SkipSignatureCheck) {
+        Write-Warning "Minion executable is not Authenticode-signed (Status: $($signature.Status)). Proceeding because -SkipSignatureCheck was specified."
+    } else {
+        throw "Minion executable must be Authenticode-signed before bundling (Status: $($signature.Status)). Use -SkipSignatureCheck to bypass for testing/development."
+    }
 }
 
 New-Item -ItemType Directory -Path (Join-Path $OutputDirectory "Minion") -Force | Out-Null

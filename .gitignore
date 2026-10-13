@@ -24,3 +24,8 @@ run/
 .init/
 scratch/
 docs/planning
+
+# .NET build outputs
+**/bin/
+**/obj/
+*.user

@@ -13,7 +13,8 @@ param(
     [string]$MinionId,
 
     [string]$InstallRoot = "$env:ProgramFiles\SluiceGate\Minion",
-    [string]$ContainerName = "sluicegate-service"
+    [string]$ContainerName = "sluicegate-service",
+    [switch]$SkipSignatureCheck
 )
 
 $ErrorActionPreference = "Stop"
@@ -47,7 +48,11 @@ foreach ($artifact in $requiredArtifacts) {
 
 $minionSignature = Get-AuthenticodeSignature -FilePath $requiredArtifacts[0]
 if ($minionSignature.Status -ne "Valid") {
-    throw "The SG Minion executable must have a valid Authenticode signature."
+    if ($SkipSignatureCheck) {
+        Write-Warning "The SG Minion executable is not Authenticode-signed (Status: $($minionSignature.Status)). Proceeding because -SkipSignatureCheck was specified."
+    } else {
+        throw "The SG Minion executable must have a valid Authenticode signature (Status: $($minionSignature.Status)). Use -SkipSignatureCheck to bypass for testing/development."
+    }
 }
 
 $serviceEnvPath = Join-Path $InstallRoot "service.env"
