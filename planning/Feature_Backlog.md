@@ -68,6 +68,68 @@ SQLite persistence preserves queued Missions, but claiming a Mission changes it 
 - Report state transitions promptly, independent of idle poll interval; make polling/backoff configurable and actually honor configuration.
 - Add restart/crash/reboot tests covering before claim, after claim, during execution, and before result submission.
 
+### P0.5 Implement service-owned email notification delivery
+
+**Requirements:** Sections 2.6, 3.7, 3.10, 19.6.
+
+The demo BFF directly invokes its Resend approval adapter after a PAUSE response. The requirements assign SluiceGate notification selection and delivery to `sg_service`. The service currently has mock/webhook plumbing but no email sender; webhook delivery outcomes are not reliably checked before being marked delivered. This is required for the pilot's approval notifications, but email remains a Notification Adapter, not a Minion.
+
+`sg_service` shall support two selectable email-provider configurations: **Resend**, authenticated by an API key, or **SMTP** through an on-premises Microsoft Exchange server. Provider credentials and secrets must be held in service-side protected configuration/secret storage, not in profiles or Agent/Minion data. Recipient references and event selection remain service-managed.
+
+**Acceptance criteria:**
+
+- Add a service-owned Resend adapter configured with a secret `RESEND_API_KEY`, sender identity, and service-managed recipients.
+- Add a service-owned SMTP adapter configured with Exchange hostname, port, TLS mode, sender identity, and the authentication mode required by the Exchange deployment; any SMTP username/password must come from protected secret storage. Support approved relay/no-auth configurations where Exchange policy permits them.
+- Make provider selection explicit per adapter/profile and validate required configuration at creation/startup without exposing secret values in the Admin UI or logs.
+- Move demo approval email invocation behind a notification event handled by `sg_service`; keep the BFF as a client and remove its direct notification side effect.
+- Require explicit authenticated approval/rejection confirmation; email delivery or link fetch must not itself change approval state.
+- Check provider response/SMTP status, persist accurate delivery outcomes, and implement bounded retries/idempotency according to the selected policy.
+- Test both provider modes, absent/invalid configuration, Exchange TLS/authentication failures, Resend errors/timeouts, retries, duplicate events, PAUSE notification, and authenticated approval.
+
+An Email Minion is not required for approval/operations notification. It is only relevant in the future if sending email is itself a policy-controlled target-system action, as described in requirement Section 3.7.1 and explicitly deferred in Section 23.
+
+### P0.6 Provide authenticated TLS for Minion Mission Control
+
+**Requirements:** Sections 3.9, 8, 8.1, 17, 22.5.
+
+The Windows Minion examples use an HTTPS endpoint, but the current service container runs plain HTTP and the Compose stack publishes that HTTP port. API-key authentication and signed envelopes do not replace transport confidentiality/integrity. A self-signed certificate is acceptable for this deployment if the Minion explicitly trusts the provisioned certificate (or pinned public-key/fingerprint) and validates that it is connecting to the intended SluiceGate host.
+
+**Acceptance criteria:**
+
+- Support certificate provisioning for a self-signed server certificate and define protected storage, renewal/rotation, and distribution of its trust anchor to the Minion.
+- Terminate TLS at a documented trusted endpoint or configure the service itself for TLS; ensure the Minion validates the certificate/identity and does not fall back to insecure certificate bypass.
+- Keep plaintext HTTP limited to isolated local development; production and pilot API keys must not traverse unprotected network connections.
+- Test trusted self-signed connection success, hostname/fingerprint mismatch, expired certificate, and untrusted certificate rejection.
+
+### P0.7 Make patch capabilities truthful and prevent false success
+
+**Requirements:** Sections 3.5, 8.4, 10, 15, 19.4.
+
+This is serious because a capability is the Minion's advertised contract: SluiceGate may authorize and issue a Mission for an advertised operation believing it can be performed, while the worker's dispatch falls through and fails only after claim. `PatchingMinion.ps1` advertises `windows.patch.inspect` and `windows.patch.install`, but implements only reconcile, discover, and status. Separately, the Python mirror's non-dry-run reconciliation returns success-shaped results without actually staging or installing anything. That can make tests or callers mistake a simulation for a real patch operation. Together these gaps make capability discovery and reported outcomes unreliable; until fixed, unsupported operations must not be advertised and the Python mirror must clearly refuse execution or identify itself as simulation-only.
+
+**Acceptance criteria:**
+
+- Immediately remove unsupported capabilities from the Minion's advertised set until their handlers exist; test that routing cannot issue a Mission for an unimplemented capability.
+- Implement `inspect` and `install` only with narrow, typed parameters and the same policy-authorized target, approved-source, hash, and constrained-execution safeguards as reconcile.
+- Make the Python mirror reject non-dry-run execution with a clear unsupported-execution error, or implement actual execution through the same reviewed safe contract; never return success for work it did not perform.
+- Return explicit no-op reasons for empty qualifying sets and preserve per-target/per-patch partial results.
+- Enforce result schema, bounded output, and terminal transition rules; do not report success for skipped/failed required work.
+- Ensure every Minion status/result update is retried safely and correlated with the Mission.
+
+### P0.8 Retarget the Windows Minion Service to .NET 10 LTS
+
+**Requirements:** Sections 3.9, 12.4, 22.4.
+
+The checked-in Windows Service currently targets .NET 8, whose support ends on November 10, 2026. The deployment target under consideration is Windows Server 2019, which is supported by .NET 10. Move the service to the supported .NET 10 LTS runtime before deployment so the pilot does not begin on a runtime immediately reaching end of support.
+
+**Acceptance criteria:**
+
+- Change the service target framework to `net10.0` and confirm its Windows Service dependencies support that target.
+- Rebuild and check in the framework-dependent Windows x64 executable; do not bundle the .NET runtime.
+- Update Windows deployment and build documentation to require the .NET 10 x64 Runtime instead of .NET 8.
+- Build and run the service on Windows Server 2019 with the supported .NET 10 x64 Runtime installed.
+- Confirm service startup, PowerShell worker launch, Event Log behavior, and clean stop on the target OS.
+
 ## P1 - Required Service, Protocol, And Audit Work
 
 ### P1.1 Complete transaction and administrative audit history
@@ -128,54 +190,6 @@ The JSON Schema is present but is not integrated into service/runtime validation
 - Persist the routing decision and reason, and fail closed when no eligible Minion exists.
 - Test enabled/disabled, stale, capability mismatch, environment mismatch, scope mismatch, and fallback-disabled behavior.
 
-### P0.5 Implement service-owned email notification delivery
-
-**Requirements:** Sections 2.6, 3.7, 3.10, 19.6.
-
-The demo BFF directly invokes its Resend approval adapter after a PAUSE response. The requirements assign SluiceGate notification selection and delivery to `sg_service`. The service currently has mock/webhook plumbing but no email sender; webhook delivery outcomes are not reliably checked before being marked delivered. This is required for the pilot's approval notifications, but email remains a Notification Adapter, not a Minion.
-
-`sg_service` shall support two selectable email-provider configurations: **Resend**, authenticated by an API key, or **SMTP** through an on-premises Microsoft Exchange server. Provider credentials and secrets must be held in service-side protected configuration/secret storage, not in profiles or Agent/Minion data. Recipient references and event selection remain service-managed.
-
-**Acceptance criteria:**
-
-- Add a service-owned Resend adapter configured with a secret `RESEND_API_KEY`, sender identity, and service-managed recipients.
-- Add a service-owned SMTP adapter configured with Exchange hostname, port, TLS mode, sender identity, and the authentication mode required by the Exchange deployment; any SMTP username/password must come from protected secret storage. Support approved relay/no-auth configurations where Exchange policy permits them.
-- Make provider selection explicit per adapter/profile and validate required configuration at creation/startup without exposing secret values in the Admin UI or logs.
-- Move demo approval email invocation behind a notification event handled by `sg_service`; keep the BFF as a client and remove its direct notification side effect.
-- Require explicit authenticated approval/rejection confirmation; email delivery or link fetch must not itself change approval state.
-- Check provider response/SMTP status, persist accurate delivery outcomes, and implement bounded retries/idempotency according to the selected policy.
-- Test both provider modes, absent/invalid configuration, Exchange TLS/authentication failures, Resend errors/timeouts, retries, duplicate events, PAUSE notification, and authenticated approval.
-
-An Email Minion is not required for approval/operations notification. It is only relevant in the future if sending email is itself a policy-controlled target-system action, as described in requirement Section 3.7.1 and explicitly deferred in Section 23.
-
-### P0.6 Provide authenticated TLS for Minion Mission Control
-
-**Requirements:** Sections 3.9, 8, 8.1, 17, 22.5.
-
-The Windows Minion examples use an HTTPS endpoint, but the current service container runs plain HTTP and the Compose stack publishes that HTTP port. API-key authentication and signed envelopes do not replace transport confidentiality/integrity. A self-signed certificate is acceptable for this deployment if the Minion explicitly trusts the provisioned certificate (or pinned public-key/fingerprint) and validates that it is connecting to the intended SluiceGate host.
-
-**Acceptance criteria:**
-
-- Support certificate provisioning for a self-signed server certificate and define protected storage, renewal/rotation, and distribution of its trust anchor to the Minion.
-- Terminate TLS at a documented trusted endpoint or configure the service itself for TLS; ensure the Minion validates the certificate/identity and does not fall back to insecure certificate bypass.
-- Keep plaintext HTTP limited to isolated local development; production and pilot API keys must not traverse unprotected network connections.
-- Test trusted self-signed connection success, hostname/fingerprint mismatch, expired certificate, and untrusted certificate rejection.
-
-### P0.7 Make patch capabilities truthful and prevent false success
-
-**Requirements:** Sections 3.5, 8.4, 10, 15, 19.4.
-
-This is serious because a capability is the Minion's advertised contract: SluiceGate may authorize and issue a Mission for an advertised operation believing it can be performed, while the worker's dispatch falls through and fails only after claim. `PatchingMinion.ps1` advertises `windows.patch.inspect` and `windows.patch.install`, but implements only reconcile, discover, and status. Separately, the Python mirror's non-dry-run reconciliation returns success-shaped results without actually staging or installing anything. That can make tests or callers mistake a simulation for a real patch operation. Together these gaps make capability discovery and reported outcomes unreliable; until fixed, unsupported operations must not be advertised and the Python mirror must clearly refuse execution or identify itself as simulation-only.
-
-**Acceptance criteria:**
-
-- Immediately remove unsupported capabilities from the Minion's advertised set until their handlers exist; test that routing cannot issue a Mission for an unimplemented capability.
-- Implement `inspect` and `install` only with narrow, typed parameters and the same policy-authorized target, approved-source, hash, and constrained-execution safeguards as reconcile.
-- Make the Python mirror reject non-dry-run execution with a clear unsupported-execution error, or implement actual execution through the same reviewed safe contract; never return success for work it did not perform.
-- Return explicit no-op reasons for empty qualifying sets and preserve per-target/per-patch partial results.
-- Enforce result schema, bounded output, and terminal transition rules; do not report success for skipped/failed required work.
-- Ensure every Minion status/result update is retried safely and correlated with the Mission.
-
 ### P1.5 Complete the operator registry and audit surface
 
 **Requirements:** Sections 3.2-3.3, 18.1-18.4.
@@ -231,6 +245,22 @@ The service has `/health` and database-backed Mission state, and the Windows hos
 - Define SQLite backup/restore and schema migration behavior; exercise recovery from a valid backup.
 - Configure stale-Minion/long-running-Mission detection and an operator-visible remediation path.
 - Define and test Mission/event/notification retention and cleanup policies.
+
+### P2.4 Support URI-based patch package sources
+
+**Requirements:** Sections 3.5, Patching Catalog Contract, and 15 steps 7-8 (extend the current UNC-only source contract).
+
+The patch catalog currently assumes `patch_path` names a local or UNC file that the Minion can read directly. Add support for HTTPS and S3 object locations as alternatives, while keeping UNC paths working for existing deployments. The Minion should resolve each approved source to a controlled local cache file, verify the catalog SHA-256 against the fetched bytes, and only then stage that verified file to the target. Source URIs identify content locations; they must not carry reusable credentials or bypass source policy.
+
+**Acceptance criteria:**
+
+- Define accepted `patch_path` forms and parsing rules for UNC, HTTPS, and S3; reject unsupported schemes and malformed locations.
+- Add a source resolver that downloads/copies packages into a Minion-controlled cache, enforces size/time limits, handles partial downloads safely, and avoids treating an incomplete cache file as valid.
+- Restrict HTTPS hosts and S3 buckets/prefixes to deployment-approved allowlists; validate TLS certificates and reject unapproved redirects or endpoints.
+- Obtain S3/HTTPS credentials only from protected Minion host configuration or the platform's supported workload identity; never embed credentials, bearer tokens, or signed temporary URLs in catalog rows, Missions, or logs.
+- Verify SHA-256 after fetching and before any remote staging; do not stage or execute on mismatch, fetch failure, or policy/source validation failure.
+- Keep UNC behavior compatible and test UNC, successful HTTPS/S3 downloads, expired/unavailable credentials, untrusted TLS, redirects, oversized/partial downloads, digest mismatch, and cache cleanup.
+- Update the catalog contract, configuration documentation, and Agent publishing workflow to describe each supported backend without making the Minion responsible for discovering or choosing alternate patch sources.
 
 ## Explicitly Deferred / Not Backlog Items
 
