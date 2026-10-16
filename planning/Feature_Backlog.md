@@ -130,6 +130,35 @@ The checked-in Windows Service currently targets .NET 8, whose support ends on N
 - Build and run the service on Windows Server 2019 with the supported .NET 10 x64 Runtime installed.
 - Confirm service startup, PowerShell worker launch, Event Log behavior, and clean stop on the target OS.
 
+### P0.9 Create a Policies view in the Admin Console
+
+Add policy authoring and management to the authenticated `sg-service` Admin Console. Administrators should be able to review and edit the policy that the service actually loads without using the separate, unauthenticated Policy Editor or manually copying files between paths.
+
+**Acceptance criteria:**
+
+- Add a Policies view that loads the active policy from the service-configured policy path and presents its current content and policy hash.
+- Support editing and previewing policy changes, with validation against the existing policy schema/DSL before any write.
+- Save only valid policies to the configured active policy path; preserve the previous policy and leave it active if validation or persistence fails.
+- Make activation explicit: reload the saved policy, report success/failure and the resulting hash, and ensure a failed reload cannot silently replace the currently active policy.
+- Require Admin Console authentication for read/write/reload operations; do not expose an unauthenticated policy-write endpoint or allow clients to select arbitrary filesystem paths.
+- Record policy edits and reload outcomes with administrator identity, timestamp, and policy hash, without logging credentials or other secrets.
+- Test valid and invalid edits, concurrent/stale edits, backup and recovery, file permission failures, reload failures, and unauthorized access.
+- Previous stand-alone policy creator retired.
+
+### P0.10 Support the Linux-service/Windows-Minion two-server deployment
+
+The installation guide describes `sg-service` on a Linux host and the patching Minion on a separate Windows host, but the checked-in Windows installer currently deploys the service container on the same host and the split setup is only a manual lab procedure. Define and deliver the two-server topology as a supported deployment, with platform-specific installation, secure service-to-Minion communication, and end-to-end validation.
+
+**Acceptance criteria:**
+
+- Provide a supported Linux deployment package/procedure for `sg-service` with persistent database storage, protected signing key and policy mounts, service startup/restart behavior, and documented backup/upgrade steps.
+- Provide a Windows Minion package/installer that installs and runs the Minion without installing or starting a local `sg-service` container; configure the remote Mission Control URL and protected Minion configuration.
+- Configure HTTPS between the hosts using a trusted certificate and hostname validation; document certificate provisioning, Windows trust, renewal/rotation, and firewall/network requirements. Never require a certificate-validation bypass or expose API keys over plaintext network transport.
+- Ensure Agent/admin access reaches the Linux service, while only the required Mission Control endpoint is reachable by the Windows Minion; document port bindings and allowed network paths.
+- Align service, installer, Minion runtime, configuration, and deployment documentation on the remote URL, Minion ID, key provisioning, and service ownership contracts.
+- Exercise clean installation, service startup, Minion check-in, Mission claim, safe dry-run execution, restart/recovery, upgrade, and uninstall across separate Linux and Windows hosts.
+- Update the installation guide and deployment references to distinguish the supported two-server installation from a same-host topology, which should also continue to be supported.
+
 ## P1 - Required Service, Protocol, And Audit Work
 
 ### P1.1 Complete transaction and administrative audit history
@@ -261,6 +290,30 @@ The patch catalog currently assumes `patch_path` names a local or UNC file that 
 - Verify SHA-256 after fetching and before any remote staging; do not stage or execute on mismatch, fetch failure, or policy/source validation failure.
 - Keep UNC behavior compatible and test UNC, successful HTTPS/S3 downloads, expired/unavailable credentials, untrusted TLS, redirects, oversized/partial downloads, digest mismatch, and cache cleanup.
 - Update the catalog contract, configuration documentation, and Agent publishing workflow to describe each supported backend without making the Minion responsible for discovering or choosing alternate patch sources.
+
+### P2.5 Generate Minion configuration from the Minion Registry
+
+The Minion Registry should generate a valid `minion.config.json` for a registered Minion, so operators do not have to manually copy registry values into a file and risk mismatched IDs, URLs, key paths, or capabilities.
+
+**Acceptance criteria:**
+
+- Add a registry action to create/download a configuration file for the selected Minion using its registered ID and deployment settings.
+- Include the Mission Control URL, Minion ID, API key, signing-key paths, catalog/mapping paths, nonce store path, polling interval, and safe initial `DryRun` setting.
+- Collect or validate deployment-specific paths and endpoint values; validate the generated JSON against the runtime configuration contract.
+- Display or export the API key only at issuance/rotation time; do not persist plaintext credentials in the registry, logs, or ordinary downloads after the one-time response.
+- Document secure delivery and Windows ACL requirements for the generated file, and test that the generated config can check in successfully.
+
+### P2.6 Make patch execution constraints policy-owned
+
+The patch request should identify the target server(s), while the active, administrator-authored policy controls allowed patch sources/types, maintenance constraints, and reboot behavior. The current endpoint accepts Agent-supplied patch settings and copies them into the Mission, so policy evaluation alone does not ensure those execution constraints are policy-owned.
+
+**Acceptance criteria:**
+
+- Define policy syntax and service behavior for deriving the effective patch constraints from trusted policy/configuration, rather than accepting Agent-selected execution constraints.
+- Reduce the Agent patch request contract to the requested target server(s) and non-authoritative request metadata.
+- Bind the policy-derived allowed sources, patch types, maintenance window, and reboot permission into the signed Mission; reject attempts to override them in the request.
+- Ensure the Minion enforces the signed constraints before selecting/installing patches or rebooting.
+- Test policy changes, omitted and malicious override fields, PAUSE/approval re-evaluation, and that no Mission can exceed the constraints of the policy decision that authorized it.
 
 ## Explicitly Deferred / Not Backlog Items
 

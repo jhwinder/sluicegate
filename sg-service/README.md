@@ -5,6 +5,8 @@
 - **Minion Mission Control**: Private authenticated check-in, mission claim, and signed status/result exchange (`/internal/v1/minions/...`).
 - **Administrative API & Console**: Self-contained Web UI and REST endpoints (`/admin` and `/admin/v1/...`) for human approval, agent/minion management, policy reloads, and audit inspection.
 
+For a first-time, split Linux-service and Windows-patching-Minion setup, follow the [SluiceGate Installation Guide](../docs/Installation_Guide.md). This operator guide remains the reference for individual service functions.
+
 ---
 
 ## 1. Quick Start with Docker
