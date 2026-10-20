@@ -54,6 +54,7 @@ public class MinionWorkerService : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            Process? process = null;
             try
             {
                 _logger.LogInformation("Invoking Minion execution pass via PowerShell...");
@@ -61,7 +62,7 @@ public class MinionWorkerService : BackgroundService
                 var psi = new ProcessStartInfo
                 {
                     FileName = "powershell.exe",
-                    Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{psScript}\" -ConfigPath \"{configPath}\" -SinglePass",
+                    Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{psScript}\" -ConfigPath \"{configPath}\"",
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
@@ -69,7 +70,7 @@ public class MinionWorkerService : BackgroundService
                     WorkingDirectory = baseDir
                 };
 
-                using var process = new Process { StartInfo = psi };
+                process = new Process { StartInfo = psi };
                 process.OutputDataReceived += (s, e) => { if (e.Data != null) _logger.LogInformation("[Minion] {Msg}", e.Data); };
                 process.ErrorDataReceived += (s, e) => { if (e.Data != null) _logger.LogWarning("[Minion Error] {Msg}", e.Data); };
 
@@ -82,15 +83,30 @@ public class MinionWorkerService : BackgroundService
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
+                try
+                {
+                    if (process is { HasExited: false })
+                    {
+                        process.Kill(entireProcessTree: true);
+                        await process.WaitForExitAsync(CancellationToken.None);
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                }
                 break;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Unhandled exception during Minion pass.");
             }
+            finally
+            {
+                process?.Dispose();
+            }
 
-            // Sleep between cycles (default 1 hour or configured in config)
-            await Task.Delay(TimeSpan.FromMinutes(60), stoppingToken);
+            // Restart a failed worker promptly; its own loop controls normal idle polling.
+            await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
         }
 
         _logger.LogInformation("SluiceGate Minion Windows Service has stopped.");

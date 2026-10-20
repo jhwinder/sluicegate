@@ -153,6 +153,56 @@ rules:
     decision: BLOCK
 ```
 
+## Policy-Authorized Patch Executables
+
+For patch reconciliation, an `ALLOW` rule may attach an `allowed_patch_executables` obligation. The service copies that policy obligation into the signed Mission, and the Patching Minion permits catalog commands only when their executable name appears in the obligation. The Minion does not maintain a separate hard-coded installer allowlist; if the obligation is absent or the executable is not listed, the catalog patch fails closed.
+
+```yaml
+version: 1
+
+default:
+  decision: BLOCK
+
+rules:
+  - name: allow-security-patching-with-msiexec
+    when:
+      - path: action.name
+        eq: windows.patch.reconcile
+      - path: target.servers
+        eq: [patch-test.example.gov]
+    decision: ALLOW
+    obligations:
+      - type: allowed_patch_targets
+        servers: [patch-test.example.gov]
+      - type: patch_constraints
+        patch_sources: [wsus, nessus_catalog]
+        allowed_patch_types: [SECURITY]
+        allow_reboot: false
+        maintenance_window: null
+      - type: allowed_patch_executables
+        executables: [msiexec.exe]
+```
+
+The Agent request contains only `servers`. The service intersects that list with `allowed_patch_targets.servers`; unauthorized names are omitted from the signed Mission, and a request with no authorized targets is blocked. `patch_constraints` supplies the patch sources, allowed types, reboot allowance, and maintenance window. The Minion receives only the authorized targets and signed constraints.
+
+When a policy configures a maintenance interval, it supplies explicit UTC timestamps and the desired outside-window decision. For example:
+
+```yaml
+obligations:
+  - type: patch_constraints
+    patch_sources: [wsus, nessus_catalog]
+    allowed_patch_types: [SECURITY]
+    allow_reboot: false
+    maintenance_window:
+      start_utc: "2026-10-16T00:00:00Z"
+      end_utc: "2026-10-16T04:00:00Z"
+    outside_window_decision: PAUSE
+```
+
+Use `outside_window_decision: PAUSE` to require administrator approval while the interval is closed; approval does not bypass the interval. `BLOCK` is also supported. The service and Minion check the signed interval before claiming or executing work.
+
+The catalog's `install_command` must start with a bare executable name, such as `msiexec.exe`, followed by its arguments. `%PATCHPATH%` is replaced with the verified staged package path. The executable is launched directly without `cmd.exe`; the policy's `ALLOW` obligation is the authorization for the executable name.
+
 ---
 
 ## Rule Evaluation Semantics

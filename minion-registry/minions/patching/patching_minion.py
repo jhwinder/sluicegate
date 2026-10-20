@@ -157,6 +157,11 @@ def reconcile_patches(
     mapping_path: Path | str,
     dry_run: bool = False,
 ) -> dict[str, Any]:
+    if not dry_run:
+        raise NotImplementedError(
+            "The Python patching mirror is simulation-only and cannot execute patches."
+        )
+
     target_servers = envelope.get("target", {}).get("servers", [])
     parameters = envelope.get("parameters", {})
     patch_sources = parameters.get("patch_sources", ["wsus", "nessus_catalog"])
@@ -191,6 +196,7 @@ def reconcile_patches(
                 "reboot_required": False,
                 "note": "WSUS reconciliation completed (0 updates pending in test/dryrun mode)" if dry_run else "WSUS executed",
             }
+            any_success = True
 
         if "nessus_catalog" in patch_sources:
             for patch_row in patches:
@@ -235,6 +241,11 @@ def reconcile_patches(
             "server": server,
             "catalog_patches": server_catalog_results,
             "wsus_result": wsus_result,
+            "catalog_no_op_reason": (
+                "No approved catalog patches matched this target and the Mission constraints."
+                if "nessus_catalog" in patch_sources and not patches
+                else None
+            ),
         })
 
     terminal_status = "MISSION_COMPLETE_SUCCEEDED"

@@ -2,7 +2,7 @@
 
 `sg-service` is the authoritative control-plane and orchestration service for SluiceGate. It exposes:
 - **Inbound Agent APIs**: Policy-governed action submission (`/api/v1/actions` and `/api/v1/patch-requests`) and low-information request polling (`/api/v1/requests/{id}`).
-- **Minion Mission Control**: Private authenticated check-in, mission claim, and signed status/result exchange (`/internal/v1/minions/...`).
+- **Minion Mission Control**: Private authenticated check-in, leased Mission claim, heartbeat, and signed status/result exchange (`/internal/v1/minions/...`).
 - **Administrative API & Console**: Self-contained Web UI and REST endpoints (`/admin` and `/admin/v1/...`) for human approval, agent/minion management, policy reloads, and audit inspection.
 
 For a first-time, split Linux-service and Windows-patching-Minion setup, follow the [SluiceGate Installation Guide](../docs/Installation_Guide.md). This operator guide remains the reference for individual service functions.
@@ -39,10 +39,10 @@ docker run -d \
   -p 127.0.0.1:8443:8443 \
   -v sg-service-data:/data \
   -v "$PWD/secrets/sg-signing-key.pem:/run/secrets/sg-signing-key.pem:ro" \
-  -v "$PWD/sg-service/policies/demo-policy.yml:/config/policy.yml:ro" \
+  -v "$PWD/sg-service/policies:/config:rw" \
   -e SG_BOOTSTRAP_ADMIN_KEY="admin-secret-key-123" \
   -e SG_SIGNING_KEY_PATH="/run/secrets/sg-signing-key.pem" \
-  -e SG_POLICY_PATH="/config/policy.yml" \
+  -e SG_POLICY_PATH="/config/demo-policy.yml" \
   sluicegate/sg-service:local
 ```
 
@@ -64,6 +64,12 @@ curl -fsS http://127.0.0.1:8443/health
 | `SG_BOOTSTRAP_ADMIN_KEY` | *(None)* | Initial one-time administrator bearer token. Once you create permanent keys, remove this. |
 | `SG_PATCH_MINION_ID` | `PATCH-01` | Default fallback Minion ID if dynamic routing is bypassed. |
 | `SG_DEV_BOOTSTRAP` | `false` | When `true`, automatically registers development agent & minion keys. |
+| `SG_MINION_MAX_ATTEMPTS` | `3` | Maximum signed execution attempts per Mission. |
+| `SG_MINION_RETRY_INTERVAL_SECONDS` | `30` | Signed delay before an eligible retry. |
+| `SG_MINION_ATTEMPT_TIMEOUT_SECONDS` | `300` | Signed per-attempt execution deadline. |
+| `SG_MINION_OVERALL_TIMEOUT_SECONDS` | `900` | Signed overall execution deadline. |
+| `SG_MINION_HEARTBEAT_INTERVAL_SECONDS` | `30` | Minion lease-renewal cadence. |
+| `SG_MINION_CLAIM_LEASE_SECONDS` | `120` | Claim lease length; must exceed the heartbeat interval. |
 
 ---
 
@@ -116,6 +122,7 @@ The service includes a self-contained web console served directly at:
 
 #### Header Action: Reload Policy
 - Click **Reload Policy** in the top navigation bar to reload the YAML policy file from disk on demand without restarting the container. SluiceGate will report the new policy provenance hash immediately.
+- **Policies Tab**: Load, validate, and save-and-activate the configured policy with backup and policy-hash confirmation.
 
 ---
 

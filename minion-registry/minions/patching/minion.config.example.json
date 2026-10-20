@@ -7,6 +7,7 @@
   "CatalogPath": "\\\\fileshare\\patchrepo\\patch_catalog.csv",
   "NessusMappingPath": "\\\\fileshare\\patchrepo\\nessus_mapping.csv",
   "NonceStorePath": "C:\\Program Files\\SluiceGate\\Minion\\data\\nonces.txt",
+  "MissionDiaryDirectory": "C:\\ProgramData\\SluiceGate\\Minion\\MissionDiary",
   "PollIntervalSeconds": 3600,
   "DryRun": false
 }

@@ -39,16 +39,33 @@ def test_service_pause_and_approval_workflow(tmp_path: Path, monkeypatch) -> Non
         "version: 1",
         "default: {decision: BLOCK}",
         "rules:",
-        "  - name: allow-reboot-when-approved",
+        "  - name: allow-server-when-approved",
         "    when:",
         "      - {path: action.name, eq: windows.patch.reconcile}",
-        "      - {path: action.params.allow_reboot, eq: true}",
+        "      - {path: target.servers, eq: [SERVER01.example.gov]}",
         "      - {path: context.approval.approved, eq: true}",
+        "    obligations:",
+        "      - type: allowed_patch_targets",
+        "        servers: [SERVER01.example.gov]",
+        "      - type: patch_constraints",
+        "        patch_sources: [wsus, nessus_catalog]",
+        "        allowed_patch_types: [SECURITY]",
+        "        allow_reboot: true",
+        "        maintenance_window: null",
         "    decision: ALLOW",
-        "  - name: pause-reboot-unapproved",
+        "  - name: pause-server-before-approval",
         "    when:",
         "      - {path: action.name, eq: windows.patch.reconcile}",
-        "      - {path: action.params.allow_reboot, eq: true}",
+        "      - {path: target.servers, eq: [SERVER01.example.gov]}",
+        "      - {path: context.approval.approved, exists: false}",
+        "    obligations:",
+        "      - type: allowed_patch_targets",
+        "        servers: [SERVER01.example.gov]",
+        "      - type: patch_constraints",
+        "        patch_sources: [wsus, nessus_catalog]",
+        "        allowed_patch_types: [SECURITY]",
+        "        allow_reboot: true",
+        "        maintenance_window: null",
         "    decision: PAUSE",
     ])
     policy_path.write_text(policy_content, encoding="utf-8")
@@ -80,7 +97,7 @@ def test_service_pause_and_approval_workflow(tmp_path: Path, monkeypatch) -> Non
         # 1. Agent submits request requiring reboot -> Policy evaluates to PAUSE
         req_resp = client.post(
             "/api/v1/patch-requests",
-            json={"servers": ["SERVER01.example.gov"], "allow_reboot": True},
+            json={"servers": ["SERVER01.example.gov"]},
             headers={"Authorization": f"Bearer {agent_key}"},
         )
         assert req_resp.status_code == 202
@@ -145,7 +162,21 @@ def test_service_rejection_workflow(tmp_path: Path, monkeypatch) -> None:
 
     policy_content = "\n".join([
         "version: 1",
-        "default: {decision: PAUSE}",
+        "default: {decision: BLOCK}",
+        "rules:",
+        "  - name: pause-approved-target",
+        "    when:",
+        "      - {path: action.name, eq: windows.patch.reconcile}",
+        "      - {path: target.servers, eq: [SERVER02.example.gov]}",
+        "    obligations:",
+        "      - type: allowed_patch_targets",
+        "        servers: [SERVER02.example.gov]",
+        "      - type: patch_constraints",
+        "        patch_sources: [wsus]",
+        "        allowed_patch_types: [SECURITY]",
+        "        allow_reboot: false",
+        "        maintenance_window: null",
+        "    decision: PAUSE",
     ])
     policy_path.write_text(policy_content, encoding="utf-8")
 

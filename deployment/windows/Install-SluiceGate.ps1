@@ -57,7 +57,8 @@ if ($minionSignature.Status -ne "Valid") {
 
 $serviceEnvPath = Join-Path $InstallRoot "service.env"
 $signingKeyPath = Join-Path $InstallRoot "sg-signing-key.pem"
-$policyPath = Join-Path $InstallRoot "policy.yml"
+$policyDirectory = Join-Path $InstallRoot "policy"
+$policyPath = Join-Path $policyDirectory "production-policy.yml"
 if (-not (Test-Path -LiteralPath $serviceEnvPath -PathType Leaf)) {
     throw "Provision service.env using approved secret management before installation."
 }
@@ -83,7 +84,7 @@ if ($PSCmdlet.ShouldProcess($InstallRoot, "Install SluiceGate Minion service and
         -p 127.0.0.1:8443:8443 `
         -v "${databaseVolume}:/data" `
         -v ("{0}:/run/secrets/sg-signing-key.pem:ro" -f $signingKeyPath) `
-        -v ("{0}:/config/production-policy.yml:ro" -f $policyPath) `
+        -v ("{0}:/config:rw" -f $policyDirectory) `
         --env-file $serviceEnvPath `
         $ServiceImage
     if ($LASTEXITCODE -ne 0) {

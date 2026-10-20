@@ -32,11 +32,12 @@ def canonical_json(payload: dict[str, Any]) -> bytes:
 
 def handle_mission(client: httpx.Client, mission: dict[str, Any]) -> None:
     mission_id = mission["mission_id"]
+    claim_token = mission["claim_token"]
     for state in ("MISSION_ACKNOWLEDGED", "MISSION_IN_PROGRESS"):
         response = client.post(
             f"/internal/v1/minions/{MINION_ID}/missions/{mission_id}/status",
             headers=headers(),
-            json={"event_id": event_id(), "status": state, "detail": {"mode": "safe-demo-noop"}},
+            json={"event_id": event_id(), "claim_token": claim_token, "status": state, "detail": {"mode": "safe-demo-noop"}},
         )
         response.raise_for_status()
 
@@ -47,6 +48,7 @@ def handle_mission(client: httpx.Client, mission: dict[str, Any]) -> None:
     }
     signed_payload = {
         "event_id": event_id(),
+        "claim_token": claim_token,
         "mission_id": mission_id,
         "minion_id": MINION_ID,
         "status": "MISSION_COMPLETE_SUCCEEDED",

@@ -5,26 +5,41 @@ import hmac
 import json
 import os
 import secrets
+import shutil
 import sqlite3
+import stat
+import tempfile
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager, contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator, Generator
 
+import yaml
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sg_core import GateRequest, PolicyEngine
+from sg_poledit.validate import validate_policy_dict
 
 DATABASE_PATH = Path(os.environ.get("SG_DATABASE_PATH", "/data/sg-service.sqlite3"))
 SIGNING_KEY_PATH = Path(os.environ.get("SG_SIGNING_KEY_PATH", "/run/secrets/sg-signing-key.pem"))
 PATCH_MINION_ID = os.environ.get("SG_PATCH_MINION_ID", "PATCH-01")
 POLICY_PATH = Path(os.environ.get("SG_POLICY_PATH", "/config/policy.yml"))
 ADMIN_HTML_PATH = Path(__file__).resolve().parent / "static" / "admin.html"
+MAX_MINION_RESULT_BYTES = 256 * 1024
+POLICY_LOCK = threading.RLock()
+MINION_MAX_ATTEMPTS = int(os.environ.get("SG_MINION_MAX_ATTEMPTS", "3"))
+MINION_RETRY_INTERVAL_SECONDS = int(os.environ.get("SG_MINION_RETRY_INTERVAL_SECONDS", "30"))
+MINION_ATTEMPT_TIMEOUT_SECONDS = int(os.environ.get("SG_MINION_ATTEMPT_TIMEOUT_SECONDS", "300"))
+MINION_OVERALL_TIMEOUT_SECONDS = int(os.environ.get("SG_MINION_OVERALL_TIMEOUT_SECONDS", "900"))
+MINION_HEARTBEAT_INTERVAL_SECONDS = int(os.environ.get("SG_MINION_HEARTBEAT_INTERVAL_SECONDS", "30"))
+MINION_CLAIM_LEASE_SECONDS = int(os.environ.get("SG_MINION_CLAIM_LEASE_SECONDS", "120"))
 
 
 @asynccontextmanager
@@ -38,11 +53,9 @@ policy_engine: PolicyEngine | None = None
 
 
 class PatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     servers: list[str] = Field(min_length=1)
-    patch_sources: list[str] = Field(default_factory=lambda: ["wsus", "nessus_catalog"])
-    allowed_patch_types: list[str] = Field(default_factory=lambda: ["SECURITY"])
-    allow_reboot: bool = False
-    maintenance_window: str | None = None
 
 
 class CanonicalActionRequest(BaseModel):
@@ -54,13 +67,22 @@ class CanonicalActionRequest(BaseModel):
 
 class MissionStatusRequest(BaseModel):
     event_id: str = Field(min_length=1, max_length=160)
+    claim_token: str = Field(min_length=32, max_length=128)
     status: str
     detail: dict[str, Any] = Field(default_factory=dict)
     occurred_at: float | None = None
 
 
+class MissionHeartbeatRequest(BaseModel):
+    claim_token: str = Field(min_length=32, max_length=128)
+    process_id: int | None = Field(default=None, gt=0)
+    process_started_at: float | None = None
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+
 class MissionResultRequest(BaseModel):
     event_id: str = Field(min_length=1, max_length=160)
+    claim_token: str = Field(min_length=32, max_length=128)
     status: str
     result: dict[str, Any] = Field(default_factory=dict)
     signature: str
@@ -69,6 +91,14 @@ class MissionResultRequest(BaseModel):
 class ApprovalActionRequest(BaseModel):
     approver: str | None = None
     comment: str = ""
+
+
+class PolicyContentRequest(BaseModel):
+    content: str = Field(max_length=1_000_000)
+
+
+class SavePolicyRequest(PolicyContentRequest):
+    expected_file_hash: str = Field(min_length=64, max_length=64)
 
 
 class RegisterAgentRequest(BaseModel):
@@ -166,8 +196,55 @@ def transaction() -> Generator[sqlite3.Connection, None, None]:
         connection.close()
 
 
+def validate_policy_content(content: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]], bool]:
+    try:
+        policy = yaml.safe_load(content)
+    except yaml.YAMLError as exc:
+        return None, [{"severity": "error", "path": "", "message": str(exc)}], False
+
+    validation = validate_policy_dict(policy)
+    return policy, [issue.__dict__ for issue in validation.issues], validation.is_valid
+
+
+def record_policy_event(
+    actor: str,
+    action: str,
+    outcome: str,
+    previous_hash: str | None,
+    policy_hash: str | None,
+) -> None:
+    with transaction() as connection:
+        connection.execute(
+            "INSERT INTO policy_events (event_id, actor, action, outcome, previous_hash, policy_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (f"POLICY-{uuid.uuid4().hex}", actor, action, outcome, previous_hash, policy_hash, time.time()),
+        )
+
+
+def write_policy_atomically(content: bytes, file_mode: int) -> None:
+    descriptor, temporary_path = tempfile.mkstemp(prefix=f".{POLICY_PATH.name}.", dir=POLICY_PATH.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as temporary_file:
+            temporary_file.write(content)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.chmod(temporary_path, file_mode)
+        os.replace(temporary_path, POLICY_PATH)
+    finally:
+        if os.path.exists(temporary_path):
+            os.unlink(temporary_path)
+
+
 def initialize() -> None:
     global policy_engine
+    if (
+        MINION_MAX_ATTEMPTS < 1
+        or MINION_RETRY_INTERVAL_SECONDS < 1
+        or MINION_ATTEMPT_TIMEOUT_SECONDS < 1
+        or MINION_OVERALL_TIMEOUT_SECONDS < MINION_ATTEMPT_TIMEOUT_SECONDS
+        or MINION_HEARTBEAT_INTERVAL_SECONDS < 1
+        or MINION_CLAIM_LEASE_SECONDS <= MINION_HEARTBEAT_INTERVAL_SECONDS
+    ):
+        raise RuntimeError("Invalid Minion retry, timeout, heartbeat, or claim lease configuration")
     if not POLICY_PATH.is_file():
         raise RuntimeError(f"Policy file does not exist: {POLICY_PATH}")
     policy_engine = PolicyEngine(str(POLICY_PATH))
@@ -209,7 +286,17 @@ def initialize() -> None:
                 status TEXT NOT NULL,
                 raw_request TEXT,
                 created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
+                updated_at REAL NOT NULL,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                claim_generation INTEGER NOT NULL DEFAULT 0,
+                claim_token_hash TEXT,
+                lease_expires_at REAL,
+                attempt_started_at REAL,
+                execution_started_at REAL,
+                next_retry_at REAL,
+                worker_process_id INTEGER,
+                worker_process_started_at REAL,
+                process_detail TEXT NOT NULL DEFAULT '{}'
             );
             CREATE INDEX IF NOT EXISTS missions_claim_idx
                 ON missions(minion_id, status, created_at);
@@ -221,6 +308,15 @@ def initialize() -> None:
                 occurred_at REAL,
                 received_at REAL NOT NULL,
                 UNIQUE(mission_id, event_id)
+            );
+            CREATE TABLE IF NOT EXISTS policy_events (
+                event_id TEXT PRIMARY KEY,
+                actor TEXT NOT NULL,
+                action TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                previous_hash TEXT,
+                policy_hash TEXT,
+                created_at REAL NOT NULL
             );
             CREATE TABLE IF NOT EXISTS agents (
                 agent_id TEXT PRIMARY KEY,
@@ -280,6 +376,22 @@ def initialize() -> None:
         except sqlite3.OperationalError:
             pass
         for col, col_def in [
+            ("attempt_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("claim_generation", "INTEGER NOT NULL DEFAULT 0"),
+            ("claim_token_hash", "TEXT"),
+            ("lease_expires_at", "REAL"),
+            ("attempt_started_at", "REAL"),
+            ("execution_started_at", "REAL"),
+            ("next_retry_at", "REAL"),
+            ("worker_process_id", "INTEGER"),
+            ("worker_process_started_at", "REAL"),
+            ("process_detail", "TEXT NOT NULL DEFAULT '{}'"),
+        ]:
+            try:
+                connection.execute(f"ALTER TABLE missions ADD COLUMN {col} {col_def}")
+            except sqlite3.OperationalError:
+                pass
+        for col, col_def in [
             ("name", "TEXT NOT NULL DEFAULT ''"),
             ("description", "TEXT DEFAULT ''"),
             ("runtime_type", "TEXT DEFAULT 'powershell'"),
@@ -330,6 +442,34 @@ def _insert_environment_key(connection: sqlite3.Connection, kind: str, token: st
 
 def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+def verify_claim_token(stored_hash: str | None, claim_token: str) -> None:
+    if not stored_hash or not hmac.compare_digest(stored_hash, _token_hash(claim_token)):
+        raise HTTPException(status_code=409, detail="Mission claim is no longer owned by this worker")
+
+
+def require_live_claim(connection: sqlite3.Connection, mission_id: str, minion_id: str, claim_token: str, now: float) -> sqlite3.Row:
+    row = connection.execute(
+        "SELECT status, claim_token_hash, lease_expires_at, attempt_started_at, execution_started_at, envelope, attempt_count FROM missions WHERE mission_id = ? AND minion_id = ?",
+        (mission_id, minion_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Mission not found")
+    verify_claim_token(row["claim_token_hash"], claim_token)
+    if row["lease_expires_at"] is None or float(row["lease_expires_at"]) <= now:
+        raise HTTPException(status_code=409, detail="Mission claim lease expired")
+    return row
+
+
+def mission_execution_settings() -> dict[str, int]:
+    return {
+        "max_attempts": MINION_MAX_ATTEMPTS,
+        "retry_interval_seconds": MINION_RETRY_INTERVAL_SECONDS,
+        "attempt_timeout_seconds": MINION_ATTEMPT_TIMEOUT_SECONDS,
+        "overall_timeout_seconds": MINION_OVERALL_TIMEOUT_SECONDS,
+        "heartbeat_interval_seconds": MINION_HEARTBEAT_INTERVAL_SECONDS,
+        "claim_lease_seconds": MINION_CLAIM_LEASE_SECONDS,
+    }
 
 
 def authenticated_principal(kind: str, authorization: str | None) -> str:
@@ -440,7 +580,7 @@ def validate_transition(current: str, new: str) -> None:
         "CLAIMED": {"MISSION_ACKNOWLEDGED", "MISSION_REJECTED"},
         "MISSION_ACKNOWLEDGED": {"MISSION_IN_PROGRESS", "MISSION_REJECTED", "MISSION_EXPIRED", "MISSION_CANCELLED"},
         "MISSION_IN_PROGRESS": {"MISSION_IN_PROGRESS", "MISSION_WAITING_FOR_REBOOT", "MISSION_COMPLETE_SUCCEEDED", "MISSION_COMPLETE_PARTIAL", "MISSION_COMPLETE_FAILED", "MISSION_EXPIRED", "MISSION_CANCELLED"},
-        "MISSION_WAITING_FOR_REBOOT": {"MISSION_IN_PROGRESS", "MISSION_COMPLETE_SUCCEEDED", "MISSION_COMPLETE_PARTIAL", "MISSION_COMPLETE_FAILED", "MISSION_EXPIRED", "MISSION_CANCELLED"},
+        "MISSION_WAITING_FOR_REBOOT": {"MISSION_WAITING_FOR_REBOOT", "MISSION_IN_PROGRESS", "MISSION_COMPLETE_SUCCEEDED", "MISSION_COMPLETE_PARTIAL", "MISSION_COMPLETE_FAILED", "MISSION_EXPIRED", "MISSION_CANCELLED"},
     }
     if new not in transitions.get(current, set()):
         raise HTTPException(status_code=409, detail=f"Invalid Mission status transition: {current} -> {new}")
@@ -463,6 +603,115 @@ def resolve_minion(capability: str, environment: str = "prod", scope_target: dic
         status_code=503,
         detail=f"No eligible Minion found for capability '{capability}' in environment '{environment}'",
     )
+
+
+def resolve_patch_policy(
+    requested_servers: list[str],
+    decision: str,
+    obligations: list[Any],
+) -> tuple[str, list[str], dict[str, Any]]:
+    obligation_data = {item.type: item.data for item in obligations}
+    target_policy = obligation_data.get("allowed_patch_targets", {})
+    constraints = obligation_data.get("patch_constraints", {})
+
+    allowed_servers = target_policy.get("servers") if isinstance(target_policy, dict) else None
+    normalized_allowed = {
+        str(server).strip().rstrip(".").lower()
+        for server in allowed_servers or []
+        if isinstance(server, str) and server.strip()
+    }
+    authorized_servers = [
+        server.strip().rstrip(".").lower()
+        for server in requested_servers
+        if server.strip().rstrip(".").lower() in normalized_allowed
+    ]
+
+    required_constraint_fields = {"patch_sources", "allowed_patch_types", "allow_reboot", "maintenance_window"}
+    maintenance_window = constraints.get("maintenance_window") if isinstance(constraints, dict) else None
+    valid_window = is_valid_maintenance_window(maintenance_window)
+    if (
+        decision not in {"ALLOW", "PAUSE"}
+        or not normalized_allowed
+        or not authorized_servers
+        or not isinstance(constraints, dict)
+        or not required_constraint_fields.issubset(constraints)
+        or not isinstance(constraints.get("patch_sources"), list)
+        or not set(constraints["patch_sources"]).issubset({"wsus", "nessus_catalog"})
+        or not isinstance(constraints.get("allowed_patch_types"), list)
+        or not isinstance(constraints.get("allow_reboot"), bool)
+        or not valid_window
+        or (
+            maintenance_window is not None
+            and constraints.get("outside_window_decision") not in {"PAUSE", "BLOCK"}
+        )
+    ):
+        return "BLOCK", [], {}
+
+    return decision, authorized_servers, constraints
+
+
+def parse_utc_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset().total_seconds() != 0:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def is_valid_maintenance_window(window: Any) -> bool:
+    if window is None:
+        return True
+    if not isinstance(window, dict) or set(window) != {"start_utc", "end_utc"}:
+        return False
+    start = parse_utc_timestamp(window.get("start_utc"))
+    end = parse_utc_timestamp(window.get("end_utc"))
+    return start is not None and end is not None and end > start
+
+
+def is_maintenance_window_open(window: Any, *, now: datetime | None = None) -> bool:
+    if window is None:
+        return True
+    if not is_valid_maintenance_window(window):
+        return False
+    current = now or datetime.now(timezone.utc)
+    start = parse_utc_timestamp(window["start_utc"])
+    end = parse_utc_timestamp(window["end_utc"])
+    return start <= current.astimezone(timezone.utc) < end
+
+
+def decide_patch_policy(
+    agent_id: str,
+    requested_servers: list[str],
+    context: dict[str, Any] | None = None,
+) -> tuple[str, list[str], dict[str, Any], list[Any], str]:
+    if policy_engine is None:
+        raise HTTPException(status_code=503, detail="Policy engine is not initialized")
+    policy_request = GateRequest(
+        actor={"type": "AGENT", "id": agent_id},
+        action={"name": "windows.patch.reconcile", "params": {}},
+        target={"servers": requested_servers},
+        context=context or {},
+    )
+    decision, obligations, policy_hash = policy_engine.decide(
+        {
+            "actor": policy_request.actor,
+            "action": policy_request.action,
+            "target": policy_request.target,
+            "context": policy_request.context,
+        }
+    )
+    decision, authorized_servers, constraints = resolve_patch_policy(
+        requested_servers,
+        decision,
+        obligations,
+    )
+    if decision == "ALLOW" and not is_maintenance_window_open(constraints.get("maintenance_window")):
+        decision = constraints.get("outside_window_decision", "BLOCK")
+    return decision, authorized_servers, constraints, obligations, policy_hash
 
 
 def dispatch_notifications(event_type: str, request_id: str, summary: str, details: dict[str, Any]) -> None:
@@ -541,13 +790,7 @@ def create_patch_request(request: PatchRequest, principal: str = Depends(require
     check_agent_rate_limit(principal, "submit")
 
     # Idempotent deduplication check: associate matching open request
-    normalized_params = json.dumps({
-        "servers": sorted(request.servers),
-        "patch_sources": sorted(request.patch_sources),
-        "allowed_patch_types": sorted(request.allowed_patch_types),
-        "allow_reboot": request.allow_reboot,
-        "maintenance_window": request.maintenance_window,
-    }, sort_keys=True)
+    normalized_params = json.dumps({"servers": sorted(request.servers)}, sort_keys=True)
 
     with connect() as connection:
         open_rows = connection.execute(
@@ -560,49 +803,27 @@ def create_patch_request(request: PatchRequest, principal: str = Depends(require
         ).fetchall()
         for open_row in open_rows:
             raw = json.loads(open_row["raw_request"] or "{}")
-            raw_normalized = json.dumps({
-                "servers": sorted(raw.get("servers", [])),
-                "patch_sources": sorted(raw.get("patch_sources", [])),
-                "allowed_patch_types": sorted(raw.get("allowed_patch_types", [])),
-                "allow_reboot": raw.get("allow_reboot", False),
-                "maintenance_window": raw.get("maintenance_window"),
-            }, sort_keys=True)
+            raw_normalized = json.dumps({"servers": sorted(raw.get("servers", []))}, sort_keys=True)
             if raw_normalized == normalized_params:
                 return {
                     "request_id": open_row["request_id"],
                     "status": "ACCEPTED",
                 }
 
-    assigned_minion_id = resolve_minion(
-        capability="windows.patch.reconcile",
-        environment="prod",
-        scope_target={"servers": request.servers},
-    )
-
     request_id = f"REQ-{uuid.uuid4().hex}"
     mission_id = f"MISSION-{uuid.uuid4().hex}"
-    if policy_engine is None:
-        raise HTTPException(status_code=503, detail="Policy engine is not initialized")
-    policy_request = GateRequest(
-        actor={"type": "AGENT", "id": principal},
-        action={
-            "name": "windows.patch.reconcile",
-            "params": {
-                "patch_sources": request.patch_sources,
-                "allowed_patch_types": request.allowed_patch_types,
-                "allow_reboot": request.allow_reboot,
-            },
-        },
-        target={"servers": request.servers},
-        context={"maintenance_window": request.maintenance_window},
+    decision, authorized_servers, patch_constraints, obligations, policy_hash = decide_patch_policy(
+        principal,
+        request.servers,
     )
-    decision, obligations, policy_hash = policy_engine.decide(
-        {
-            "actor": policy_request.actor,
-            "action": policy_request.action,
-            "target": policy_request.target,
-            "context": policy_request.context,
-        }
+    assigned_minion_id = (
+        resolve_minion(
+            capability="windows.patch.reconcile",
+            environment="prod",
+            scope_target={"servers": authorized_servers},
+        )
+        if decision in {"ALLOW", "PAUSE"}
+        else "UNASSIGNED"
     )
     status_by_decision = {"ALLOW": "QUEUED", "PAUSE": "WAITING_FOR_APPROVAL", "BLOCK": "CLOSED"}
     mission_state = status_by_decision.get(decision, "CLOSED")
@@ -612,15 +833,17 @@ def create_patch_request(request: PatchRequest, principal: str = Depends(require
         "mission_id": mission_id,
         "minion_id": assigned_minion_id,
         "capability": "windows.patch.reconcile",
-        "target": {"servers": request.servers},
+        "target": {"servers": authorized_servers},
         "parameters": {
-            "patch_sources": request.patch_sources,
+            "patch_sources": patch_constraints.get("patch_sources", []),
             "patch_constraints": {
-                "allowed_patch_types": request.allowed_patch_types,
-                "allow_reboot": request.allow_reboot,
+                "allowed_patch_types": patch_constraints.get("allowed_patch_types", []),
+                "allow_reboot": patch_constraints.get("allow_reboot", False),
+                "outside_window_decision": patch_constraints.get("outside_window_decision"),
             },
-            "maintenance_window": request.maintenance_window,
+            "maintenance_window": patch_constraints.get("maintenance_window"),
         },
+        "execution": mission_execution_settings(),
         "issued_at": time.time(),
         "expires_at": time.time() + 86400,
         "nonce": secrets.token_urlsafe(24),
@@ -638,7 +861,7 @@ def create_patch_request(request: PatchRequest, principal: str = Depends(require
             (mission_id, request_id, principal, assigned_minion_id, json.dumps(envelope), mission_state, raw_req_json, time.time(), time.time()),
         )
     if decision == "PAUSE":
-        dispatch_notifications("PAUSE_CREATED", request_id, "Patch reconciliation paused pending approval", {"servers": request.servers})
+            dispatch_notifications("PAUSE_CREATED", request_id, "Patch reconciliation paused pending approval", {"servers": authorized_servers})
     return {"request_id": request_id, "status": "ACCEPTED" if decision != "BLOCK" else "CLOSED"}
 
 
@@ -746,22 +969,238 @@ def minion_check_in(minion_id: str, principal: str = Depends(require_minion)) ->
     return {"minion_id": minion_id, "status": "CONNECTED", "server_time": now}
 
 
+@app.post("/internal/v1/minions/{minion_id}/missions/{mission_id}/heartbeat")
+def mission_heartbeat(
+    minion_id: str,
+    mission_id: str,
+    request: MissionHeartbeatRequest,
+    principal: str = Depends(require_minion),
+) -> dict[str, Any]:
+    if minion_id != principal:
+        raise HTTPException(status_code=403, detail="Minion identity not authorized")
+    detail_bytes = json.dumps(request.detail, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    if len(detail_bytes) > 16 * 1024:
+        raise HTTPException(status_code=413, detail="Mission heartbeat detail exceeds the 16 KiB limit")
+
+    now = time.time()
+    expired = False
+    with transaction() as connection:
+        row = require_live_claim(connection, mission_id, minion_id, request.claim_token, now)
+        if row["status"] not in {"CLAIMED", "MISSION_ACKNOWLEDGED", "MISSION_IN_PROGRESS", "MISSION_WAITING_FOR_REBOOT"}:
+            raise HTTPException(status_code=409, detail="Mission is not in an active state")
+        envelope = json.loads(row["envelope"])
+        execution = envelope.get("execution", {})
+        overall_timeout = int(execution.get("overall_timeout_seconds", MINION_OVERALL_TIMEOUT_SECONDS))
+        attempt_timeout = int(execution.get("attempt_timeout_seconds", MINION_ATTEMPT_TIMEOUT_SECONDS))
+        retry_interval = int(execution.get("retry_interval_seconds", MINION_RETRY_INTERVAL_SECONDS))
+        max_attempts = int(execution.get("max_attempts", MINION_MAX_ATTEMPTS))
+        lease_seconds = int(execution.get("claim_lease_seconds", MINION_CLAIM_LEASE_SECONDS))
+        execution_started_at = row["execution_started_at"] or row["attempt_started_at"]
+        if execution_started_at is not None and now >= float(execution_started_at) + overall_timeout:
+            connection.execute(
+                "UPDATE missions SET status = 'MISSION_EXPIRED', claim_token_hash = NULL, lease_expires_at = NULL, updated_at = ? WHERE mission_id = ?",
+                (now, mission_id),
+            )
+            connection.execute(
+                "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (f"EVT-OVERALL-EXPIRED-{uuid.uuid4().hex}", mission_id, "MISSION_EXPIRED", json.dumps({"reason": "OVERALL_TIMEOUT"}), now, now),
+            )
+            expired = True
+            lease_expires_at = None
+        elif row["attempt_started_at"] is not None and now >= float(row["attempt_started_at"]) + attempt_timeout:
+            if int(row["attempt_count"]) >= max_attempts:
+                connection.execute(
+                    "UPDATE missions SET status = 'MISSION_EXPIRED', claim_token_hash = NULL, lease_expires_at = NULL, updated_at = ? WHERE mission_id = ?",
+                    (now, mission_id),
+                )
+                connection.execute(
+                    "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (f"EVT-ATTEMPT-EXPIRED-{uuid.uuid4().hex}", mission_id, "MISSION_EXPIRED", json.dumps({"reason": "ATTEMPT_TIMEOUT", "attempts": int(row["attempt_count"])}), now, now),
+                )
+            else:
+                connection.execute(
+                    "UPDATE missions SET status = 'QUEUED', claim_token_hash = NULL, lease_expires_at = NULL, next_retry_at = ?, updated_at = ? WHERE mission_id = ?",
+                    (now + retry_interval, now, mission_id),
+                )
+                connection.execute(
+                    "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (f"EVT-ATTEMPT-RETRY-{uuid.uuid4().hex}", mission_id, "QUEUED", json.dumps({"reason": "ATTEMPT_TIMEOUT", "attempts": int(row["attempt_count"]), "retry_at": now + retry_interval}), now, now),
+                )
+            expired = True
+            lease_expires_at = None
+        else:
+            lease_expires_at = now + lease_seconds
+            connection.execute(
+                "UPDATE missions SET lease_expires_at = ?, worker_process_id = ?, worker_process_started_at = ?, process_detail = ?, updated_at = ? WHERE mission_id = ?",
+                (
+                    lease_expires_at,
+                    request.process_id,
+                    request.process_started_at,
+                    json.dumps(request.detail, ensure_ascii=False),
+                    now,
+                    mission_id,
+                ),
+            )
+            connection.execute("UPDATE minions SET last_contact_at = ? WHERE minion_id = ?", (now, minion_id))
+    if expired:
+        raise HTTPException(status_code=409, detail="Mission overall timeout expired")
+    return {
+        "mission_id": mission_id,
+        "status": "LEASE_RENEWED",
+        "server_time": now,
+        "lease_expires_at": lease_expires_at,
+    }
+
+
 @app.post("/internal/v1/minions/{minion_id}/missions/claim")
 def claim_mission(minion_id: str, principal: str = Depends(require_minion)) -> dict[str, Any] | None:
     if minion_id != principal:
         raise HTTPException(status_code=403, detail="Minion identity not authorized")
+    outside_window_notifications: list[tuple[str, str]] = []
+    claimed_mission: dict[str, Any] | None = None
+    retry_deadlines: list[float] = []
     with transaction() as connection:
-        row = connection.execute(
-            "SELECT mission_id, envelope FROM missions WHERE minion_id = ? AND status = 'QUEUED' ORDER BY created_at LIMIT 1",
+        rows = connection.execute(
+            "SELECT mission_id, request_id, envelope, status, attempt_count, claim_generation, lease_expires_at, attempt_started_at, execution_started_at, next_retry_at FROM missions WHERE minion_id = ? AND status IN ('QUEUED', 'CLAIMED', 'MISSION_ACKNOWLEDGED', 'MISSION_IN_PROGRESS', 'MISSION_WAITING_FOR_REBOOT') ORDER BY created_at",
             (minion_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        connection.execute(
-            "UPDATE missions SET status = 'CLAIMED', updated_at = ? WHERE mission_id = ? AND status = 'QUEUED'",
-            (time.time(), row["mission_id"]),
+        ).fetchall()
+        now = time.time()
+        for row in rows:
+            envelope = json.loads(row["envelope"])
+            execution = envelope.get("execution", {})
+            max_attempts = int(execution.get("max_attempts", MINION_MAX_ATTEMPTS))
+            retry_interval = int(execution.get("retry_interval_seconds", MINION_RETRY_INTERVAL_SECONDS))
+            attempt_timeout = int(execution.get("attempt_timeout_seconds", MINION_ATTEMPT_TIMEOUT_SECONDS))
+            overall_timeout = int(execution.get("overall_timeout_seconds", MINION_OVERALL_TIMEOUT_SECONDS))
+            lease_seconds = int(execution.get("claim_lease_seconds", MINION_CLAIM_LEASE_SECONDS))
+            status_before_claim = str(row["status"])
+            is_new_attempt = status_before_claim == "QUEUED"
+
+            if is_new_attempt:
+                next_retry_at = row["next_retry_at"]
+                if next_retry_at is not None and float(next_retry_at) > now:
+                    retry_deadlines.append(float(next_retry_at))
+                    continue
+            else:
+                lease_expires_at = row["lease_expires_at"]
+                if lease_expires_at is not None and float(lease_expires_at) > now:
+                    retry_deadlines.append(float(lease_expires_at))
+                    continue
+
+            execution_started_at = row["execution_started_at"]
+            if execution_started_at is not None and now >= float(execution_started_at) + overall_timeout:
+                connection.execute(
+                    "UPDATE missions SET status = 'MISSION_EXPIRED', claim_token_hash = NULL, lease_expires_at = NULL, updated_at = ? WHERE mission_id = ?",
+                    (now, row["mission_id"]),
+                )
+                connection.execute(
+                    "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (f"EVT-EXPIRED-{uuid.uuid4().hex}", row["mission_id"], "MISSION_EXPIRED", json.dumps({"reason": "OVERALL_TIMEOUT"}), now, now),
+                )
+                continue
+
+            attempt_started_at = row["attempt_started_at"]
+            if not is_new_attempt and attempt_started_at is not None and now >= float(attempt_started_at) + attempt_timeout:
+                if int(row["attempt_count"]) >= max_attempts:
+                    connection.execute(
+                        "UPDATE missions SET status = 'MISSION_EXPIRED', claim_token_hash = NULL, lease_expires_at = NULL, updated_at = ? WHERE mission_id = ?",
+                        (now, row["mission_id"]),
+                    )
+                    connection.execute(
+                        "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
+                        (f"EVT-EXPIRED-{uuid.uuid4().hex}", row["mission_id"], "MISSION_EXPIRED", json.dumps({"reason": "ATTEMPT_TIMEOUT", "attempts": int(row["attempt_count"])}), now, now),
+                    )
+                    continue
+                connection.execute(
+                    "UPDATE missions SET status = 'QUEUED', claim_token_hash = NULL, lease_expires_at = NULL, next_retry_at = ?, updated_at = ? WHERE mission_id = ?",
+                    (now + retry_interval, now, row["mission_id"]),
+                )
+                connection.execute(
+                    "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (f"EVT-ATTEMPT-TIMEOUT-{uuid.uuid4().hex}", row["mission_id"], "QUEUED", json.dumps({"reason": "ATTEMPT_TIMEOUT", "attempts": int(row["attempt_count"]), "retry_at": now + retry_interval}), now, now),
+                )
+                retry_deadlines.append(now + retry_interval)
+                continue
+
+            if is_new_attempt and int(row["attempt_count"]) >= max_attempts:
+                connection.execute(
+                    "UPDATE missions SET status = 'MISSION_EXPIRED', updated_at = ? WHERE mission_id = ?",
+                    (now, row["mission_id"]),
+                )
+                connection.execute(
+                    "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (f"EVT-ATTEMPTS-{uuid.uuid4().hex}", row["mission_id"], "MISSION_EXPIRED", json.dumps({"reason": "MAX_ATTEMPTS_EXHAUSTED", "attempts": int(row["attempt_count"])}), now, now),
+                )
+                continue
+
+            window = envelope.get("parameters", {}).get("maintenance_window")
+            if not is_maintenance_window_open(window, now=datetime.fromtimestamp(now, timezone.utc)):
+                outside_decision = envelope.get("parameters", {}).get("patch_constraints", {}).get("outside_window_decision")
+                if outside_decision not in {"PAUSE", "BLOCK"}:
+                    outside_decision = "BLOCK"
+                next_status = "WAITING_FOR_APPROVAL" if outside_decision == "PAUSE" else "CLOSED"
+                envelope["policy_decision"] = outside_decision
+                envelope.pop("signature", None)
+                envelope["signature"] = signing_private_key().sign(canonical_json(envelope)).hex()
+                connection.execute(
+                    "UPDATE missions SET envelope = ?, status = ?, updated_at = ? WHERE mission_id = ? AND status = 'QUEUED'",
+                    (json.dumps(envelope), next_status, now, row["mission_id"]),
+                )
+                connection.execute(
+                    "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        f"EVT-WINDOW-{uuid.uuid4().hex}",
+                        row["mission_id"],
+                        next_status,
+                        json.dumps({"reason": "OUTSIDE_MAINTENANCE_WINDOW", "decision": outside_decision}),
+                        now,
+                        now,
+                    ),
+                )
+                if outside_decision == "PAUSE":
+                    outside_window_notifications.append((row["request_id"], row["mission_id"]))
+                continue
+
+            connection.execute(
+                "UPDATE missions SET status = ?, attempt_count = ?, claim_generation = ?, claim_token_hash = ?, lease_expires_at = ?, attempt_started_at = ?, execution_started_at = COALESCE(execution_started_at, ?), next_retry_at = NULL, worker_process_id = CASE WHEN ? THEN NULL ELSE worker_process_id END, worker_process_started_at = CASE WHEN ? THEN NULL ELSE worker_process_started_at END, process_detail = CASE WHEN ? THEN '{}' ELSE process_detail END, updated_at = ? WHERE mission_id = ?",
+                (
+                    "CLAIMED" if is_new_attempt else status_before_claim,
+                    int(row["attempt_count"]) + (1 if is_new_attempt else 0),
+                    int(row["claim_generation"]) + 1,
+                    _token_hash(claim_token := secrets.token_urlsafe(48)),
+                    now + lease_seconds,
+                    now if is_new_attempt else attempt_started_at,
+                    now,
+                    is_new_attempt,
+                    is_new_attempt,
+                    is_new_attempt,
+                    now,
+                    row["mission_id"],
+                ),
+            )
+            claimed_mission = {
+                "mission_id": row["mission_id"],
+                "envelope": envelope,
+                "claim_token": claim_token,
+                "attempt": int(row["attempt_count"]) + (1 if is_new_attempt else 0),
+                "claim_generation": int(row["claim_generation"]) + 1,
+                "resume": not is_new_attempt,
+                "resume_status": status_before_claim if not is_new_attempt else "CLAIMED",
+                "lease_expires_at": now + lease_seconds,
+            }
+            break
+
+        if claimed_mission is None and retry_deadlines:
+            claimed_mission = {"retry_after_seconds": max(1, int(min(retry_deadlines) - now + 0.999))}
+
+    for request_id, mission_id in outside_window_notifications:
+        dispatch_notifications(
+            "PAUSE_CREATED",
+            request_id,
+            "Patch reconciliation is outside its approved maintenance window",
+            {"mission_id": mission_id, "reason": "OUTSIDE_MAINTENANCE_WINDOW"},
         )
-        return {"mission_id": row["mission_id"], "envelope": json.loads(row["envelope"])}
+    return claimed_mission
 
 
 @app.post("/internal/v1/minions/{minion_id}/missions/{mission_id}/status")
@@ -776,11 +1215,29 @@ def mission_status(
     received = time.time()
     with transaction() as connection:
         row = connection.execute(
-            "SELECT status FROM missions WHERE mission_id = ? AND minion_id = ?",
+            "SELECT status, claim_token_hash, lease_expires_at, attempt_started_at, execution_started_at, envelope, attempt_count FROM missions WHERE mission_id = ? AND minion_id = ?",
             (mission_id, minion_id),
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Mission not found")
+        envelope = json.loads(row["envelope"])
+        lease_seconds = int(envelope.get("execution", {}).get("claim_lease_seconds", MINION_CLAIM_LEASE_SECONDS))
+        existing_event = connection.execute(
+            "SELECT mission_id, status, detail, occurred_at FROM mission_events WHERE event_id = ?",
+            (request.event_id,),
+        ).fetchone()
+        if existing_event is not None:
+            if (
+                existing_event["mission_id"] == mission_id
+                and existing_event["status"] == request.status
+                and json.loads(existing_event["detail"]) == request.detail
+                and existing_event["occurred_at"] == request.occurred_at
+            ):
+                verify_claim_token(row["claim_token_hash"], request.claim_token)
+                return {"event_id": request.event_id, "status": "ALREADY_RECORDED"}
+            raise HTTPException(status_code=409, detail="Event ID is already used for a different status")
+
+        require_live_claim(connection, mission_id, minion_id, request.claim_token, received)
         validate_transition(str(row["status"]), request.status)
         try:
             connection.execute(
@@ -788,10 +1245,36 @@ def mission_status(
                 (request.event_id, mission_id, request.status, json.dumps(request.detail), request.occurred_at, received),
             )
         except sqlite3.IntegrityError:
-            return {"event_id": request.event_id, "status": "ALREADY_RECORDED"}
+            existing_event = connection.execute(
+                "SELECT mission_id, status, detail, occurred_at FROM mission_events WHERE event_id = ?",
+                (request.event_id,),
+            ).fetchone()
+            if (
+                existing_event is not None
+                and existing_event["mission_id"] == mission_id
+                and existing_event["status"] == request.status
+                and json.loads(existing_event["detail"]) == request.detail
+                and existing_event["occurred_at"] == request.occurred_at
+            ):
+                verify_claim_token(row["claim_token_hash"], request.claim_token)
+                return {"event_id": request.event_id, "status": "ALREADY_RECORDED"}
+            raise HTTPException(status_code=409, detail="Event ID is already used for a different status") from None
+        terminal_status = request.status in {"MISSION_REJECTED", "MISSION_CANCELLED", "MISSION_EXPIRED"}
         connection.execute(
-            "UPDATE missions SET status = ?, updated_at = ? WHERE mission_id = ?",
-            (request.status, received, mission_id),
+            "UPDATE missions SET status = ?, worker_process_id = COALESCE(?, worker_process_id), worker_process_started_at = COALESCE(?, worker_process_started_at), process_detail = CASE WHEN ? THEN ? ELSE process_detail END, execution_started_at = CASE WHEN ? = 'MISSION_IN_PROGRESS' THEN COALESCE(execution_started_at, ?) ELSE execution_started_at END, lease_expires_at = CASE WHEN ? THEN NULL ELSE ? END, updated_at = ? WHERE mission_id = ?",
+            (
+                request.status,
+                request.detail.get("worker_process_id"),
+                request.detail.get("worker_process_started_at"),
+                "process_detail" in request.detail,
+                json.dumps(request.detail.get("process_detail", {}), ensure_ascii=False),
+                request.status,
+                received,
+                terminal_status,
+                received + lease_seconds,
+                received,
+                mission_id,
+            ),
         )
     return {"event_id": request.event_id, "status": "RECORDED"}
 
@@ -802,19 +1285,38 @@ def mission_result(
     mission_id: str,
     request: MissionResultRequest,
     principal: str = Depends(require_minion),
-) -> dict[str, str]:
+) -> dict[str, Any]:
     if minion_id != principal:
         raise HTTPException(status_code=403, detail="Minion identity not authorized")
     if request.status not in {"MISSION_COMPLETE_SUCCEEDED", "MISSION_COMPLETE_PARTIAL", "MISSION_COMPLETE_FAILED", "MISSION_REJECTED", "MISSION_CANCELLED", "MISSION_EXPIRED"}:
         raise HTTPException(status_code=400, detail="Result status must be terminal")
+    result_bytes = json.dumps(request.result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    if len(result_bytes) > MAX_MINION_RESULT_BYTES:
+        raise HTTPException(status_code=413, detail="Mission result exceeds the 256 KiB limit")
     received = time.time()
     with transaction() as connection:
         row = connection.execute(
-            "SELECT status FROM missions WHERE mission_id = ? AND minion_id = ?",
+            "SELECT status, claim_token_hash, lease_expires_at, attempt_started_at, execution_started_at, envelope, attempt_count FROM missions WHERE mission_id = ? AND minion_id = ?",
             (mission_id, minion_id),
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Mission not found")
+        result_detail = {"result": request.result, "signature": request.signature}
+        existing_event = connection.execute(
+            "SELECT mission_id, status, detail FROM mission_events WHERE event_id = ?",
+            (request.event_id,),
+        ).fetchone()
+        if existing_event is not None:
+            if (
+                existing_event["mission_id"] == mission_id
+                and existing_event["status"] == request.status
+                and json.loads(existing_event["detail"]) == result_detail
+            ):
+                verify_claim_token(row["claim_token_hash"], request.claim_token)
+                return {"status": "ALREADY_RECORDED"}
+            raise HTTPException(status_code=409, detail="Event ID is already used for a different result")
+
+        require_live_claim(connection, mission_id, minion_id, request.claim_token, received)
         validate_transition(str(row["status"]), request.status)
         signed_payload = {
             "event_id": request.event_id,
@@ -827,14 +1329,47 @@ def mission_result(
         try:
             connection.execute(
                 "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (request.event_id, mission_id, request.status, json.dumps({"result": request.result, "signature": request.signature}), received, received),
+                (request.event_id, mission_id, request.status, json.dumps(result_detail), received, received),
             )
         except sqlite3.IntegrityError:
-            return {"status": "ALREADY_RECORDED"}
-        connection.execute(
-            "UPDATE missions SET status = ?, updated_at = ? WHERE mission_id = ?",
-            (request.status, received, mission_id),
+            existing_event = connection.execute(
+                "SELECT mission_id, status, detail FROM mission_events WHERE event_id = ?",
+                (request.event_id,),
+            ).fetchone()
+            if (
+                existing_event is not None
+                and existing_event["mission_id"] == mission_id
+                and existing_event["status"] == request.status
+                and json.loads(existing_event["detail"]) == result_detail
+            ):
+                return {"status": "ALREADY_RECORDED"}
+            raise HTTPException(status_code=409, detail="Event ID is already used for a different result") from None
+        envelope = json.loads(row["envelope"])
+        execution = envelope.get("execution", {})
+        max_attempts = int(execution.get("max_attempts", MINION_MAX_ATTEMPTS))
+        retry_interval = int(execution.get("retry_interval_seconds", MINION_RETRY_INTERVAL_SECONDS))
+        overall_timeout = int(execution.get("overall_timeout_seconds", MINION_OVERALL_TIMEOUT_SECONDS))
+        execution_started_at = row["execution_started_at"] or row["attempt_started_at"] or received
+        retryable = (
+            request.status == "MISSION_COMPLETE_FAILED"
+            and request.result.get("retryable") is True
+            and int(row["attempt_count"]) < max_attempts
+            and received < float(execution_started_at) + overall_timeout
         )
+        if retryable:
+            retry_at = received + retry_interval
+            connection.execute(
+                "UPDATE missions SET status = 'QUEUED', claim_token_hash = NULL, lease_expires_at = NULL, attempt_started_at = NULL, next_retry_at = ?, worker_process_id = NULL, worker_process_started_at = NULL, updated_at = ? WHERE mission_id = ?",
+                (retry_at, received, mission_id),
+            )
+        else:
+            retry_at = None
+            connection.execute(
+                "UPDATE missions SET status = ?, lease_expires_at = NULL, worker_process_id = NULL, worker_process_started_at = NULL, updated_at = ? WHERE mission_id = ?",
+                (request.status, received, mission_id),
+            )
+    if retry_at is not None:
+        return {"status": "RETRY_SCHEDULED", "retry_at": retry_at}
     dispatch_notifications(request.status, mission_id, f"Mission {mission_id} reached terminal state {request.status}", {"minion_id": minion_id, "result": request.result})
     return {"status": "RECORDED"}
 
@@ -933,35 +1468,38 @@ def approve_request(
             capability_name = raw_req["capability"]
             target_obj = target_dict
         else:
-            policy_request = GateRequest(
-                actor={"type": "AGENT", "id": row["agent_id"]},
-                action={
-                    "name": "windows.patch.reconcile",
-                    "params": {
-                        "patch_sources": raw_req.get("patch_sources", ["wsus", "nessus_catalog"]),
-                        "allowed_patch_types": raw_req.get("allowed_patch_types", ["SECURITY"]),
-                        "allow_reboot": raw_req.get("allow_reboot", False),
-                    },
-                },
-                target={"servers": raw_req.get("servers", [])},
-                context={
-                    "maintenance_window": raw_req.get("maintenance_window"),
-                    "approval": approval_evidence,
-                },
+            new_decision, authorized_servers, patch_constraints, new_obligations, new_policy_hash = decide_patch_policy(
+                row["agent_id"],
+                raw_req.get("servers", []),
+                context={"approval": approval_evidence},
             )
             capability_name = "windows.patch.reconcile"
-            target_obj = {"servers": raw_req.get("servers", [])}
-
-        new_decision, new_obligations, new_policy_hash = policy_engine.decide(
-            {
-                "actor": policy_request.actor,
-                "action": policy_request.action,
-                "target": policy_request.target,
-                "context": policy_request.context,
+            target_obj = {"servers": authorized_servers}
+            envelope = json.loads(row["envelope"])
+            envelope["target"] = target_obj
+            envelope["parameters"] = {
+                "patch_sources": patch_constraints.get("patch_sources", []),
+                "patch_constraints": {
+                    "allowed_patch_types": patch_constraints.get("allowed_patch_types", []),
+                    "allow_reboot": patch_constraints.get("allow_reboot", False),
+                    "outside_window_decision": patch_constraints.get("outside_window_decision"),
+                },
+                "maintenance_window": patch_constraints.get("maintenance_window"),
             }
-        )
 
-        envelope = json.loads(row["envelope"])
+            if not authorized_servers:
+                new_decision = "BLOCK"
+
+        if "capability" in raw_req:
+            new_decision, new_obligations, new_policy_hash = policy_engine.decide(
+                {
+                    "actor": policy_request.actor,
+                    "action": policy_request.action,
+                    "target": policy_request.target,
+                    "context": policy_request.context,
+                }
+            )
+            envelope = json.loads(row["envelope"])
         envelope["policy_decision"] = new_decision
         envelope["policy_hash"] = new_policy_hash
         envelope["approval_evidence"] = approval_evidence
@@ -1047,14 +1585,95 @@ def reject_request(
     }
 
 
-@app.post("/admin/v1/policy/reload")
-def reload_policy(_admin: str = Depends(require_admin)) -> dict[str, str]:
+@app.get("/admin/v1/policy")
+def get_policy(_admin: str = Depends(require_admin)) -> dict[str, str]:
+    with POLICY_LOCK:
+        try:
+            content = POLICY_PATH.read_text(encoding="utf-8")
+        except OSError:
+            raise HTTPException(status_code=503, detail="Configured policy file is unavailable") from None
+        return {
+            "content": content,
+            "file_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            "active_policy_hash": policy_engine.policy_hash_full if policy_engine else "",
+        }
+
+
+@app.post("/admin/v1/policy/validate")
+def validate_policy(request: PolicyContentRequest, _admin: str = Depends(require_admin)) -> dict[str, Any]:
+    _, issues, is_valid = validate_policy_content(request.content)
+    return {"is_valid": is_valid, "issues": issues}
+
+
+@app.post("/admin/v1/policy")
+def save_policy(request: SavePolicyRequest, admin: str = Depends(require_admin)) -> dict[str, str]:
     global policy_engine
-    try:
-        policy_engine = PolicyEngine(str(POLICY_PATH))
-    except OSError:
-        raise HTTPException(status_code=503, detail="Configured policy file is unavailable") from None
-    return {"status": "RELOADED", "policy_hash": policy_engine.policy_hash}
+    _, issues, is_valid = validate_policy_content(request.content)
+    if not is_valid:
+        try:
+            record_policy_event(admin, "SAVE_AND_ACTIVATE", "VALIDATION_FAILED", None, None)
+        except sqlite3.Error:
+            pass
+        raise HTTPException(status_code=422, detail={"message": "Policy validation failed", "issues": issues})
+
+    content_bytes = request.content.encode("utf-8")
+    with POLICY_LOCK:
+        try:
+            current_bytes = POLICY_PATH.read_bytes()
+            current_hash = hashlib.sha256(current_bytes).hexdigest()
+            if not hmac.compare_digest(current_hash, request.expected_file_hash.lower()):
+                raise HTTPException(status_code=409, detail="Policy changed since it was loaded; reload before saving")
+            file_mode = stat.S_IMODE(POLICY_PATH.stat().st_mode)
+            backup_path = POLICY_PATH.with_name(f"{POLICY_PATH.name}.{time.time_ns()}.bak")
+            shutil.copy2(POLICY_PATH, backup_path)
+            write_policy_atomically(content_bytes, file_mode)
+            candidate = PolicyEngine(str(POLICY_PATH))
+            candidate_hash = candidate.policy_hash_full
+            record_policy_event(admin, "SAVE_AND_ACTIVATE", "SUCCEEDED", current_hash, candidate_hash)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            try:
+                if "current_bytes" in locals():
+                    write_policy_atomically(current_bytes, file_mode)
+            except OSError:
+                raise HTTPException(status_code=503, detail="Policy activation failed and automatic rollback failed") from None
+            raise HTTPException(status_code=503, detail="Policy could not be saved and activated") from exc
+
+        candidate.policy_path = str(POLICY_PATH)
+        policy_engine = candidate
+        return {
+            "status": "RELOADED",
+            "policy_hash": candidate.policy_hash,
+            "policy_hash_full": candidate_hash,
+            "backup_file": backup_path.name,
+        }
+
+
+@app.post("/admin/v1/policy/reload")
+def reload_policy(admin: str = Depends(require_admin)) -> dict[str, str]:
+    global policy_engine
+    with POLICY_LOCK:
+        previous_hash = policy_engine.policy_hash_full if policy_engine else None
+        try:
+            content = POLICY_PATH.read_text(encoding="utf-8")
+            _, issues, is_valid = validate_policy_content(content)
+            if not is_valid:
+                record_policy_event(admin, "RELOAD", "VALIDATION_FAILED", previous_hash, None)
+                raise HTTPException(status_code=422, detail={"message": "Configured policy is invalid", "issues": issues})
+            candidate = PolicyEngine(str(POLICY_PATH))
+            record_policy_event(admin, "RELOAD", "SUCCEEDED", previous_hash, candidate.policy_hash_full)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            try:
+                record_policy_event(admin, "RELOAD", "FAILED", previous_hash, None)
+            except sqlite3.Error:
+                pass
+            connection.execute("CREATE INDEX IF NOT EXISTS missions_lease_idx ON missions(status, lease_expires_at)")
+            raise HTTPException(status_code=503, detail="Configured policy could not be reloaded") from exc
+        policy_engine = candidate
+        return {"status": "RELOADED", "policy_hash": candidate.policy_hash, "policy_hash_full": candidate.policy_hash_full}
 
 
 @app.post("/admin/v1/credentials/{kind}/{principal_id}", status_code=status.HTTP_201_CREATED)

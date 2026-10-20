@@ -4,27 +4,68 @@ default:
   decision: BLOCK
 
 rules:
-  # Patching demo rules
+  # Patching targets and execution settings are policy-owned.
+  - name: pause-patch-test-host-for-approval
+    when:
+      - path: action.name
+        eq: windows.patch.reconcile
+      - path: target.servers
+        eq: [patch-reboot-test.example.gov]
+      - path: context.approval.approved
+        exists: false
+    obligations:
+      - type: allowed_patch_targets
+        servers: [patch-reboot-test.example.gov]
+      - type: patch_constraints
+        patch_sources: [wsus, nessus_catalog]
+        allowed_patch_types: [SECURITY]
+        allow_reboot: true
+        maintenance_window:
+          start_utc: "2026-10-16T00:00:00Z"
+          end_utc: "2026-10-16T04:00:00Z"
+        outside_window_decision: PAUSE
+      - type: allowed_patch_executables
+        executables: [msiexec.exe]
+    decision: PAUSE
   - name: allow-demo-security-patching-without-reboot
     when:
       - path: action.name
         eq: windows.patch.reconcile
       - path: target.servers
-        exists: true
-      - path: action.params.allowed_patch_types
-        eq: [SECURITY]
-      - path: action.params.allow_reboot
-        eq: false
+        eq: [patch-test.example.gov]
+    obligations:
+      - type: allowed_patch_targets
+        servers: [patch-test.example.gov]
+      - type: patch_constraints
+        patch_sources: [wsus, nessus_catalog]
+        allowed_patch_types: [SECURITY]
+        allow_reboot: false
+        maintenance_window: null
+      - type: allowed_patch_executables
+        executables: [msiexec.exe]
     decision: ALLOW
-  - name: pause-when-reboot-is-permitted
+  - name: allow-demo-patch-test-host-after-approval
     when:
       - path: action.name
         eq: windows.patch.reconcile
-      - path: action.params.allowed_patch_types
-        eq: [SECURITY]
-      - path: action.params.allow_reboot
+      - path: target.servers
+        eq: [patch-reboot-test.example.gov]
+      - path: context.approval.approved
         eq: true
-    decision: PAUSE
+    obligations:
+      - type: allowed_patch_targets
+        servers: [patch-reboot-test.example.gov]
+      - type: patch_constraints
+        patch_sources: [wsus, nessus_catalog]
+        allowed_patch_types: [SECURITY]
+        allow_reboot: true
+        maintenance_window:
+          start_utc: "2026-10-16T00:00:00Z"
+          end_utc: "2026-10-16T04:00:00Z"
+        outside_window_decision: PAUSE
+      - type: allowed_patch_executables
+        executables: [msiexec.exe]
+    decision: ALLOW
 
   # Stripe demo rules
   - name: allow_small_refund

@@ -144,11 +144,13 @@ def test_canonical_action_api_allow_pause_approval(tmp_path: Path, monkeypatch) 
         # Agent sees PENDING
         assert client.get(f"/api/v1/requests/{req_id2}", headers=agent_headers).json()["status"] == "PENDING"
 
-        # Not claimable while paused
-        assert client.post(
+        # The active first Mission owns a lease; the paused request is not claimable.
+        not_claimable = client.post(
             "/internal/v1/minions/REFUND-MINION-01/missions/claim",
             headers=minion_headers,
-        ).json() is None
+        ).json()
+        assert not_claimable is not None
+        assert 1 <= not_claimable["retry_after_seconds"] <= 120
 
         # Admin approves
         approve_resp = client.post(

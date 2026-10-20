@@ -6,9 +6,9 @@
 
 ## 1. Purpose
 
-Evaluate and plan how to run `sg-service` on both Linux container platforms (including OpenShift) and Windows Server 2019. The current image is Linux-based. That works for Linux container platforms, but Windows Server's Docker Engine runs Windows containers, not Linux containers. This makes a same-host deployment with a Windows Patching Minion problematic when the host is restricted to Windows Server 2019.
+Evaluate and plan how to run `sg-service` on both Linux container platforms (including OpenShift) and Windows Server 2022. The current image is Linux-based. That works for Linux container platforms, but Windows Server's Docker Engine runs Windows containers, not Linux containers. This makes a same-host deployment with a Windows Patching Minion problematic when the host is restricted to Windows Server 2022.
 
-This plan proposes keeping the existing Linux image for OpenShift/Linux and investigating a separate Windows Server 2019 image built from the same Python application source. The first step is a small feasibility spike, not an immediate rewrite or a commitment to Windows containers as the only deployment model.
+This plan proposes keeping the existing Linux image for OpenShift/Linux and investigating a separate Windows Server 2022 image built from the same Python application source. The first step is a small feasibility spike, not an immediate rewrite or a commitment to Windows containers as the only deployment model.
 
 ## 2. Current State
 
@@ -32,7 +32,7 @@ Keep one application source tree and build two platform-specific service images:
                    |                                           |
                    v                                           v
        Linux image / OpenShift                         Windows image
-       Linux container runtime                         Windows Server 2019
+    Linux container runtime                         Windows Server 2022
                    |                                           |
                    +------------------- HTTPS ----------------+
                                        ^
@@ -43,7 +43,7 @@ Keep one application source tree and build two platform-specific service images:
 
 The image is a packaging and runtime-target choice, not a second implementation of policy or service behavior. Platform-specific differences should be limited to the container base image, Python installation/dependencies, filesystem locations, entrypoint, health checks, and deployment manifests.
 
-The Linux image remains the supported path for OpenShift and Linux hosts. A Windows image is considered only for the Windows Server 2019 same-host deployment scenario. If the government team selects OpenShift or a separate Linux host, there may be no need to build or maintain the Windows image; the Windows Minion can call the remote service endpoint over TLS.
+The Linux image remains the supported path for OpenShift and Linux hosts. A Windows image is considered only for the Windows Server 2022 same-host deployment scenario. If the government team selects OpenShift or a separate Linux host, there may be no need to build or maintain the Windows image; the Windows Minion can call the remote service endpoint over TLS.
 
 ## 4. Portability Assessment
 
@@ -62,7 +62,7 @@ The Linux image remains the supported path for OpenShift and Linux hosts. A Wind
 - **Secrets and policy files:** Define how Windows host files are mounted or injected and ACLed. Do not bake private keys, API keys, populated environment files, or production policy into the image.
 - **Process lifecycle:** Run Uvicorn as the foreground container process, handle termination signals/shutdown, and provide health/readiness checks that work with the selected Windows container runtime.
 - **Networking:** Bind the service to the container interface; publish only an appropriately restricted host endpoint. Minion-to-service traffic must use TLS and server identity validation.
-- **Image/host compatibility:** A Windows Server 2019 host requires a compatible Windows Server 2019-based image and appropriate isolation mode. Pin the OS image tag and validate the host/image patch compatibility requirements.
+- **Image/host compatibility:** A Windows Server 2022 host requires a compatible Windows Server 2022-based image and appropriate isolation mode. Pin the OS image tag and validate the host/image patch compatibility requirements.
 - **Image distribution:** Build and publish the Windows image from Windows-capable CI/build infrastructure, then pull it from a registry or package it for offline import. A Windows image cannot be run on the Mac's Linux Docker Desktop VM.
 - **Operational support:** Define Windows base-image servicing, Python/runtime patching, vulnerability scanning, image rebuild cadence, and support ownership separately from the Linux image.
 
@@ -73,9 +73,9 @@ A MacBook remains suitable for most day-to-day development:
 1. Develop and unit-test the shared Python application locally with `uv`.
 2. Build and run the Linux image using Docker Desktop for local service and demo integration tests.
 3. Keep a Windows-specific Dockerfile and deployment files in the repository, but do not expect Docker Desktop on macOS to execute that Windows image.
-4. Build the Windows image in a Windows Server 2019 CI runner or a dedicated Windows build machine with the Windows container engine.
-5. Run Windows image smoke/integration tests on a compatible Windows Server 2019 test host. The deployment target should also be tested with the exact OS edition, Docker Engine/runtime, storage layout, TLS configuration, and security policy the government environment uses.
-6. Publish platform-specific image tags or manifests from the same source revision, for example `sg-service:<version>-linux` and `sg-service:<version>-windows-ltsc2019`. Do not advertise a multi-platform manifest as runnable everywhere unless each variant has actually been built and tested.
+4. Build the Windows image in a Windows Server 2022 CI runner or a dedicated Windows build machine with the Windows container engine.
+5. Run Windows image smoke/integration tests on a compatible Windows Server 2022 test host. The deployment target should also be tested with the exact OS edition, Docker Engine/runtime, storage layout, TLS configuration, and security policy the government environment uses.
+6. Publish platform-specific image tags or manifests from the same source revision, for example `sg-service:<version>-linux` and `sg-service:<version>-windows-ltsc2022`. Do not advertise a multi-platform manifest as runnable everywhere unless each variant has actually been built and tested.
 
 The Windows build/test host is a delivery prerequisite for the Windows image, but not for ordinary Python development. The checked-in Windows Minion Service executable is separately built for Windows and does not prove that the `sg-service` container image can be built or run there.
 
@@ -86,7 +86,7 @@ Time-box the initial investigation to a small vertical slice before committing t
 ### Spike tasks
 
 1. Add a separate Windows container Dockerfile without changing the Linux Dockerfile.
-2. Build a minimal Windows image from a Windows Server 2019-compatible Python base and install the service wheels/dependencies.
+2. Build a minimal Windows image from a Windows Server 2022-compatible Python base and install the service wheels/dependencies.
 3. Start `sg-service` as the foreground process with temporary local test configuration.
 4. Confirm `/health`, `/admin/ui`, policy loading, signing-key loading, SQLite initialization, and an authenticated API request.
 5. Persist a Mission/registration, stop and restart the container, and confirm state survives via a mounted Windows volume.
@@ -99,7 +99,7 @@ Time-box the initial investigation to a small vertical slice before committing t
 Proceed with a supported Windows image only if:
 
 - All runtime dependencies install from maintained Windows x64 packages without fragile hand-built native dependencies.
-- The service starts and behaves correctly as a Windows container on the intended Server 2019 host/runtime.
+- The service starts and behaves correctly as a Windows container on the intended Server 2022 host/runtime.
 - SQLite persistence and secret/policy file handling meet the deployment security requirements.
 - TLS and Minion connectivity work without bypassing certificate validation.
 - The team has an ongoing Windows build runner and can regularly rebuild, patch, scan, and publish the Windows base image.
@@ -117,7 +117,7 @@ If these conditions are not met, prefer running `sg-service` on OpenShift or a s
 
 ### Phase B: Windows image and deployment assets
 
-- Add a Windows Server 2019-compatible Dockerfile and image build pipeline while retaining the Linux image unchanged.
+- Add a Windows Server 2022-compatible Dockerfile and image build pipeline while retaining the Linux image unchanged.
 - Add Windows-specific image configuration, volume mounts, log collection, health check, and startup command.
 - Update the Windows deployment package so it starts the Windows `sg-service` image rather than expecting a Linux image.
 - Keep the Windows Minion service and service container as separate processes/containers with explicit configuration and restart behavior.
@@ -125,7 +125,7 @@ If these conditions are not met, prefer running `sg-service` on OpenShift or a s
 ### Phase C: Validation and release
 
 - Add CI checks for both image builds and shared service tests.
-- Run platform-specific integration tests on Linux/OpenShift and Windows Server 2019.
+- Run platform-specific integration tests on Linux/OpenShift and Windows Server 2022.
 - Validate container startup, persistent database behavior, TLS, secrets, upgrades, rollback, and clean shutdown.
 - Publish both image variants from the same tagged source revision and document which runtime/platform each tag supports.
 
@@ -136,13 +136,13 @@ If these conditions are not met, prefer running `sg-service` on OpenShift or a s
 - Keep the service signing key and Minion/admin/API credentials in protected host/platform secret storage, not in image layers or source control.
 - Expose Mission Control only on an approved interface and require TLS for Minion API keys and Mission traffic.
 - Use a persistent volume for SQLite and explicitly limit the initial SQLite deployment to one active service replica. If high availability or multiple replicas become necessary, plan a database migration rather than sharing SQLite over an arbitrary network filesystem.
-- Windows base images are version-sensitive and need a documented servicing/rebuild process. Do not assume a Windows image built on a different OS generation will run on Server 2019.
+- Windows base images are version-sensitive and need a documented servicing/rebuild process. Do not assume a Windows image built on a different OS generation will run on Server 2022.
 
 ## 9. Open Decisions
 
 1. Is same-host co-location of `sg-service` and the Windows Minion required, or is a remote OpenShift/Linux endpoint acceptable?
-2. Which Windows Server 2019 edition, virtualization features, Docker Engine/runtime, and isolation mode will the approved host provide?
-3. Can the organization provide a Windows Server 2019 CI/build runner and a test host with the required container features?
+2. Which Windows Server 2022 edition, virtualization features, Docker Engine/runtime, and isolation mode will the approved host provide?
+3. Can the organization provide a Windows Server 2022 CI/build runner and a test host with the required container features?
 4. Which Windows Python base image and servicing lifecycle are approved?
 5. What Windows host paths and ACL model should hold SQLite, policy, TLS trust material, signing keys, and service environment configuration?
 6. Is the Windows image required for production, or only for an isolated pilot deployment?

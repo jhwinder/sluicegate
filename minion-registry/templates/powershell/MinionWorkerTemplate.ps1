@@ -48,6 +48,7 @@ while ($true) {
             if ($null -ne $claimResponse -and $null -ne $claimResponse.mission_id) {
                 $missionId = $claimResponse.mission_id
                 $envelope  = $claimResponse.envelope
+                $claimToken = $claimResponse.claim_token
                 Write-Host "Claimed Mission: $missionId (Capability: $($envelope.capability))"
 
                 # 3. Validate Task Envelope
@@ -65,6 +66,7 @@ while ($true) {
                         -MinionId $MinionId `
                         -MissionId $missionId `
                         -ApiKey $ApiKey `
+                        -ClaimToken $claimToken `
                         -Status "MISSION_REJECTED" `
                         -Detail @{ reason = $validation.Reason; message = $validation.Message }
                     continue
@@ -79,6 +81,7 @@ while ($true) {
                     -MinionId $MinionId `
                     -MissionId $missionId `
                     -ApiKey $ApiKey `
+                    -ClaimToken $claimToken `
                     -Status "MISSION_ACKNOWLEDGED"
 
                 # 5. Report Execution Started
@@ -87,6 +90,7 @@ while ($true) {
                     -MinionId $MinionId `
                     -MissionId $missionId `
                     -ApiKey $ApiKey `
+                    -ClaimToken $claimToken `
                     -Status "MISSION_IN_PROGRESS"
 
                 # 6. Execute capability handler
@@ -123,6 +127,7 @@ while ($true) {
                     -MinionId $MinionId `
                     -MissionId $missionId `
                     -ApiKey $ApiKey `
+                    -ClaimToken $claimToken `
                     -PrivateKeyPath $MinionPrivateKeyPath `
                     -Status $terminalStatus `
                     -Result ($executionResult -as [hashtable])

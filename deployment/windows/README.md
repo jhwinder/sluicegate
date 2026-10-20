@@ -22,7 +22,7 @@ images/sg-service-image.tar       # optional offline image bundle
 service.env.example              # template only; no secrets
 ```
 
-The repository includes the compiled, framework-dependent Windows x64 executable at [deployment/windows/Minion/SluiceGate.Minion.Service.exe](deployment/windows/Minion/SluiceGate.Minion.Service.exe), alongside its C# source in [deployment/windows/MinionHost/](deployment/windows/MinionHost/). The .NET 8 x64 Runtime must be installed on the Windows server that hosts the Minion Service. The executable does not bundle the .NET runtime. Operators do not need a .NET SDK to install it; developers can rebuild it using the instructions below.
+The repository includes the compiled, framework-dependent Windows x64 executable at [deployment/windows/Minion/SluiceGate.Minion.Service.exe](deployment/windows/Minion/SluiceGate.Minion.Service.exe), alongside its C# source in [deployment/windows/MinionHost/](deployment/windows/MinionHost/). The .NET 10 x64 Runtime must be installed on the Windows Server 2022 host. The executable does not bundle the .NET runtime. Operators do not need a .NET SDK to install it; developers can rebuild it using the instructions below.
 
 Build the bundle using the repository executable:
 
@@ -38,7 +38,7 @@ The builder exports the selected service image and generates SHA-256 records. Im
 
 ### Compiling the C# Windows Service
 
-The Windows Service host source code is located at [deployment/windows/MinionHost/](deployment/windows/MinionHost/). It can be compiled using either the .NET 8 SDK or a standard Docker container.
+The Windows Service host source code is located at [deployment/windows/MinionHost/](deployment/windows/MinionHost/). It can be compiled using either the .NET 10 SDK or a standard Docker container.
 
 #### Option A: Using Docker (cross-platform, no local .NET SDK needed)
 ```bash
@@ -46,12 +46,12 @@ docker run --rm \
   -v "$PWD/deployment/windows/MinionHost:/src" \
   -v "$PWD/deployment/windows/Minion:/out" \
   -w /src \
-  mcr.microsoft.com/dotnet/sdk:8.0 \
+  mcr.microsoft.com/dotnet/sdk:10.0 \
   dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=None -o /out
 ```
-This writes the rebuilt framework-dependent `SluiceGate.Minion.Service.exe` directly to [deployment/windows/Minion/](deployment/windows/Minion/). The .NET 8 x64 Runtime is required on the Windows host.
+This writes the rebuilt framework-dependent `SluiceGate.Minion.Service.exe` directly to [deployment/windows/Minion/](deployment/windows/Minion/). The .NET 10 x64 Runtime is required on the Windows Server 2022 host.
 
-#### Option B: Using local .NET 8 SDK on Windows
+#### Option B: Using local .NET 10 SDK on Windows
 ```powershell
 cd deployment/windows/MinionHost
 dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=None -o ..\Minion
@@ -59,10 +59,10 @@ dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile
 
 ## Configuration and Install
 
-1. Install the .NET 8 x64 Runtime and validate it with `dotnet --list-runtimes`. Also install and validate the latest stable Docker release supported on Windows Server 2022.
+1. Install the .NET 10 x64 Runtime and validate it with `dotnet --list-runtimes`. Also install and validate the latest stable Docker release supported on Windows Server 2022.
 2. Create the dedicated AD service identity and grant its share/target permissions outside this package. Configure its service logon through Windows Service Control Manager or an approved deployment tool.
 3. Provision the SluiceGate Ed25519 signing key at the configured host path using the organization's key-management process. The installer mounts this file read-only in the service container; the key is not part of the bundle.
-4. Prepare `service.env` from `service.env.example`, supplying the one-time bootstrap secret and production policy path through approved secret management. Do not commit or distribute the completed environment file in the bundle. After issuing named Agent/Minion/admin keys, remove the bootstrap secret from the service environment.
+4. Prepare `service.env` from `service.env.example`, supplying the one-time bootstrap secret and production policy path through approved secret management. Place the policy at `InstallRoot\policy\production-policy.yml`; the installer mounts only this policy directory read/write so the authenticated Policies view can safely replace the file. Do not place secrets in this directory. Do not commit or distribute the completed environment file in the bundle. After issuing named Agent/Minion/admin keys, remove the bootstrap secret from the service environment.
 5. Prepare the Minion service configuration through the organization's protected secret-management process. The Minion API key shall not be passed as an installer argument or placed in an unprotected JSON/config file. Grant the Minion service identity read access only to its protected configuration and signing key.
 6. Run an elevated PowerShell session from the extracted bundle:
 

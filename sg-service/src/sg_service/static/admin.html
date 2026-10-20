@@ -191,7 +191,28 @@
     <div class="nav-tab" onclick="switchTab('agents')">Agent Registry</div>
     <div class="nav-tab" onclick="switchTab('minions')">Minion Registry</div>
     <div class="nav-tab" onclick="switchTab('notifications')">Notification Profiles</div>
+    <div class="nav-tab" onclick="switchTab('policy')">Policies</div>
   </nav>
+
+  <!-- TAB: POLICIES -->
+  <section id="tab-policy" class="tab-content" style="display:none;">
+    <div class="card">
+      <div class="card-header">
+        <h2>Active Policy</h2>
+        <button class="secondary" onclick="loadPolicyEditor()">Reload from Service</button>
+      </div>
+      <p id="policyHashInfo" style="color:var(--text-muted);">Loading policy metadata...</p>
+      <div class="form-group">
+        <label for="policyEditor">Policy YAML</label>
+        <textarea id="policyEditor" rows="24" spellcheck="false" style="width:100%; font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;"></textarea>
+      </div>
+      <div style="display:flex; gap:8px; justify-content:flex-end;">
+        <button class="secondary" onclick="validatePolicyEditor()">Validate</button>
+        <button onclick="savePolicyEditor()">Save and Activate</button>
+      </div>
+      <pre id="policyFeedback" class="json-viewer" style="white-space:pre-wrap; margin-top:16px;"></pre>
+    </div>
+  </section>
 
   <!-- TAB: MISSIONS & AUDIT -->
   <section id="tab-missions" class="tab-content">
@@ -504,6 +525,7 @@
       document.querySelectorAll(".nav-tab").forEach(el => el.classList.remove("active"));
       document.getElementById("tab-" + tabId).style.display = "block";
       event.target.classList.add("active");
+      if (tabId === "policy") loadPolicyEditor();
     }
 
     function openModal(id) {
@@ -877,8 +899,75 @@
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
         alert("Policy successfully reloaded! Active Hash: " + data.policy_hash);
+        loadPolicyEditor();
       } catch (err) {
         alert("Failed to reload policy: " + err.message);
+      }
+    }
+
+    let policyFileHash = "";
+
+    async function loadPolicyEditor() {
+      const feedback = document.getElementById("policyFeedback");
+      try {
+        const res = await fetch("/admin/v1/policy", { headers: getAuthHeaders() });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        document.getElementById("policyEditor").value = data.content;
+        policyFileHash = data.file_hash;
+        document.getElementById("policyHashInfo").textContent =
+          `File SHA-256: ${data.file_hash} | Active policy hash: ${data.active_policy_hash || "not loaded"}`;
+        feedback.textContent = "Policy loaded from the service.";
+      } catch (err) {
+        feedback.textContent = "Failed to load policy: " + err.message;
+      }
+    }
+
+    async function validatePolicyEditor() {
+      const feedback = document.getElementById("policyFeedback");
+      try {
+        const res = await fetch("/admin/v1/policy/validate", {
+          method: "POST",
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ content: document.getElementById("policyEditor").value })
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        feedback.textContent = data.is_valid
+          ? "Policy is valid. Use Save and Activate to apply it."
+          : data.issues.map(issue => `${issue.severity.toUpperCase()}: ${issue.path || "<root>"}: ${issue.message}`).join("\n");
+        return data.is_valid;
+      } catch (err) {
+        feedback.textContent = "Policy validation failed: " + err.message;
+        return false;
+      }
+    }
+
+    async function savePolicyEditor() {
+      const feedback = document.getElementById("policyFeedback");
+      if (!policyFileHash) {
+        feedback.textContent = "Load the current policy before saving.";
+        return;
+      }
+      if (!await validatePolicyEditor()) return;
+      if (!confirm("Save this policy and make it active? The current file will be backed up.")) return;
+      try {
+        const res = await fetch("/admin/v1/policy", {
+          method: "POST",
+          headers: getAuthHeaders(),
+          body: JSON.stringify({
+            content: document.getElementById("policyEditor").value,
+            expected_file_hash: policyFileHash
+          })
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        policyFileHash = data.policy_hash_full;
+        document.getElementById("policyHashInfo").textContent =
+          `File SHA-256: ${data.policy_hash_full} | Active policy hash: ${data.policy_hash}`;
+        feedback.textContent = `Policy saved and activated. Backup: ${data.backup_file}. Active hash: ${data.policy_hash}`;
+      } catch (err) {
+        feedback.textContent = "Policy was not activated: " + err.message;
       }
     }
 

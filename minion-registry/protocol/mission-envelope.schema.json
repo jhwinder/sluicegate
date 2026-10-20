@@ -3,7 +3,7 @@
   "$id": "https://sluicegate.example/schemas/mission-envelope-1.0.json",
   "title": "SluiceGate Mission Envelope",
   "type": "object",
-  "required": ["protocol_version", "request_id", "mission_id", "minion_id", "capability", "target", "parameters", "issued_at", "expires_at", "nonce", "requested_by", "signing_key_id", "signature"],
+  "required": ["protocol_version", "request_id", "mission_id", "minion_id", "capability", "target", "parameters", "execution", "issued_at", "expires_at", "nonce", "requested_by", "signing_key_id", "signature"],
   "properties": {
     "protocol_version": {"const": "1.0"},
     "request_id": {"type": "string", "minLength": 1},
@@ -26,11 +26,38 @@
           "required": ["allowed_patch_types", "allow_reboot"],
           "properties": {
             "allowed_patch_types": {"type": "array", "items": {"type": "string"}},
-            "allow_reboot": {"type": "boolean"}
+            "allow_reboot": {"type": "boolean"},
+            "outside_window_decision": {"enum": ["PAUSE", "BLOCK", null]}
           },
           "additionalProperties": false
         },
-        "maintenance_window": {"type": ["string", "null"]}
+        "maintenance_window": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "required": ["start_utc", "end_utc"],
+              "properties": {
+                "start_utc": {"type": "string", "format": "date-time"},
+                "end_utc": {"type": "string", "format": "date-time"}
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "execution": {
+      "type": "object",
+      "required": ["max_attempts", "retry_interval_seconds", "attempt_timeout_seconds", "overall_timeout_seconds", "heartbeat_interval_seconds", "claim_lease_seconds"],
+      "properties": {
+        "max_attempts": {"type": "integer", "minimum": 1},
+        "retry_interval_seconds": {"type": "integer", "minimum": 1},
+        "attempt_timeout_seconds": {"type": "integer", "minimum": 1},
+        "overall_timeout_seconds": {"type": "integer", "minimum": 1},
+        "heartbeat_interval_seconds": {"type": "integer", "minimum": 1},
+        "claim_lease_seconds": {"type": "integer", "minimum": 1}
       },
       "additionalProperties": false
     },

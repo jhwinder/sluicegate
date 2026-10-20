@@ -1,5 +1,7 @@
 # SluiceGate Policy Editor
 
+> **Deprecated for service administration:** Use the authenticated Policies tab in the `sg-service` Admin Console to edit the active service policy. This standalone editor has no authentication and writes to the repository's `open-core/policies` directory; it must not be exposed as an operator-facing policy management service. `sg-poledit` CLI validation remains available for local development.
+
 This folder contains a small single-user policy authoring web app: a FastAPI backend that reuses the existing `sg_poledit` validation, and a React (Vite) form-based frontend.
 
 Purpose

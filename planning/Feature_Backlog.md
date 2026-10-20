@@ -34,7 +34,7 @@ The checked-in service host looks for `PatchingMinion.ps1` and `minion.config.js
 
 **Acceptance criteria:**
 
-- Replace shell-string execution with a narrowly specified executable/argument contract and safe `%PATCHPATH%` handling; reject unsupported executables, switches, and substitutions.
+- Replace shell-string execution with direct process creation and safe `%PATCHPATH%` handling; do not impose a hard-coded Minion-wide installer allowlist. Administrator-authored policy defines which installer commands and arguments are authorized, and the Minion must fail closed when a catalog command is outside the policy authorization.
 - Verify the source digest before staging, then verify the staged file on the target before execution.
 - Enforce the timeout, terminate/contain timed-out processes, and return an explicit machine-readable timeout outcome.
 - Capture bounded output and exit status; clean up only the operation's own staging directory/files on both success and failure.
@@ -45,13 +45,15 @@ The checked-in service host looks for `PatchingMinion.ps1` and `minion.config.js
 
 **Requirements:** Sections 3.5, 12.2, 15 steps 5-6, 19.4.
 
-The WSUS path currently installs all downloaded software updates returned by WUA. It does not enforce allowed patch types, maintenance window, or reboot constraints; `AllowReboot` is not used to govern installation/reboot behavior. The target mapping/resolution also does not currently verify the configured pilot server-group boundary independently of the signed target list.
+The patch request is being reduced to the Agent's requested server names; YAML policy obligations authorize the target subset and provide patch sources, patch types, reboot permission, and maintenance-window settings. The Mission is signed with only the authorized target subset and those constraints. The Minion must enforce them independently. WUA update classifications must map into the shared policy `patch_type` vocabulary, and the Mission's allowed types must govern WUA and catalog updates consistently.
 
 **Acceptance criteria:**
 
-- Define which WUA metadata maps to the Mission's allowed patch types and source constraints; fail closed when metadata cannot be classified.
-- Enforce the signed reboot and maintenance-window constraints before installation and before any reboot.
-- Keep the server list restricted to the policy-authorized Mission targets and validate it against the configured pilot scope.
+- Map supported WUA classification IDs to the shared `SECURITY`, `FEATURE`, `SERVICE_PACK`, `DRIVER`, `BUGFIX`, or `OTHER` vocabulary and install only types present in the signed Mission's `allowed_patch_types`. Fail closed for missing, conflicting, or unmapped classification metadata; do not hard-code `SECURITY` as the WUA allow-list.
+- Require a YAML `allowed_patch_targets.servers` obligation and `patch_constraints` obligation. Intersect Agent-requested servers with the policy list, omit unauthorized names from the signed Mission, and block if no requested target is authorized.
+- Derive patch sources, allowed patch types, reboot permission, and maintenance window only from policy obligations; reject Agent attempts to supply these execution controls.
+- Represent maintenance windows as explicit UTC `start_utc`/`end_utc` intervals. Require policy to select `outside_window_decision: PAUSE` or `BLOCK`; approval must never override an inactive window. Do not claim a Mission until the interval is active, and recheck on the Minion before installation.
+- If the signed Mission does not permit reboot, skip any update or catalog patch with reboot behavior other than `Never` before installing it. Fail closed on unknown WUA reboot metadata.
 - Test allowed, filtered, unknown-metadata, disallowed-source, reboot-required, and out-of-scope cases against a controlled WSUS test environment.
 
 ### P0.4 Repair Mission claim recovery and Minion resume behavior
@@ -63,8 +65,13 @@ SQLite persistence preserves queued Missions, but claiming a Mission changes it 
 **Acceptance criteria:**
 
 - Add claim leases/heartbeats and deterministic recovery for abandoned claims, without allowing concurrent duplicate execution.
-- Define cancellation, expiry, max attempts, retry interval, per-attempt timeout, and overall timeout behavior from Mission execution parameters.
-- Persist Minion-side in-progress state needed to report after service/host restart or authorized reboot; revalidate expiry/cancellation before resuming target work.
+- Define expiry, max attempts, retry interval, per-attempt timeout, and overall timeout behavior from Mission execution parameters. Defer operator cancellation until an authorization workflow is specified; never terminate an active target installer in this pilot.
+- Use initial pilot defaults of 30 seconds between retries, 300 seconds per attempt, and 900 seconds overall; use a 30-second heartbeat with a 120-second claim lease. Keep these values configurable and include the effective values in the signed Mission execution instructions.
+- Support takeover only within the single registered Minion identity on one Minion host; cross-host Minion takeover is deferred. Rotate the claim token and increment a claim generation whenever an expired lease is reissued; reject status/result/heartbeat updates from prior generations.
+- Persist a protected local per-Mission/per-attempt/per-generation Mission Diary with envelope signature, progress, target/patch operation identities, reboot state, and result-submission state. Verify Mission ID/signature before same-host resume; preserve previous attempt evidence read-only and delete its Diary generation only after the new generation is durable.
+- Persist a per-Mission/per-target/per-patch target operation journal and hold an exclusive target-side lock while an installer runs. Record PID plus process start time; on takeover, inspect the recorded process and journal. Never launch duplicate work when the process is active or the result is ambiguous. Treat MSI 1618 as retryable busy and retry only after the signed interval. Delete target journals/locks only after Mission Control acknowledges a terminal result.
+- Keep one worker/heartbeat loop alive under the Windows Service, honor the configured idle poll/retry intervals, and stop the worker process tree cleanly when the service stops.
+- Persist Minion-side in-progress state needed to report after service/host restart or authorized reboot; revalidate expiry before resuming target work.
 - Report state transitions promptly, independent of idle poll interval; make polling/backoff configurable and actually honor configuration.
 - Add restart/crash/reboot tests covering before claim, after claim, during execution, and before result submission.
 
@@ -80,13 +87,14 @@ The demo BFF directly invokes its Resend approval adapter after a PAUSE response
 
 - Add a service-owned Resend adapter configured with a secret `RESEND_API_KEY`, sender identity, and service-managed recipients.
 - Add a service-owned SMTP adapter configured with Exchange hostname, port, TLS mode, sender identity, and the authentication mode required by the Exchange deployment; any SMTP username/password must come from protected secret storage. Support approved relay/no-auth configurations where Exchange policy permits them.
+- Select and configure the selected e-mail provider on a dedicated page within the sg-service admin console.
 - Make provider selection explicit per adapter/profile and validate required configuration at creation/startup without exposing secret values in the Admin UI or logs.
 - Move demo approval email invocation behind a notification event handled by `sg_service`; keep the BFF as a client and remove its direct notification side effect.
 - Require explicit authenticated approval/rejection confirmation; email delivery or link fetch must not itself change approval state.
 - Check provider response/SMTP status, persist accurate delivery outcomes, and implement bounded retries/idempotency according to the selected policy.
 - Test both provider modes, absent/invalid configuration, Exchange TLS/authentication failures, Resend errors/timeouts, retries, duplicate events, PAUSE notification, and authenticated approval.
 
-An Email Minion is not required for approval/operations notification. It is only relevant in the future if sending email is itself a policy-controlled target-system action, as described in requirement Section 3.7.1 and explicitly deferred in Section 23.
+Note -- An Email Minion is not required for approval/operations notification. It is only relevant in the future if sending email is itself a policy-controlled target-system action, as described in requirement Section 3.7.1 and explicitly deferred in Section 23.
 
 ### P0.6 Provide authenticated TLS for Minion Mission Control
 
@@ -113,21 +121,21 @@ This is serious because a capability is the Minion's advertised contract: Sluice
 - Implement `inspect` and `install` only with narrow, typed parameters and the same policy-authorized target, approved-source, hash, and constrained-execution safeguards as reconcile.
 - Make the Python mirror reject non-dry-run execution with a clear unsupported-execution error, or implement actual execution through the same reviewed safe contract; never return success for work it did not perform.
 - Return explicit no-op reasons for empty qualifying sets and preserve per-target/per-patch partial results.
-- Enforce result schema, bounded output, and terminal transition rules; do not report success for skipped/failed required work.
-- Ensure every Minion status/result update is retried safely and correlated with the Mission.
+- Require a structured result object and terminal status, enforce the 256 KiB UTF-8 JSON result limit on Minion and service, and do not report success for skipped/failed required work.
+- Retry every Minion status/result update with the same event ID and Mission correlation; exact duplicates are idempotent and conflicting event-ID reuse is rejected.
 
 ### P0.8 Retarget the Windows Minion Service to .NET 10 LTS
 
 **Requirements:** Sections 3.9, 12.4, 22.4.
 
-The checked-in Windows Service currently targets .NET 8, whose support ends on November 10, 2026. The deployment target under consideration is Windows Server 2019, which is supported by .NET 10. Move the service to the supported .NET 10 LTS runtime before deployment so the pilot does not begin on a runtime immediately reaching end of support.
+The Windows Service previously targeted .NET 8, whose support ends on November 10, 2026. The service source and framework-dependent x64 executable have now been retargeted and rebuilt for .NET 10. Validate the .NET 10 LTS runtime on the Windows Server 2022 deployment target before pilot use.
 
 **Acceptance criteria:**
 
 - Change the service target framework to `net10.0` and confirm its Windows Service dependencies support that target.
 - Rebuild and check in the framework-dependent Windows x64 executable; do not bundle the .NET runtime.
 - Update Windows deployment and build documentation to require the .NET 10 x64 Runtime instead of .NET 8.
-- Build and run the service on Windows Server 2019 with the supported .NET 10 x64 Runtime installed.
+- Build and run the service on Windows Server 2022 with the supported .NET 10 x64 Runtime installed.
 - Confirm service startup, PowerShell worker launch, Event Log behavior, and clean stop on the target OS.
 
 ### P0.9 Create a Policies view in the Admin Console
@@ -316,8 +324,12 @@ The patch request should identify the target server(s), while the active, admini
 - Test policy changes, omitted and malicious override fields, PAUSE/approval re-evaluation, and that no Mission can exceed the constraints of the policy decision that authorized it.
 
 ## Explicitly Deferred / Not Backlog Items
+The following items are future build-out ideas:
 
-Do not treat the following as missing initial-pilot features unless scope changes: automated Minion generation/spawning, intelligent multi-Minion load balancing, a generalized AI planner, an Email Minion for email as a controlled action, broad enterprise rollout, SQL catalog backend, or production deployment beyond the scoped pilot. Approval/operational email is a service-owned Notification Adapter and is covered by P0.5. These are explicitly deferred or future capabilities in Sections 3.5, 3.7, 23, and 22.
+1. Intelligent multi-Minion load balancing
+2. A generalized AI planner
+3. Additional minions, such as an Email Minion for email as a controlled action
+4. A SQL catalog backend
 
 ## Validation Snapshot
 

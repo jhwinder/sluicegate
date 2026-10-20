@@ -30,7 +30,20 @@ def setup_test_service(tmp_path: Path, monkeypatch):
 
     policy_content = "\n".join([
         "version: 1",
-        "default: {decision: ALLOW}",
+        "default: {decision: BLOCK}",
+        "rules:",
+        "  - name: allow-router-test-servers",
+        "    when:",
+        "      - {path: action.name, eq: windows.patch.reconcile}",
+        "    obligations:",
+        "      - type: allowed_patch_targets",
+        "        servers: [SERVER_DYN_01.example.gov, SERVER_DYN_02.example.gov]",
+        "      - type: patch_constraints",
+        "        patch_sources: [wsus]",
+        "        allowed_patch_types: [SECURITY]",
+        "        allow_reboot: false",
+        "        maintenance_window: null",
+        "    decision: ALLOW",
     ])
     policy_path.write_text(policy_content, encoding="utf-8")
     return service

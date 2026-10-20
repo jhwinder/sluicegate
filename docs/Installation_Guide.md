@@ -154,7 +154,7 @@ In this section, build the service from the checked-out source, keep its HTTP po
     PublishPort=127.0.0.1:8443:8443
     Volume=sg-service-data:/data
     Volume=/opt/sluicegate/secrets/sg-signing-key.pem:/run/secrets/sg-signing-key.pem:ro,Z
-    Volume=/opt/sluicegate/policies/policy.yml:/config/policy.yml:ro,Z
+   Volume=/opt/sluicegate/policies:/config:rw,Z
     EnvironmentFile=/opt/sluicegate/service.env
 
     [Service]

@@ -132,3 +132,39 @@ def test_reconcile_patches_full_flow(tmp_path: Path) -> None:
     assert len(target_res["catalog_patches"]) == 1
     assert target_res["catalog_patches"][0]["status"] == "SUCCESS"
     assert target_res["wsus_result"]["status"] == "SUCCESS"
+
+
+def test_reconcile_patches_rejects_non_dry_run_execution() -> None:
+    with pytest.raises(NotImplementedError, match="simulation-only"):
+        reconcile_patches(
+            envelope={},
+            catalog_path="unused-catalog.csv",
+            mapping_path="unused-mapping.csv",
+            dry_run=False,
+        )
+
+
+def test_reconcile_patches_reports_catalog_no_op(tmp_path: Path) -> None:
+    catalog_file = tmp_path / "catalog.csv"
+    catalog_file.write_text(
+        "patch_status,plugin_id,iavm_id,vendor,title,patch_id,patch_title,patch_type,requires_reboot,patch_path,patch_sha256,source_url,install_command,notes\n",
+        encoding="utf-8",
+    )
+    mapping_file = tmp_path / "mapping.csv"
+    mapping_file.write_text("PLUGIN_ID,DNS_NAME\n", encoding="utf-8")
+
+    outcome = reconcile_patches(
+        envelope={
+            "target": {"servers": ["srv-app-01.domain.local"]},
+            "parameters": {"patch_sources": ["nessus_catalog"]},
+        },
+        catalog_path=catalog_file,
+        mapping_path=mapping_file,
+        dry_run=True,
+    )
+
+    target_result = outcome["result"]["target_results"][0]
+    assert target_result["catalog_patches"] == []
+    assert target_result["catalog_no_op_reason"] == (
+        "No approved catalog patches matched this target and the Mission constraints."
+    )

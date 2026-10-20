@@ -188,7 +188,9 @@ function Test-MissionEnvelope {
         [string]$NonceStorePath,
 
         [Parameter(Mandatory = $true)]
-        [string[]]$SupportedCapabilities
+        [string[]]$SupportedCapabilities,
+
+        [switch]$AllowConsumedNonce
     )
 
     $rejectionReason = $null
@@ -215,7 +217,7 @@ function Test-MissionEnvelope {
     }
 
     # 5. Nonce / replay validation
-    if (-not (Test-MinionNonce -Nonce $Envelope.nonce -NonceStorePath $NonceStorePath)) {
+    if (-not $AllowConsumedNonce -and -not (Test-MinionNonce -Nonce $Envelope.nonce -NonceStorePath $NonceStorePath)) {
         return @{ IsValid = $false; Reason = "REPLAY_DETECTED"; Message = "Nonce '$($Envelope.nonce)' has already been consumed." }
     }
 
@@ -300,6 +302,36 @@ function Get-MinionMissionClaim {
     }
 }
 
+function Invoke-MinionPostWithRetry {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Uri,
+
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Headers,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Body,
+
+        [Parameter(Mandatory = $true)]
+        [int]$TimeoutSec
+    )
+
+    $maxAttempts = 3
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        try {
+            return Invoke-RestMethod -Uri $Uri -Method Post -Headers $Headers -Body $Body -TimeoutSec $TimeoutSec
+        }
+        catch {
+            if ($attempt -eq $maxAttempts) {
+                throw
+            }
+            Start-Sleep -Milliseconds (250 * [math]::Pow(2, $attempt - 1))
+        }
+    }
+}
+
 function Send-MinionStatus {
     [CmdletBinding()]
     param(
@@ -316,6 +348,9 @@ function Send-MinionStatus {
         [string]$ApiKey,
 
         [Parameter(Mandatory = $true)]
+        [string]$ClaimToken,
+
+        [Parameter(Mandatory = $true)]
         [string]$Status,
 
         [hashtable]$Detail = @{}
@@ -330,13 +365,49 @@ function Send-MinionStatus {
     $eventId = "evt-" + [System.Guid]::NewGuid().ToString("N")
     $body = @{
         event_id    = $eventId
+        claim_token = $ClaimToken
         status      = $Status
         detail      = $Detail
         occurred_at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     } | ConvertTo-Json -Depth 6
 
-    $response = Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body -TimeoutSec 15
+    $response = Invoke-MinionPostWithRetry -Uri $url -Headers $headers -Body $body -TimeoutSec 15
     return $response
+}
+
+function Send-MinionHeartbeat {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$MissionControlUrl,
+        [Parameter(Mandatory = $true)]
+        [string]$MinionId,
+        [Parameter(Mandatory = $true)]
+        [string]$MissionId,
+        [Parameter(Mandatory = $true)]
+        [string]$ApiKey,
+        [Parameter(Mandatory = $true)]
+        [string]$ClaimToken,
+        [Parameter(Mandatory = $true)]
+        [int]$ProcessId,
+        [Parameter(Mandatory = $true)]
+        [double]$ProcessStartedAt,
+        [hashtable]$Detail = @{}
+    )
+
+    $url = "$($MissionControlUrl.TrimEnd('/'))/internal/v1/minions/$MinionId/missions/$MissionId/heartbeat"
+    $headers = @{
+        "Authorization" = "Bearer $ApiKey"
+        "Content-Type" = "application/json"
+    }
+    $body = @{
+        claim_token = $ClaimToken
+        process_id = $ProcessId
+        process_started_at = $ProcessStartedAt
+        detail = $Detail
+    } | ConvertTo-Json -Depth 8
+
+    return Invoke-MinionPostWithRetry -Uri $url -Headers $headers -Body $body -TimeoutSec 15
 }
 
 function Send-MinionResult {
@@ -355,6 +426,9 @@ function Send-MinionResult {
         [string]$ApiKey,
 
         [Parameter(Mandatory = $true)]
+        [string]$ClaimToken,
+
+        [Parameter(Mandatory = $true)]
         [string]$PrivateKeyPath,
 
         [Parameter(Mandatory = $true)]
@@ -363,6 +437,15 @@ function Send-MinionResult {
         [Parameter(Mandatory = $true)]
         [hashtable]$Result
     )
+
+    $resultJson = ConvertTo-Json -InputObject $Result -Depth 10 -Compress
+    if ([System.Text.Encoding]::UTF8.GetByteCount($resultJson) -gt (256 * 1024)) {
+        $Status = "MISSION_COMPLETE_FAILED"
+        $Result = @{
+            capability = $Result.capability
+            error = "Mission result exceeded the 256 KiB limit; detailed output was omitted."
+        }
+    }
 
     $url = "$($MissionControlUrl.TrimEnd('/'))/internal/v1/minions/$MinionId/missions/$MissionId/result"
     $headers = @{
@@ -384,13 +467,17 @@ function Send-MinionResult {
 
     $body = @{
         event_id  = $eventId
+        claim_token = $ClaimToken
         status    = $Status
         result    = $Result
         signature = $signature
     } | ConvertTo-Json -Depth 10
 
-    $response = Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $body -TimeoutSec 20
-    return $response
+    $response = Invoke-MinionPostWithRetry -Uri $url -Headers $headers -Body $body -TimeoutSec 20
+    return @{
+        mission_status = $Status
+        response = $response
+    }
 }
 
 Export-ModuleMember -Function `
@@ -402,5 +489,6 @@ Export-ModuleMember -Function `
     Test-MissionEnvelope, `
     Invoke-MinionCheckIn, `
     Get-MinionMissionClaim, `
+    Send-MinionHeartbeat, `
     Send-MinionStatus, `
     Send-MinionResult

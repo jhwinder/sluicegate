@@ -20,7 +20,7 @@ services:
       - sg-service-data:/data
       - ./secrets/sg-signing-key.pem:/run/secrets/sg-signing-key.pem:ro
       - ./secrets/demo-minion-public.pem:/run/secrets/demo-minion-public.pem:ro
-      - ../sg-service/policies/demo-policy.yml:/config/demo-policy.yml:ro
+      - ../sg-service/policies:/config:rw
     restart: unless-stopped
 
   demo-minion:
