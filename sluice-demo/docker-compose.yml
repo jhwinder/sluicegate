@@ -31,6 +31,7 @@ services:
       dockerfile: minion-registry/minions/demo_stub/Dockerfile
     environment:
       MINION_MISSION_CONTROL_URL: http://sg-service:8443
+      MINION_ALLOW_INSECURE_HTTP: "true"
       MINION_ID: DEMO-STUB-01
       MINION_API_KEY: ${SG_DEMO_MINION_KEY:?create a local .env file}
       MINION_PRIVATE_KEY_PATH: /run/secrets/demo-minion-key.pem

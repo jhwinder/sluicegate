@@ -250,6 +250,25 @@ In this section, build the service from the checked-out source, keep its HTTP po
 
     The response should be `{"status":"ok"}` with no certificate warning. HTTPS from the Minion now terminates at Nginx; Nginx's upstream connection to `sg-service` is plain HTTP over RHEL loopback only. Do not change the Podman publish address from `127.0.0.1`.
 
+### Option: use a self-signed certificate instead of a CA-issued one
+
+A self-signed certificate is acceptable for the pilot when the Minion is configured to trust exactly that certificate. The Minion still checks the host name and validity dates, and there is no setting that turns certificate checking off.
+
+1. On the RHEL server, from the repository root, create the certificate and key. Replace the example name with the DNS name registered in Section 1; add any extra names or IP addresses clients will use:
+
+   ```sh
+   sudo OUTPUT_DIR=/etc/pki/tls/sluicegate sh deployment/tls/new-selfsigned-certificate.sh sluicegate.example.internal
+   ```
+
+   The script writes `sluicegate-server.pem` (the certificate) and `sluicegate-server.key` (the private key, mode 0600) and prints the certificate's SHA-256 fingerprint and expiry date. Without the script, run `openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 365 -subj "/CN=NAME" -addext "subjectAltName=DNS:NAME" -keyout KEY -out CERT` yourself.
+2. In the Nginx configuration above, point `ssl_certificate` at `/etc/pki/tls/sluicegate/sluicegate-server.pem` and `ssl_certificate_key` at `/etc/pki/tls/sluicegate/sluicegate-server.key`, then run `sudo nginx -t && sudo systemctl reload nginx`. Browsers will warn about the certificate unless they also trust it.
+3. Copy only the certificate file (never the key) to the Windows Minion at `C:\Program Files\SluiceGate\Minion\keys\sg-server-cert.pem`. On Windows, confirm it is the right file by comparing the fingerprint with the one the script printed, using `openssl x509 -in sg-server-cert.pem -noout -fingerprint -sha256`.
+4. Add the two settings in Section 8 so the Minion trusts that certificate.
+
+**Renewal or rotation.** The trust file may hold several certificates. Before replacing the server certificate, add the new certificate to the end of `sg-server-cert.pem` and its fingerprint to `TrustedServerCertificateSha256`, then restart the Minion service. Install the new certificate on the server, and later remove the old certificate and fingerprint. Replacing the server certificate first makes the Minion reject the service until its trust file is updated.
+
+**Without Nginx.** The container can serve HTTPS itself: mount the certificate and key read-only into the container and set `SG_TLS_CERT_FILE` and `SG_TLS_KEY_FILE` to their container paths. The Windows same-host installer does this from `InstallRoot\tls\server-cert.pem` and `server-key.pem`.
+
 ## 6. Register the Agent and Minion
 
 In this section, create the identities that may submit patch requests and claim Missions. The Admin Console uses the bootstrap secret for setup; Agent and Minion API keys are shown only when issued, so copy each directly into its protected destination.
@@ -340,6 +359,15 @@ In this section, create the JSON file that tells the Minion where Mission Contro
    ```
 
    Replace the example DNS name, API key, and file-share paths. JSON uses doubled backslashes in Windows paths. Keep `DryRun` set to `true` during setup, and restrict access to `minion.config.json` because it contains a bearer API key.
+
+   The Minion refuses to start with a Mission Control URL that is not `https://`, so the API key never crosses the network in clear text. If the service uses a self-signed certificate or a private CA that Windows does not already trust, add these settings:
+
+   ```json
+     "TrustedServerCertificatePath": "C:\\Program Files\\SluiceGate\\Minion\\keys\\sg-server-cert.pem",
+     "TrustedServerCertificateSha256": ["PASTE_THE_FINGERPRINT_OF_EACH_CERTIFICATE_IN_THE_FILE"]
+   ```
+
+   With `TrustedServerCertificatePath`, the Minion trusts only that certificate (or a certificate issued by it) instead of the Windows store, and still checks the host name and validity dates. `TrustedServerCertificateSha256` is optional; when present, every certificate in the file must match a listed fingerprint, so an altered trust file stops the Minion. For a certificate from a CA that Windows already trusts, omit both settings. Plain `http://` is accepted only for a loopback address when `AllowInsecureHttp` is `true`, which is for local development and must not be set for the pilot.
 
 3. Confirm the catalog has the required headers and only approved test rows. The patch catalog requires fields including `patch_status`, `plugin_id`, `patch_type`, `patch_path`, `patch_sha256`, and `install_command`. The Nessus mapping must include `PLUGIN_ID` and `DNS_NAME` columns. Use the patching Minion README and catalog contract for the complete schema.
 4. Confirm the Minion identity can read both CSV files and the patch package paths referenced by approved catalog rows. Confirm `openssl` is available to the identity because the PowerShell core module uses it for signature verification and signing.

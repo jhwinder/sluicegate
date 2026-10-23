@@ -70,6 +70,8 @@ curl -fsS http://127.0.0.1:8443/health
 | `SG_MINION_OVERALL_TIMEOUT_SECONDS` | `900` | Signed overall execution deadline. |
 | `SG_MINION_HEARTBEAT_INTERVAL_SECONDS` | `30` | Minion lease-renewal cadence. |
 | `SG_MINION_CLAIM_LEASE_SECONDS` | `120` | Claim lease length; must exceed the heartbeat interval. |
+| `SG_TLS_CERT_FILE` / `SG_TLS_KEY_FILE` | *(None)* | PEM certificate and private key. When both are set the service itself serves HTTPS on its port; set only one and it refuses to start. With neither it serves plain HTTP and logs a warning, which is acceptable only on loopback behind a TLS proxy or for local development. |
+| `SG_BIND_HOST` / `SG_BIND_PORT` | `0.0.0.0` / `8443` | Address the service listens on inside its container. |
 | `SG_PUBLIC_URL` | *(request host)* | External base URL used in notification and verification emails, such as `https://sluice.example.gov`. Set this behind a proxy. |
 | `RESEND_API_KEY` / `RESEND_API_KEY_FILE` | *(None)* | Resend API key, or a file containing it. |
 | `SG_SMTP_USERNAME` / `SG_SMTP_PASSWORD` (plus `_FILE`) | *(None)* | SMTP credentials for adapters that use `login` authentication. |

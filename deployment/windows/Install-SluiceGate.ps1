@@ -57,13 +57,24 @@ if ($minionSignature.Status -ne "Valid") {
 
 $serviceEnvPath = Join-Path $InstallRoot "service.env"
 $signingKeyPath = Join-Path $InstallRoot "sg-signing-key.pem"
+$tlsDirectory = Join-Path $InstallRoot "tls"
+$tlsCertificatePath = Join-Path $tlsDirectory "server-cert.pem"
+$tlsKeyPath = Join-Path $tlsDirectory "server-key.pem"
 $policyDirectory = Join-Path $InstallRoot "policy"
 $policyPath = Join-Path $policyDirectory "production-policy.yml"
+if (-not $MinionMissionControlUrl.StartsWith("https://", [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "MinionMissionControlUrl must use https. Plain HTTP Mission Control is supported only for local development."
+}
 if (-not (Test-Path -LiteralPath $serviceEnvPath -PathType Leaf)) {
     throw "Provision service.env using approved secret management before installation."
 }
 if (-not (Test-Path -LiteralPath $signingKeyPath -PathType Leaf)) {
     throw "Provision the SluiceGate Ed25519 signing key at $signingKeyPath using approved key management before installation."
+}
+foreach ($tlsFile in @($tlsCertificatePath, $tlsKeyPath)) {
+    if (-not (Test-Path -LiteralPath $tlsFile -PathType Leaf)) {
+        throw "Provision the Mission Control TLS certificate and private key at $tlsFile before installation (see docs/Installation_Guide.md)."
+    }
 }
 if (-not (Test-Path -LiteralPath $policyPath -PathType Leaf)) {
     throw "Provision the approved SluiceGate policy at $policyPath before installation."
@@ -84,6 +95,9 @@ if ($PSCmdlet.ShouldProcess($InstallRoot, "Install SluiceGate Minion service and
         -p 127.0.0.1:8443:8443 `
         -v "${databaseVolume}:/data" `
         -v ("{0}:/run/secrets/sg-signing-key.pem:ro" -f $signingKeyPath) `
+        -v ("{0}:/run/tls:ro" -f $tlsDirectory) `
+        -e SG_TLS_CERT_FILE=/run/tls/server-cert.pem `
+        -e SG_TLS_KEY_FILE=/run/tls/server-key.pem `
         -v ("{0}:/config:rw" -f $policyDirectory) `
         --env-file $serviceEnvPath `
         $ServiceImage

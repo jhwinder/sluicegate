@@ -34,6 +34,12 @@ $NonceStorePath          = if ($config.NonceStorePath) { $config.NonceStorePath 
 $PollIntervalSeconds     = if ($config.PollIntervalSeconds) { [int]$config.PollIntervalSeconds } else { 60 }
 $SupportedCapabilities   = @($config.SupportedCapabilities)
 
+Set-MinionTransportSecurity `
+    -MissionControlUrl $MissionControlUrl `
+    -TrustedCertificatePath $config.TrustedServerCertificatePath `
+    -TrustedCertificateSha256 @($config.TrustedServerCertificateSha256) `
+    -AllowInsecureHttp ($config.AllowInsecureHttp -eq $true)
+
 Write-Host "Starting SluiceGate Minion '$MinionId'..."
 Write-Host "Mission Control URL: $MissionControlUrl"
 Write-Host "Supported Capabilities: $($SupportedCapabilities -join ', ')"

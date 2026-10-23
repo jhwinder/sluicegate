@@ -8,6 +8,8 @@
   "NessusMappingPath": "\\\\fileshare\\patchrepo\\nessus_mapping.csv",
   "NonceStorePath": "C:\\Program Files\\SluiceGate\\Minion\\data\\nonces.txt",
   "MissionDiaryDirectory": "C:\\ProgramData\\SluiceGate\\Minion\\MissionDiary",
+  "TrustedServerCertificatePath": "C:\\Program Files\\SluiceGate\\Minion\\keys\\sg-server-cert.pem",
+  "TrustedServerCertificateSha256": ["REPLACE_WITH_CERTIFICATE_SHA256_FINGERPRINT"],
   "PollIntervalSeconds": 3600,
   "DryRun": false
 }

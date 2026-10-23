@@ -22,4 +22,4 @@ RUN python -m venv /opt/venv \
 ENV PATH="/opt/venv/bin:${PATH}"
 ENV SG_DATABASE_PATH=/data/sg-service.sqlite3
 EXPOSE 8443
-CMD ["python", "-m", "uvicorn", "sg_service.minion_mission_control:app", "--host", "0.0.0.0", "--port", "8443"]
+CMD ["python", "-m", "sg_service"]

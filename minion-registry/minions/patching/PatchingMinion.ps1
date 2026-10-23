@@ -47,6 +47,9 @@ $NonceStorePath          = if ($config.NonceStorePath) { $config.NonceStorePath 
 $PollIntervalSeconds     = if ($config.PollIntervalSeconds) { [int]$config.PollIntervalSeconds } else { 3600 }
 $MissionDiaryDirectory   = if ($config.MissionDiaryDirectory) { $config.MissionDiaryDirectory } else { Join-Path $env:ProgramData "SluiceGate\Minion\MissionDiary" }
 $DryRun                  = if ($config.DryRun) { [bool]$config.DryRun } else { $false }
+$TrustedCertificatePath  = $config.TrustedServerCertificatePath
+$TrustedCertificateSha256 = @($config.TrustedServerCertificateSha256)
+$AllowInsecureHttp       = ($config.AllowInsecureHttp -eq $true)
 $SupportedCapabilities   = @(
     "windows.patch.reconcile",
     "windows.patch.discover",
@@ -57,6 +60,12 @@ $script:ActiveHeartbeatJob = $null
 $script:RetryDelaySeconds = $null
 
 New-Item -ItemType Directory -Path $MissionDiaryDirectory -Force | Out-Null
+
+Set-MinionTransportSecurity `
+    -MissionControlUrl $MissionControlUrl `
+    -TrustedCertificatePath $TrustedCertificatePath `
+    -TrustedCertificateSha256 $TrustedCertificateSha256 `
+    -AllowInsecureHttp $AllowInsecureHttp
 
 function Get-MissionDiaryPath {
     param(
@@ -142,9 +151,12 @@ function Start-MissionHeartbeat {
 
     return Start-Job -ArgumentList @(
         $MissionControlUrl, $MinionId, $ApiKey, $MissionId, $ClaimToken,
-        $DiaryPath, $IntervalSeconds, $WorkerProcessId, $WorkerStartedAt
+        $DiaryPath, $IntervalSeconds, $WorkerProcessId, $WorkerStartedAt,
+        $coreModulePath, $TrustedCertificatePath, $TrustedCertificateSha256, $AllowInsecureHttp
     ) -ScriptBlock {
-        param($ServiceUrl, $RegisteredMinionId, $MinionApiKey, $ActiveMissionId, $ActiveClaimToken, $ActiveDiaryPath, $HeartbeatSeconds, $WorkerId, $WorkerStart)
+        param($ServiceUrl, $RegisteredMinionId, $MinionApiKey, $ActiveMissionId, $ActiveClaimToken, $ActiveDiaryPath, $HeartbeatSeconds, $WorkerId, $WorkerStart, $CoreModule, $TrustedCertificate, $TrustedFingerprints, $AllowHttp)
+        Import-Module $CoreModule -Force
+        Set-MinionTransportSecurity -MissionControlUrl $ServiceUrl -TrustedCertificatePath $TrustedCertificate -TrustedCertificateSha256 $TrustedFingerprints -AllowInsecureHttp $AllowHttp
         $headers = @{ Authorization = "Bearer $MinionApiKey"; "Content-Type" = "application/json" }
         while ($true) {
             $diaryState = @{}
@@ -184,10 +196,10 @@ function Start-MissionHeartbeat {
                 detail = $detail
             } | ConvertTo-Json -Depth 8
             try {
-                Invoke-RestMethod -Uri "$($ServiceUrl.TrimEnd('/'))/internal/v1/minions/$RegisteredMinionId/missions/$ActiveMissionId/heartbeat" -Method Post -Headers $headers -Body $body -TimeoutSec 15 | Out-Null
+                Invoke-MinionHttp -Method Post -Uri "$($ServiceUrl.TrimEnd('/'))/internal/v1/minions/$RegisteredMinionId/missions/$ActiveMissionId/heartbeat" -Headers $headers -Body $body -TimeoutSec 15 | Out-Null
             }
             catch {
-                if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 409) { break }
+                if ((Get-MinionHttpStatusCode -ErrorRecord $_) -eq 409) { break }
             }
             Start-Sleep -Seconds $HeartbeatSeconds
         }

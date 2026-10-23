@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import time
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from cryptography.hazmat.primitives import serialization
@@ -16,6 +18,23 @@ MINION_ID = os.environ.get("MINION_ID", "DEMO-STUB-01")
 MINION_API_KEY = os.environ.get("MINION_API_KEY", "")
 MINION_PRIVATE_KEY_PATH = Path(os.environ.get("MINION_PRIVATE_KEY_PATH", "/run/secrets/demo-minion-key.pem"))
 POLL_INTERVAL_SECONDS = float(os.environ.get("MINION_POLL_INTERVAL_SECONDS", "2"))
+ALLOW_INSECURE_HTTP = os.environ.get("MINION_ALLOW_INSECURE_HTTP", "").lower() == "true"
+TRUSTED_CERT_PATH = os.environ.get("MINION_TRUSTED_CERT_PATH", "").strip()
+
+
+def transport_verification(url: str = MISSION_CONTROL_URL, allow_insecure_http: bool = ALLOW_INSECURE_HTTP, trusted_cert_path: str = TRUSTED_CERT_PATH) -> ssl.SSLContext | bool:
+    """Return the TLS verification setting for Mission Control, or refuse an insecure configuration."""
+    scheme = urlsplit(url).scheme
+    if scheme == "http":
+        if not allow_insecure_http:
+            raise RuntimeError("Mission Control URL must use https; set MINION_ALLOW_INSECURE_HTTP=true only for local development")
+        return True
+    if scheme != "https":
+        raise RuntimeError(f"Unsupported Mission Control URL scheme: {scheme or 'none'}")
+    if trusted_cert_path:
+        # With a cafile, only that certificate (or CAs it issued) is trusted; the host name is still verified.
+        return ssl.create_default_context(cafile=trusted_cert_path)
+    return True
 
 
 def event_id() -> str:
@@ -71,7 +90,7 @@ def main() -> None:
         raise RuntimeError("MINION_API_KEY must be configured")
     if not MINION_PRIVATE_KEY_PATH.is_file():
         raise RuntimeError(f"Minion signing key is missing: {MINION_PRIVATE_KEY_PATH}")
-    with httpx.Client(base_url=MISSION_CONTROL_URL, timeout=20) as client:
+    with httpx.Client(base_url=MISSION_CONTROL_URL, timeout=20, verify=transport_verification()) as client:
         while True:
             try:
                 check_in = client.post(f"/internal/v1/minions/{MINION_ID}/check-in", headers=headers())

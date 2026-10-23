@@ -20,6 +20,10 @@ Claiming a Mission returns a random claim token that fences later heartbeat, sta
 
 The single-host pilot stores per-Mission attempt/generation state in a protected local Mission Diary. A takeover verifies the Diary against the same Mission/envelope before resuming. Cross-host Minion takeover is not supported by this local-diary design.
 
+## Transport Security
+
+Minions reach Mission Control only over HTTPS and refuse a plain `http://` URL. A Minion validates the server certificate's host name and validity period and has no option to skip validation. By default it uses the operating system's trust store; `TrustedServerCertificatePath` (a PEM file) restricts trust to a provisioned self-signed certificate or private CA, optionally constrained by `TrustedServerCertificateSha256` fingerprints. `AllowInsecureHttp` permits `http://` only for a loopback development endpoint. Bearer API keys are sent only over these validated connections.
+
 ## Initial Pilot Timing Defaults
 
 The following values are initial configurable pilot defaults:
