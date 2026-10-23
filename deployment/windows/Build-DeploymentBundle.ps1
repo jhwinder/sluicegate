@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$MinionExecutable,
 
-    # Omit for a Minion-only bundle whose Mission Control runs on another host.
+    # A locally built sg-service image to export into the bundle.
+    [Parameter(Mandatory = $true)]
     [string]$ServiceImage,
 
     # Release identifier recorded in the bundle, for example 1.0.0.
@@ -14,7 +15,8 @@ param(
 
     [string]$OutputDirectory = (Join-Path $PSScriptRoot "out"),
 
-    [switch]$SkipSignatureCheck
+    # Fail instead of warning when the Minion executable is not Authenticode-signed.
+    [switch]$RequireSignature
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,11 +25,10 @@ if (-not (Test-Path -LiteralPath $MinionExecutable -PathType Leaf)) {
 }
 $signature = Get-AuthenticodeSignature -FilePath $MinionExecutable
 if ($signature.Status -ne "Valid") {
-    if ($SkipSignatureCheck) {
-        Write-Warning "Minion executable is not Authenticode-signed (Status: $($signature.Status)). Proceeding because -SkipSignatureCheck was specified."
-    } else {
-        throw "Minion executable must be Authenticode-signed before bundling (Status: $($signature.Status)). Use -SkipSignatureCheck to bypass for testing/development."
+    if ($RequireSignature) {
+        throw "Minion executable must be Authenticode-signed before bundling (Status: $($signature.Status))."
     }
+    Write-Warning "Minion executable is not Authenticode-signed (Status: $($signature.Status)). Bundling anyway; use -RequireSignature to enforce signing."
 }
 
 # Files the Minion needs at run time, relative to the repository root, and where they go under Minion/runtime.
@@ -39,9 +40,10 @@ $runtimeFiles = @(
     @{ Source = "minion-registry/protocol/mission-envelope.schema.json"; Target = "protocol" }
 )
 $configTemplate = Join-Path $RepositoryRoot "minion-registry/minions/patching/minion.config.example.json"
-foreach ($path in @($configTemplate) + ($runtimeFiles | ForEach-Object { Join-Path $RepositoryRoot $_.Source })) {
+$certificateScript = Join-Path $RepositoryRoot "deployment/tls/new-selfsigned-certificate.sh"
+foreach ($path in @($configTemplate, $certificateScript) + ($runtimeFiles | ForEach-Object { Join-Path $RepositoryRoot $_.Source })) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw "Required runtime file not found: $path"
+        throw "Required file not found: $path"
     }
 }
 
@@ -61,20 +63,19 @@ foreach ($file in $runtimeFiles) {
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runtimeDirectory "version.json") -Encoding UTF8
 
 Copy-Item -LiteralPath $configTemplate -Destination (Join-Path $OutputDirectory "minion.config.template.json") -Force
-foreach ($script in "Install-SluiceGate.ps1", "Uninstall-SluiceGate.ps1", "Set-MinionApiKey.ps1", "MinionInstallHelpers.ps1", "service.env.example", "README.md") {
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot $script) -Destination $OutputDirectory -Force
+Copy-Item -LiteralPath $certificateScript -Destination $OutputDirectory -Force
+foreach ($file in "Install-SluiceGate.ps1", "Uninstall-SluiceGate.ps1", "Set-MinionApiKey.ps1", "MinionInstallHelpers.ps1", "WslServiceContainer.ps1", "service.env.example", "policy.starter.yml", "README.md") {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $OutputDirectory -Force
 }
 
-if ($ServiceImage) {
-    docker image inspect $ServiceImage *> $null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Service image not found locally: $ServiceImage"
-    }
-    New-Item -ItemType Directory -Path (Join-Path $OutputDirectory "images") -Force | Out-Null
-    docker save --output (Join-Path $OutputDirectory "images/sg-service-image.tar") $ServiceImage
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to export service image"
-    }
+docker image inspect $ServiceImage *> $null
+if ($LASTEXITCODE -ne 0) {
+    throw "Service image not found locally: $ServiceImage"
+}
+New-Item -ItemType Directory -Path (Join-Path $OutputDirectory "images") -Force | Out-Null
+docker save --output (Join-Path $OutputDirectory "images/sg-service-image.tar") $ServiceImage
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to export service image"
 }
 
 # One record per file, in the format used by sha256sum, so the whole bundle can be checked.

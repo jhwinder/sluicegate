@@ -1,0 +1,5 @@
+# Starter SluiceGate policy installed on first install. It allows nothing: every request is blocked.
+# Add rules in the Admin Console (Policies tab), which validates before saving; see docs/Policy_DSL.md for the syntax.
+version: 1
+default: {decision: BLOCK}
+rules: []

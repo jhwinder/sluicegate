@@ -28,5 +28,5 @@ if ([string]::IsNullOrWhiteSpace($key)) {
 }
 
 [System.IO.File]::WriteAllText($apiKeyPath, $key.Trim(), [System.Text.UTF8Encoding]::new($false))
-Set-MinionRestrictedAcl -Path $apiKeyPath -AccountSid $accountSid
-Write-Host "API key stored at $apiKeyPath with access limited to Administrators, SYSTEM$(if ($ServiceAccount) { ", and $ServiceAccount" })."
+# The file inherits the protected ACL of the keys directory, which already includes the service account once installed.
+Write-Host "API key stored at $apiKeyPath (access: the protected keys directory's Administrators, SYSTEM, and service account)."

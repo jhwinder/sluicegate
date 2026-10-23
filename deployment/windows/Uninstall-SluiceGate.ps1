@@ -2,15 +2,17 @@
 param(
     [string]$InstallRoot = "$env:ProgramFiles\SluiceGate\Minion",
     [string]$DataRoot = "$env:ProgramData\SluiceGate\Minion",
+    [string]$WslDistribution = "Ubuntu",
     [string]$ContainerName = "sluicegate-service",
-    # Also deletes the Minion configuration, keys, nonce store, and Mission Diary under DataRoot.
+    # Also deletes the service database, its secrets and policy inside WSL, and the Minion configuration, keys, and state.
     [switch]$RemoveData
 )
 
 $ErrorActionPreference = "Stop"
 $serviceName = "SluiceGateMinion"
+. (Join-Path $PSScriptRoot "WslServiceContainer.ps1")
 
-if ($PSCmdlet.ShouldProcess($serviceName, "Stop and remove SluiceGate Minion service")) {
+if ($PSCmdlet.ShouldProcess($serviceName, "Stop and remove the SluiceGate Minion service and WSL startup task")) {
     $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
     if ($service) {
         if ($service.Status -ne "Stopped") {
@@ -21,10 +23,13 @@ if ($PSCmdlet.ShouldProcess($serviceName, "Stop and remove SluiceGate Minion ser
     if ([System.Diagnostics.EventLog]::SourceExists($serviceName)) {
         [System.Diagnostics.EventLog]::DeleteEventSource($serviceName)
     }
+    if (Get-ScheduledTask -TaskName "SluiceGateWsl" -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName "SluiceGateWsl" -Confirm:$false
+    }
 }
 
-if ($PSCmdlet.ShouldProcess($ContainerName, "Stop and remove SluiceGate service container")) {
-    docker rm -f $ContainerName 2>$null | Out-Null
+if ($PSCmdlet.ShouldProcess($ContainerName, "Remove the sg-service container")) {
+    Remove-SluiceGateServiceContainer -Distribution $WslDistribution -ContainerName $ContainerName -RemoveData:$RemoveData
 }
 
 if ($PSCmdlet.ShouldProcess($InstallRoot, "Remove SluiceGate Minion installation files")) {
@@ -39,6 +44,6 @@ if (Test-Path -LiteralPath $DataRoot) {
             Remove-Item -LiteralPath $DataRoot -Recurse -Force
         }
     } else {
-        Write-Host "Kept $DataRoot (configuration, keys, nonce store, Mission Diary). Re-run with -RemoveData to delete it."
+        Write-Host "Kept $DataRoot and the service data inside WSL (/opt/sluicegate and the sluicegate-service-data volume). Re-run with -RemoveData to delete them."
     }
 }

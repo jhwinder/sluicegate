@@ -153,20 +153,6 @@ Add policy authoring and management to the authenticated `sg-service` Admin Cons
 - Test valid and invalid edits, concurrent/stale edits, backup and recovery, file permission failures, reload failures, and unauthorized access.
 - Previous stand-alone policy creator retired.
 
-### P0.10 Support the Linux-service/Windows-Minion two-server deployment
-
-The installation guide describes `sg-service` on a Linux host and the patching Minion on a separate Windows host, but the checked-in Windows installer currently deploys the service container on the same host and the split setup is only a manual lab procedure. Define and deliver the two-server topology as a supported deployment, with platform-specific installation, secure service-to-Minion communication, and end-to-end validation.
-
-**Acceptance criteria:**
-
-- Provide a supported Linux deployment package/procedure for `sg-service` with persistent database storage, protected signing key and policy mounts, service startup/restart behavior, and documented backup/upgrade steps.
-- Provide a Windows Minion package/installer that installs and runs the Minion without installing or starting a local `sg-service` container; configure the remote Mission Control URL and protected Minion configuration.
-- Configure HTTPS between the hosts using a trusted certificate and hostname validation; document certificate provisioning, Windows trust, renewal/rotation, and firewall/network requirements. Never require a certificate-validation bypass or expose API keys over plaintext network transport.
-- Ensure Agent/admin access reaches the Linux service, while only the required Mission Control endpoint is reachable by the Windows Minion; document port bindings and allowed network paths.
-- Align service, installer, Minion runtime, configuration, and deployment documentation on the remote URL, Minion ID, key provisioning, and service ownership contracts.
-- Exercise clean installation, service startup, Minion check-in, Mission claim, safe dry-run execution, restart/recovery, upgrade, and uninstall across separate Linux and Windows hosts.
-- Update the installation guide and deployment references to distinguish the supported two-server installation from a same-host topology, which should also continue to be supported.
-
 ## P1 - Required Service, Protocol, And Audit Work
 
 ### P1.1 Complete transaction and administrative audit history
@@ -322,6 +308,20 @@ The patch request should identify the target server(s), while the active, admini
 - Bind the policy-derived allowed sources, patch types, maintenance window, and reboot permission into the signed Mission; reject attempts to override them in the request.
 - Ensure the Minion enforces the signed constraints before selecting/installing patches or rebooting.
 - Test policy changes, omitted and malicious override fields, PAUSE/approval re-evaluation, and that no Mission can exceed the constraints of the policy decision that authorized it.
+
+### P2.7 Support the Linux-service/Windows-Minion two-server deployment
+
+The installation guide describes `sg-service` on a Linux host and the patching Minion on a separate Windows host, but the checked-in Windows installer currently deploys the service container on the same host and the split setup is only a manual lab procedure. Define and deliver the two-server topology as a supported deployment, with platform-specific installation, secure service-to-Minion communication, and end-to-end validation.
+
+**Acceptance criteria:**
+
+- Provide a supported Linux deployment package/procedure for `sg-service` with persistent database storage, protected signing key and policy mounts, service startup/restart behavior, and documented backup/upgrade steps.
+- Provide a Windows Minion package/installer that installs and runs the Minion without installing or starting a local `sg-service` container; configure the remote Mission Control URL and protected Minion configuration.
+- Configure HTTPS between the hosts using a trusted certificate and hostname validation; document certificate provisioning, Windows trust, renewal/rotation, and firewall/network requirements. Never require a certificate-validation bypass or expose API keys over plaintext network transport.
+- Ensure Agent/admin access reaches the Linux service, while only the required Mission Control endpoint is reachable by the Windows Minion; document port bindings and allowed network paths.
+- Align service, installer, Minion runtime, configuration, and deployment documentation on the remote URL, Minion ID, key provisioning, and service ownership contracts.
+- Exercise clean installation, service startup, Minion check-in, Mission claim, safe dry-run execution, restart/recovery, upgrade, and uninstall across separate Linux and Windows hosts.
+- Update the installation guide and deployment references to distinguish the supported two-server installation from a same-host topology, which should also continue to be supported.
 
 ## Explicitly Deferred / Not Backlog Items
 The following items are future build-out ideas:

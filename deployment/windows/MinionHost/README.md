@@ -22,7 +22,7 @@ dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile
 
 The same build can be run from macOS or Linux with Docker; see [../README.md](../README.md#compiling-the-c-windows-service).
 
-Then sign the resulting `SluiceGate.Minion.Service.exe` with your Authenticode code-signing certificate:
+Optionally sign the resulting `SluiceGate.Minion.Service.exe` with an Authenticode code-signing certificate (required only if you use `-RequireSignature` or an application-control policy):
 
 ```powershell
 Set-AuthenticodeSignature -FilePath ..\Minion\SluiceGate.Minion.Service.exe -Certificate $codeSigningCert

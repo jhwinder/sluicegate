@@ -25,7 +25,7 @@ run/
 scratch/
 docs/planning
 
-# .NET build outputs
+# .NET build outputs only; the C# source and the prebuilt Minion service binary are tracked
 **/bin/
 **/obj/
 *.user

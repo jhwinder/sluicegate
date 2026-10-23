@@ -1,126 +1,146 @@
-# Windows Server Deployment
+# Windows Server Deployment Package
 
-## Target
+This directory builds and contains the installer for SluiceGate on a single Windows Server 2022 machine. It documents the package itself: what is in it, what the installer does, and where things end up. The step-by-step procedure, including preparing the server, is the [Installation Guide](../../docs/Installation_Guide.md); follow that to install.
 
-- Windows Server 2022 VM.
-- Latest stable Docker version supported on Windows Server 2022.
-- SG Minion Windows service running under a dedicated, least-privilege AD identity.
-- `sg_service` container hosted on the same VM with Minion Mission Control bound to host loopback (`127.0.0.1:8443`).
+## What gets installed
 
-The `sg_service` container does not need an AD identity. The Minion service identity needs only the approved patch-catalog/mapping/repository access and remote execution/reboot rights for its authorized target scope. The installer configures the service logon (`-ServiceAccount`, a gMSA or domain account) and the file ACLs on the Minion's own files; it does not grant share or target access, which stays with the organization's Windows administration process.
-
-For the two-server topology (Mission Control on Linux), install only the Minion with `-SkipServiceContainer` and omit `-ServiceImage` when building the bundle.
-
-## Installed Layout
-
-| Location | Contents | Access |
+| Component | Runs as | Files live in |
 | --- | --- | --- |
-| `C:\Program Files\SluiceGate\Minion` (`InstallRoot`) | `SluiceGate.Minion.Service.exe` and `runtime\` (Patching Minion script and modules, Mission schema, `version.json`) | Replaced on upgrade |
-| `C:\ProgramData\SluiceGate\Minion\config` | `minion.config.json` (no secrets) | Administrators/SYSTEM full, service account read |
-| `C:\ProgramData\SluiceGate\Minion\keys` | `minion-api-key.txt`, `minion-private-key.pem`, `sg-public-key.pem`, optional `sg-server-cert.pem` | Administrators/SYSTEM full, service account read |
-| `C:\ProgramData\SluiceGate\Minion\data` and `MissionDiary` | Replay-protection nonces and Mission recovery state | Administrators/SYSTEM full, service account modify |
+| **Minion** (patching worker) | A native Windows service, `SluiceGateMinion`, under a dedicated service account | `C:\Program Files\SluiceGate\Minion` (program) and `C:\ProgramData\SluiceGate\Minion` (configuration, keys, state) |
+| **sg-service** (SluiceGate service, Admin Console, Mission Control) | A Linux container in Docker Engine running inside a WSL 2 Ubuntu distribution | `/opt/sluicegate` inside WSL, plus the Docker volume `sluicegate-service-data` (the database) |
+| **WSL keep-alive** | A scheduled task, `SluiceGateWsl`, started at boot | Windows Task Scheduler |
 
-The service starts as `SluiceGate.Minion.Service.exe --config <DataRoot>\config\minion.config.json`; that path is the single configuration contract shared by the installer, the service host, and the PowerShell runtime. Upgrades replace only `InstallRoot` and keep everything under `DataRoot`.
+The service listens on `127.0.0.1:8443` and is reached from Windows through WSL's localhost forwarding. Docker Desktop is not used: Docker does not support it on Windows Server, and Docker Engine for Windows runs only Windows containers, so the Linux container engine lives inside WSL.
 
-## Package Contents
+## Prerequisites
 
-The release bundle is expected to contain:
+The Installation Guide, section 3, gives the commands for each item.
+
+- Windows Server 2022 with the .NET 10 x64 Runtime (the Minion service host needs it).
+- WSL 2 with an Ubuntu distribution that has systemd enabled and Docker Engine installed and running. WSL 2 needs hardware virtualization, which a virtual machine must expose to the guest (nested virtualization).
+- OpenSSL for Windows (`openssl.exe` on `PATH`). The Minion runtime uses it to sign and verify, and the installer uses it to create the Minion's key pair.
+- A dedicated service account for the Minion: a gMSA (`DOMAIN\name$`) or a domain account. It needs read access to the patch catalog and mapping share and the remote-execution rights on its authorized targets. The installer does not grant those.
+
+## Terms and files
+
+The installer creates and manages these. Nothing here needs hand-editing before the first install.
+
+| Name | What it is | Created by | Where |
+| --- | --- | --- | --- |
+| **`service.env`** | The container's settings file: a list of `NAME=value` environment variables. It is not the policy. | Installer, from `service.env.example` | `/opt/sluicegate/service.env` in WSL, readable only by root |
+| **Bootstrap admin key** | The `SG_BOOTSTRAP_ADMIN_KEY` line in `service.env`: a random one-time password for the first Admin Console sign-in. Installation Guide section 9 replaces it with named administrator keys and revokes it. | Installer (random, never shown or logged) | Inside `service.env` |
+| **Policy** (`production-policy.yml`) | The YAML rules that decide whether a request is allowed, paused for approval, or blocked. It starts as `policy.starter.yml`, which blocks everything. You then author rules in the Admin Console's **Policies** tab, which validates and saves them. | Installer, only if none exists (or from `-PolicyFile`) | `/opt/sluicegate/policy/production-policy.yml` in WSL |
+| **Signing key** | The private Ed25519 key `sg-service` uses to sign Missions. It never leaves WSL. | Installer, only if none exists | `/opt/sluicegate/secrets/sg-signing-key.pem` in WSL |
+| **SluiceGate public key** | The matching public half; the Minion uses it to verify Missions. | Installer exports it from WSL | `DataRoot\keys\sg-public-key.pem` |
+| **TLS certificate and key** | Make the service HTTPS. Self-signed (generated) or one you supply. | Installer | `/opt/sluicegate/tls` in WSL |
+| **Minion key pair** | The Minion's own Ed25519 keys. You register the public key in the Admin Console. | Installer, only if none exists | `DataRoot\keys\minion-private-key.pem`, `minion-public-key.pem` |
+| **Minion API key** | The password the Minion presents to Mission Control. Issued by the Admin Console when you register the Minion, then stored with `Set-MinionApiKey.ps1`. | You | `DataRoot\keys\minion-api-key.txt` |
+| **`minion.config.json`** | The Minion's settings. It contains no secrets, only paths and URLs. | Installer, from `minion.config.template.json` | `DataRoot\config\` |
+
+Existing `service.env`, policy, signing key, certificate, and Minion configuration are never overwritten on upgrade, so edits made in the Admin Console and issued keys survive.
+
+## Package contents
 
 ```text
 Install-SluiceGate.ps1
 Uninstall-SluiceGate.ps1
-Set-MinionApiKey.ps1              # stores the API key from hidden input
-MinionInstallHelpers.ps1
-minion.config.template.json       # non-secret defaults; DryRun is true
+Set-MinionApiKey.ps1              # stores the Minion API key from hidden input
+MinionInstallHelpers.ps1          # helpers used by the scripts above
+WslServiceContainer.ps1           # runs the container inside WSL
+minion.config.template.json       # non-secret Minion defaults; DryRun is true
+service.env.example               # template for the container settings
+policy.starter.yml                # initial policy: blocks everything
+new-selfsigned-certificate.sh     # makes a self-signed TLS certificate
 Minion/SluiceGate.Minion.Service.exe
 Minion/runtime/                   # PatchingMinion.ps1, modules, protocol/, version.json
-images/sg-service-image.tar       # same-host topology only
-service.env.example               # same-host topology only; template, no secrets
+images/sg-service-image.tar       # the sg-service container image
 SHA256SUMS.txt                    # SHA-256 of every file in the bundle
 ```
 
-The repository includes the compiled, framework-dependent Windows x64 executable at [deployment/windows/Minion/SluiceGate.Minion.Service.exe](deployment/windows/Minion/SluiceGate.Minion.Service.exe), alongside its C# source in [deployment/windows/MinionHost/](deployment/windows/MinionHost/). The .NET 10 x64 Runtime must be installed on the Windows Server 2022 host. The executable does not bundle the .NET runtime. Operators do not need a .NET SDK to install it; developers can rebuild it using the instructions below.
+## Building the package
 
-Build the bundle from the repository root's `deployment/windows` directory. `-Version` is required and is recorded in `Minion/runtime/version.json`; omit `-ServiceImage` for a Minion-only bundle. The output directory must be empty so stale files are never bundled.
+Done by a maintainer on any machine with Docker; the output is one folder to copy to the server.
 
-```powershell
-./Build-DeploymentBundle.ps1 `
-  -MinionExecutable .\Minion\SluiceGate.Minion.Service.exe `
-  -Version 1.0.0 `
-  -ServiceImage sluicegate/sg-service:1.0.0
-```
+1. **Service host.** The C# source is in [MinionHost/](MinionHost/) with its tests in [MinionHost.Tests/](MinionHost.Tests/); the compiled, framework-dependent Windows x64 build is checked in at [Minion/SluiceGate.Minion.Service.exe](Minion/SluiceGate.Minion.Service.exe). Only `bin/` and `obj/` build output is ignored by git. Rebuild after changing the source. Signing with an Authenticode certificate is optional: an unsigned executable only produces a warning, and `-RequireSignature` (on the bundle builder and the installer) turns that into an error. Signing lets Windows and tools such as AppLocker or WDAC verify the binary; the installer does not otherwise depend on it:
 
-If testing in a lab or development environment without a commercial code-signing certificate, pass `-SkipSignatureCheck` to `Build-DeploymentBundle.ps1` and `Install-SluiceGate.ps1`.
+   ```bash
+   docker run --rm -v "$PWD/deployment/windows/MinionHost:/src" -v "$PWD/deployment/windows/Minion:/out" -w /src \
+     mcr.microsoft.com/dotnet/sdk:10.0 \
+     dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=None -o /out
+   ```
 
-The builder exports the selected service image and generates SHA-256 records. Image tags should be pinned to the SluiceGate release; avoid `latest` for deployed artifacts even though the host Docker Engine is the latest stable supported release.
+   With a local .NET 10 SDK on Windows: `dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=None -o ..\Minion` from `MinionHost`.
+2. **Service image.** From the repository root: `docker build -f sg-service/Dockerfile -t sluicegate/sg-service:1.0.0 .` Use a release tag, not `latest`.
+3. **Bundle.** From `deployment/windows` on Windows PowerShell. `-Version` is recorded in `Minion/runtime/version.json`; the output directory must be empty:
 
-### Compiling the C# Windows Service
+   ```powershell
+   .\Build-DeploymentBundle.ps1 -MinionExecutable .\Minion\SluiceGate.Minion.Service.exe `
+     -ServiceImage sluicegate/sg-service:1.0.0 -Version 1.0.0
+   ```
 
-The Windows Service host source code is located at [deployment/windows/MinionHost/](deployment/windows/MinionHost/). It can be compiled using either the .NET 10 SDK or a standard Docker container.
+   An unsigned Minion executable produces a warning. Pass `-RequireSignature` to refuse unsigned builds; the installer accepts the same switch.
 
-#### Option A: Using Docker (cross-platform, no local .NET SDK needed)
-```bash
-docker run --rm \
-  -v "$PWD/deployment/windows/MinionHost:/src" \
-  -v "$PWD/deployment/windows/Minion:/out" \
-  -w /src \
-  mcr.microsoft.com/dotnet/sdk:10.0 \
-  dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=None -o /out
-```
-This writes the rebuilt framework-dependent `SluiceGate.Minion.Service.exe` directly to [deployment/windows/Minion/](deployment/windows/Minion/). The .NET 10 x64 Runtime is required on the Windows Server 2022 host.
+## Installing
 
-#### Option B: Using local .NET 10 SDK on Windows
-```powershell
-cd deployment/windows/MinionHost
-dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=None -o ..\Minion
-```
+Run from an elevated PowerShell window in the extracted bundle. Parameters:
 
-## Configuration and Install
-
-1. Install the .NET 10 x64 Runtime and validate it with `dotnet --list-runtimes`. Also install and validate the latest stable Docker release supported on Windows Server 2022.
-2. Create the dedicated AD service identity and grant its share/target permissions outside this package. Configure its service logon through Windows Service Control Manager or an approved deployment tool.
-3. Provision the SluiceGate Ed25519 signing key at the configured host path using the organization's key-management process. The installer mounts this file read-only in the service container; the key is not part of the bundle.
-3a. Provision the Mission Control TLS certificate and private key as `InstallRoot\tls\server-cert.pem` and `InstallRoot\tls\server-key.pem` (for a self-signed certificate, see `deployment/tls/new-selfsigned-certificate.sh` and the Installation Guide). The installer requires an `https://` Minion URL, mounts this directory read-only, and starts the container with `SG_TLS_CERT_FILE` and `SG_TLS_KEY_FILE`, so HTTP is never served. The certificate's names must include the host in `MissionControlUrl` (for `127.0.0.1`, an IP address entry). Restrict the key file to administrators. Set `TrustedServerCertificatePath` in the Minion configuration to the certificate so the Minion trusts it.
-4. Prepare `service.env` from `service.env.example`, supplying the one-time bootstrap secret and production policy path through approved secret management. Place the policy at `InstallRoot\policy\production-policy.yml`; the installer mounts only this policy directory read/write so the authenticated Policies view can safely replace the file. Do not place secrets in this directory. Do not commit or distribute the completed environment file in the bundle. After issuing named Agent/Minion/admin keys, remove the bootstrap secret from the service environment.
-5. Provision the Minion's keys under `DataRoot\keys` before installing, so they never travel in a package or on a command line. Create the Minion key pair (see the Installation Guide), copy the SluiceGate public key to `sg-public-key.pem`, and store the API key with `.\Set-MinionApiKey.ps1` (hidden prompt; it creates the protected `keys` directory first). The installer refuses to proceed if any of the three files is missing.
-6. Run an elevated PowerShell session from the extracted bundle. `-ServiceAccount` is a gMSA (`CONTOSO\svc-minion$`, no password) or a domain account (prompted for its password, never passed on a command line). `-CatalogPath` and `-NessusMappingPath` are written into the generated configuration. Add `-TrustedServerCertificate <pem>` when the service uses a self-signed or private-CA certificate; the installer copies it, records its SHA-256 fingerprints, and pins the Minion to it. The Minion starts with `DryRun` true; pass `-DisableDryRun` only after dry-run validation.
+| Parameter | Required | Meaning |
+| --- | --- | --- |
+| `-PackageRoot` | Yes | The bundle folder, usually `(Get-Location).Path`. |
+| `-ServiceImage` | Yes | The image tag inside the bundle, for example `sluicegate/sg-service:1.0.0`. |
+| `-MissionControlUrl` | Yes | Where the Minion on this server connects. Use `https://127.0.0.1:8443` with `-SelfSignedCertificate`. |
+| `-PublicUrl` | No | The address Agents and administrators on other machines use. Defaults to `-MissionControlUrl`. It is added to the certificate's names and used in email links. |
+| `-MinionId` | Yes | The Minion's name, for example `PATCH-01`. Register the same ID in the Admin Console. |
+| `-CatalogPath`, `-NessusMappingPath` | Yes | UNC paths to the patch catalog and Nessus mapping CSV files. |
+| `-ServiceAccount` | Yes | `DOMAIN\name$` for a gMSA (no password), or a domain account (the installer prompts for its password). |
+| `-SelfSignedCertificate` | One of these | Generate a self-signed certificate. The installer also makes the Minion trust exactly that certificate. |
+| `-TlsCertificate`, `-TlsKey` | One of these | A certificate and private key you already have (PEM). |
+| `-TrustedServerCertificate` | No | A private CA's root certificate, when Windows does not already trust it. |
+| `-ReplaceCertificate` | No | Replace an existing certificate (renewal). |
+| `-PolicyFile` | No | Install this policy on first install instead of the blocking starter. |
+| `-WslDistribution` | No | The WSL distribution name. Default `Ubuntu`. |
+| `-ReplaceConfig` | No | Regenerate `minion.config.json` instead of keeping the existing one. |
+| `-DisableDryRun` | No | Start the Minion able to patch. By default `DryRun` is true and nothing is installed. |
+| `-SkipStartupTask` | No | Do not register the WSL boot task (the installer otherwise asks for your password to register it). |
 
 ```powershell
 .\Install-SluiceGate.ps1 `
   -PackageRoot (Get-Location).Path `
-  -ServiceImage 'registry.example.gov/sluice/sg-service:VERSION' `
+  -ServiceImage 'sluicegate/sg-service:1.0.0' `
   -MissionControlUrl 'https://127.0.0.1:8443' `
+  -PublicUrl 'https://sluicegate.example.internal' `
   -MinionId 'PATCH-01' `
   -CatalogPath '\\fileserver\patchrepo\patch_catalog.csv' `
   -NessusMappingPath '\\fileserver\patchrepo\nessus_mapping.csv' `
   -ServiceAccount 'CONTOSO\svc-minion$' `
-  -TrustedServerCertificate '.\server-cert.pem' `
-  -SkipSignatureCheck
+  -SelfSignedCertificate
 ```
 
-For a Minion-only installation, drop `-ServiceImage` and add `-SkipServiceContainer`. The installer fails if the service does not stay running for ten seconds after it starts.
+In order, the installer:
 
-The installer registers the `SluiceGateMinion` Event Log source, creates the service, and sets recovery to restart it twice (60 seconds apart) and then leave it stopped. The service host checks the installation at startup: missing runtime files, a missing or invalid configuration, an inline `ApiKey`, an empty or missing key file, or a non-HTTPS Mission Control URL each write a critical entry to the Application log (source `SluiceGateMinion`) and stop the service with a failure exit code. If the PowerShell worker exits five times in a row within a minute of starting, the service also stops as failed instead of restarting forever. Check `Get-Service SluiceGateMinion` and the Application log first when the Minion does not check in.
+1. Checks the bundle, the signature (unless skipped), that Docker answers inside WSL, and that `openssl.exe` is available.
+2. Stops an existing Minion service, then copies the Minion program to `InstallRoot`.
+3. Inside WSL, creates `/opt/sluicegate` (root-only) and, for anything missing, generates `service.env` with a random bootstrap key, the signing key, the TLS certificate (or copies yours), and the initial policy.
+4. Loads the image, recreates the container, and waits until the service answers.
+5. Exports the SluiceGate public key (and, for self-signed, the certificate) to the Minion's `keys` folder, and creates the Minion key pair if absent.
+6. Writes `minion.config.json`, then restricts `DataRoot`: Administrators and SYSTEM full control, the service account read on `config` and `keys` and write on `data` and `MissionDiary`.
+7. Registers the Event Log source and the `SluiceGateMinion` service (recovery: restart twice, then stay stopped), and the WSL boot task.
+8. Starts the Minion if its API key file exists. On a first install it does not yet, because the Admin Console issues that key. The installer leaves the service stopped and prints the next steps.
 
-Existing configuration is kept on upgrade; pass `-ReplaceConfig` to regenerate it. The container steps still need the secrets described above (`service.env`, signing key, TLS files, policy) under `InstallRoot`.
+## Service health
 
-## Upgrade and Uninstall
+- `Get-Service SluiceGateMinion` and the Application event log (source `SluiceGateMinion`). At startup the host checks the runtime files, the configuration, the key files, and that the URL is HTTPS; a failed check is logged as critical and the service stops with a failure exit code. Five worker crashes in a row within a minute of starting also stop it as failed.
+- The container: `wsl.exe -d Ubuntu -u root --exec docker logs --tail 100 sluicegate-service`.
 
-Upgrade using a versioned bundle and the same approved configuration process. Re-run `Install-SluiceGate.ps1` from the new bundle: it stops the service, replaces the files under `InstallRoot`, keeps `DataRoot` (configuration, keys, nonces, Mission Diary) untouched, and starts the service again. Verify Minion Mission Control check-in afterwards.
+## Upgrade, renewal, uninstall
 
-To remove the installation:
+- **Upgrade:** run the new bundle's installer with the same parameters. It replaces the program and the container and keeps all existing secrets, policy, certificate, configuration, and data.
+- **Renew a self-signed certificate** (it lasts 365 days): `-SelfSignedCertificate -ReplaceCertificate -ReplaceConfig`. The Minion is restarted in the same run with trust in the new certificate.
+- **Uninstall:** `.\Uninstall-SluiceGate.ps1` removes the service, boot task, container, and program. It keeps `DataRoot`, `/opt/sluicegate`, and the database volume. `-RemoveData` deletes those too; export what you need first.
 
-```powershell
-.\Uninstall-SluiceGate.ps1
-```
+## Validation checklist
 
-The uninstall script removes the Windows service, Event Log source, container, and `InstallRoot`. It keeps `DataRoot` (configuration, keys, nonce store, Mission Diary) unless `-RemoveData` is given. Export or preserve service logs and required local Mission recovery state before using `-RemoveData`.
-
-## Validation Checklist
-
-- Windows Server 2022 and the installed Docker Engine are supported and healthy.
-- The container exposes Minion Mission Control only on loopback for the single-VM deployment.
-- The Minion service starts as the configured identity and authenticates to Minion Mission Control.
-- The Minion can read the configured Nessus mapping/catalog CSVs and patch files, and can perform remote execution only on its authorized target scope.
-- Credentials do not appear in script arguments, process command lines, logs, source control, Mission Envelopes, or package defaults.
-- Install, upgrade, restart/resume, and uninstall behavior has been tested on a clean VM snapshot.
+- The Minion service starts under the service account and its last-contact time updates in the Admin Console.
+- Credentials appear in no script argument, process command line, log, Mission Envelope, or package file.
+- `DataRoot` is readable only by Administrators, SYSTEM, and the service account.
+- Install, upgrade, reboot, and uninstall have been run on a clean Windows Server 2022 snapshot. This has not yet been done: the scripts were verified with automated tests and a simulated WSL, not on Windows Server.

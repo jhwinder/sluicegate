@@ -19,6 +19,10 @@ def tls_settings() -> tuple[str | None, str | None]:
     return (certificate or None, key or None)
 
 
+# TLS 1.2 is the floor (Python's server default); these suites are forward-secret AEAD only. TLS 1.3 suites are not affected.
+DEFAULT_TLS_CIPHERS = "ECDHE+AESGCM:ECDHE+CHACHA20"
+
+
 def main() -> None:
     certificate, key = tls_settings()
     if certificate is None:
@@ -34,6 +38,8 @@ def main() -> None:
         port=int(os.environ.get("SG_BIND_PORT", "8443")),
         ssl_certfile=certificate,
         ssl_keyfile=key,
+        ssl_ciphers=os.environ.get("SG_TLS_CIPHERS", "").strip() or DEFAULT_TLS_CIPHERS,
+        timeout_keep_alive=int(os.environ.get("SG_KEEP_ALIVE_SECONDS", "5")),
     )
 
 

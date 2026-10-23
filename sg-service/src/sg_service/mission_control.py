@@ -31,6 +31,7 @@ from sg_core import GateRequest, PolicyEngine
 from sg_poledit.validate import validate_policy_dict
 
 from sg_service import notifications
+from sg_service.hardening import HardeningMiddleware
 
 DATABASE_PATH = Path(os.environ.get("SG_DATABASE_PATH", "/data/sg-service.sqlite3"))
 SIGNING_KEY_PATH = Path(os.environ.get("SG_SIGNING_KEY_PATH", "/run/secrets/sg-signing-key.pem"))
@@ -68,6 +69,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
 
 
 app = FastAPI(title="SluiceGate Service", version="0.1.0", lifespan=lifespan)
+app.add_middleware(HardeningMiddleware)
 policy_engine: PolicyEngine | None = None
 
 
