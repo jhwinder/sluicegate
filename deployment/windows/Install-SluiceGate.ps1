@@ -7,7 +7,7 @@ param(
     [string]$ServiceImage,
 
     [Parameter(Mandatory = $true)]
-    [string]$MinionMissionControlUrl,
+    [string]$MissionControlUrl,
 
     [Parameter(Mandatory = $true)]
     [string]$MinionId,
@@ -62,8 +62,8 @@ $tlsCertificatePath = Join-Path $tlsDirectory "server-cert.pem"
 $tlsKeyPath = Join-Path $tlsDirectory "server-key.pem"
 $policyDirectory = Join-Path $InstallRoot "policy"
 $policyPath = Join-Path $policyDirectory "production-policy.yml"
-if (-not $MinionMissionControlUrl.StartsWith("https://", [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "MinionMissionControlUrl must use https. Plain HTTP Mission Control is supported only for local development."
+if (-not $MissionControlUrl.StartsWith("https://", [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "MissionControlUrl must use https. Plain HTTP Mission Control is supported only for local development."
 }
 if (-not (Test-Path -LiteralPath $serviceEnvPath -PathType Leaf)) {
     throw "Provision service.env using approved secret management before installation."
@@ -109,7 +109,7 @@ if ($PSCmdlet.ShouldProcess($InstallRoot, "Install SluiceGate Minion service and
         Stop-Service -Name $serviceName -Force
         sc.exe delete $serviceName | Out-Null
     }
-    New-Service -Name $serviceName -BinaryPathName ('"{0}" --config "{1}" --minion-id "{2}" --mission-control-url "{3}"' -f $serviceExecutable, (Join-Path $InstallRoot "minion.config.json"), $MinionId, $MinionMissionControlUrl) `
+    New-Service -Name $serviceName -BinaryPathName ('"{0}" --config "{1}" --minion-id "{2}" --mission-control-url "{3}"' -f $serviceExecutable, (Join-Path $InstallRoot "minion.config.json"), $MinionId, $MissionControlUrl) `
         -DisplayName "SluiceGate Minion" -Description "SluiceGate Minion Mission Control client and execution runtime" `
         -StartupType Automatic | Out-Null
     Start-Service -Name $serviceName

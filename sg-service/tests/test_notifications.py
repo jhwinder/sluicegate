@@ -22,7 +22,7 @@ class InlineExecutor:
 
 
 def setup_test_service(tmp_path: Path, monkeypatch):
-    from sg_service import minion_mission_control as service
+    from sg_service import mission_control as service
 
     monkeypatch.setattr(service, "NOTIFICATION_EXECUTOR", InlineExecutor())
     database_path = tmp_path / "service.sqlite3"

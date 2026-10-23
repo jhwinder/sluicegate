@@ -13,7 +13,7 @@ import httpx
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
-MISSION_CONTROL_URL = os.environ.get("MINION_MISSION_CONTROL_URL", os.environ.get("MINION_CENTRAL_COMMAND_URL", "http://sg-service:8443"))
+MISSION_CONTROL_URL = os.environ.get("MISSION_CONTROL_URL", os.environ.get("MINION_CENTRAL_COMMAND_URL", "http://sg-service:8443"))
 MINION_ID = os.environ.get("MINION_ID", "DEMO-STUB-01")
 MINION_API_KEY = os.environ.get("MINION_API_KEY", "")
 MINION_PRIVATE_KEY_PATH = Path(os.environ.get("MINION_PRIVATE_KEY_PATH", "/run/secrets/demo-minion-key.pem"))

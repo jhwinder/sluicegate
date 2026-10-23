@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 
 def test_patch_request_claim_status_ownership_and_signed_result(tmp_path: Path, monkeypatch) -> None:
-    from sg_service import minion_mission_control as service
+    from sg_service import mission_control as service
 
     database_path = tmp_path / "service.sqlite3"
     signing_key_path = tmp_path / "sg-signing-key.pem"
@@ -511,7 +511,7 @@ def test_patch_request_claim_status_ownership_and_signed_result(tmp_path: Path, 
 
 
 def test_outside_window_decision_comes_from_policy_obligation(monkeypatch) -> None:
-    from sg_service import minion_mission_control as service
+    from sg_service import mission_control as service
 
     window = {"start_utc": "2999-01-01T00:00:00Z", "end_utc": "3000-01-01T00:00:00Z"}
     target_obligation = SimpleNamespace(type="allowed_patch_targets", data={"servers": ["server.example.gov"]})

@@ -29,7 +29,7 @@ def main() -> None:
             flush=True,
         )
     uvicorn.run(
-        "sg_service.minion_mission_control:app",
+        "sg_service.mission_control:app",
         host=os.environ.get("SG_BIND_HOST", "0.0.0.0"),
         port=int(os.environ.get("SG_BIND_PORT", "8443")),
         ssl_certfile=certificate,

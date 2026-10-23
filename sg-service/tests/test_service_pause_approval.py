@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 
 def test_service_pause_and_approval_workflow(tmp_path: Path, monkeypatch) -> None:
-    from sg_service import minion_mission_control as service
+    from sg_service import mission_control as service
 
     database_path = tmp_path / "service.sqlite3"
     signing_key_path = tmp_path / "sg-signing-key.pem"
@@ -140,7 +140,7 @@ def test_service_pause_and_approval_workflow(tmp_path: Path, monkeypatch) -> Non
 
 
 def test_service_rejection_workflow(tmp_path: Path, monkeypatch) -> None:
-    from sg_service import minion_mission_control as service
+    from sg_service import mission_control as service
 
     database_path = tmp_path / "service.sqlite3"
     signing_key_path = tmp_path / "sg-signing-key.pem"
