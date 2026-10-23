@@ -49,6 +49,7 @@ Maintenance intervals use explicit UTC `start_utc` and `end_utc` timestamps. The
 Copy `minion.config.example.json` to `minion.config.json` and configure:
 
 - `MissionControlUrl`: must be `https://`; the Minion will not start with plain HTTP.
+- `ApiKeyPath`: file holding the Minion API key (store it with `deployment/windows/Set-MinionApiKey.ps1`). An inline `ApiKey` setting is rejected, so the configuration file itself contains no secrets.
 - `TrustedServerCertificatePath` (optional): PEM file with the provisioned self-signed certificate or private CA. When set, only that certificate chain is trusted and the host name and validity dates are still checked. Omit it to use the Windows trust store.
 - `TrustedServerCertificateSha256` (optional): fingerprints of the only certificates allowed in that file; use it to detect an altered trust file. For rotation, list both the old and new certificate until the old one is retired.
 - `AllowInsecureHttp` (development only): permits `http://` for a loopback address. Do not set it for a pilot.

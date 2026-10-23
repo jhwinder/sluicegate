@@ -27,7 +27,7 @@ Import-Module $modulePath -Force
 
 $MissionControlUrl       = if ($config.MissionControlUrl) { $config.MissionControlUrl } else { $config.CentralCommandUrl }
 $MinionId                = $config.MinionId
-$ApiKey                  = $config.ApiKey
+$ApiKey                  = Get-MinionApiKey -Config $config
 $SluiceGatePublicKeyPath = $config.SluiceGatePublicKeyPath
 $MinionPrivateKeyPath    = $config.MinionPrivateKeyPath
 $NonceStorePath          = if ($config.NonceStorePath) { $config.NonceStorePath } else { Join-Path $PSScriptRoot "nonces.txt" }

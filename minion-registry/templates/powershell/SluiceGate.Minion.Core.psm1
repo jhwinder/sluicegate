@@ -490,6 +490,34 @@ function Test-MissionEnvelope {
     return @{ IsValid = $true; Reason = $null; Message = "Mission envelope is valid." }
 }
 
+function Get-MinionApiKey {
+    <#
+    .SYNOPSIS
+        Reads the Minion API key from the protected file named by ApiKeyPath. An inline ApiKey setting is rejected.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Config
+    )
+
+    if ($Config.PSObject.Properties.Name -contains 'ApiKey') {
+        throw "An inline ApiKey in the configuration is not supported. Set ApiKeyPath to a protected key file."
+    }
+    $path = $Config.ApiKeyPath
+    if ([string]::IsNullOrWhiteSpace($path)) {
+        throw "Configuration setting ApiKeyPath is required."
+    }
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "API key file not found: $path"
+    }
+    $key = (Get-Content -LiteralPath $path -Raw).Trim()
+    if (-not $key) {
+        throw "API key file is empty: $path"
+    }
+    return $key
+}
+
 function Initialize-MinionHttpType {
     if ('SluiceGate.MissionControlHttp' -as [type]) {
         return
@@ -861,6 +889,7 @@ Export-ModuleMember -Function `
     Set-MinionTransportSecurity, `
     Invoke-MinionHttp, `
     Get-MinionHttpStatusCode, `
+    Get-MinionApiKey, `
     Invoke-MinionCheckIn, `
     Get-MinionMissionClaim, `
     Send-MinionHeartbeat, `

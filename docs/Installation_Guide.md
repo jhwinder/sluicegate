@@ -262,10 +262,10 @@ A self-signed certificate is acceptable for the pilot when the Minion is configu
 
    The script writes `sluicegate-server.pem` (the certificate) and `sluicegate-server.key` (the private key, mode 0600) and prints the certificate's SHA-256 fingerprint and expiry date. Without the script, run `openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 365 -subj "/CN=NAME" -addext "subjectAltName=DNS:NAME" -keyout KEY -out CERT` yourself.
 2. In the Nginx configuration above, point `ssl_certificate` at `/etc/pki/tls/sluicegate/sluicegate-server.pem` and `ssl_certificate_key` at `/etc/pki/tls/sluicegate/sluicegate-server.key`, then run `sudo nginx -t && sudo systemctl reload nginx`. Browsers will warn about the certificate unless they also trust it.
-3. Copy only the certificate file (never the key) to the Windows Minion at `C:\Program Files\SluiceGate\Minion\keys\sg-server-cert.pem`. On Windows, confirm it is the right file by comparing the fingerprint with the one the script printed, using `openssl x509 -in sg-server-cert.pem -noout -fingerprint -sha256`.
-4. Add the two settings in Section 8 so the Minion trusts that certificate.
+3. Copy only the certificate file (never the key) to the Windows Minion host, for example `C:\SluiceGate-bundle\sg-server-cert.pem`. On Windows, confirm it is the right file by comparing the fingerprint with the one the script printed, using `openssl x509 -in sg-server-cert.pem -noout -fingerprint -sha256`.
+4. Pass that file to the installer with `-TrustedServerCertificate` in Section 8; it stores the certificate under `C:\ProgramData\SluiceGate\Minion\keys` and pins the Minion to it.
 
-**Renewal or rotation.** The trust file may hold several certificates. Before replacing the server certificate, add the new certificate to the end of `sg-server-cert.pem` and its fingerprint to `TrustedServerCertificateSha256`, then restart the Minion service. Install the new certificate on the server, and later remove the old certificate and fingerprint. Replacing the server certificate first makes the Minion reject the service until its trust file is updated.
+**Renewal or rotation.** The trust file may hold several certificates. Before replacing the server certificate, add the new certificate to the end of `C:\ProgramData\SluiceGate\Minion\keys\sg-server-cert.pem` and its fingerprint to `TrustedServerCertificateSha256` in `minion.config.json`, then restart the Minion service. Install the new certificate on the server, and later remove the old certificate and fingerprint. Replacing the server certificate first makes the Minion reject the service until its trust file is updated.
 
 **Without Nginx.** The container can serve HTTPS itself: mount the certificate and key read-only into the container and set `SG_TLS_CERT_FILE` and `SG_TLS_KEY_FILE` to their container paths. The Windows same-host installer does this from `InstallRoot\tls\server-cert.pem` and `server-key.pem`.
 
@@ -278,93 +278,107 @@ In this section, create the identities that may submit patch requests and claim 
 3. On the Windows Minion machine, create a unique Ed25519 key pair with OpenSSL. Use an approved OpenSSL installation and store the private key in a directory readable only by administrators and the Minion service identity:
 
    ```powershell
-   New-Item -ItemType Directory -Force 'C:\Program Files\SluiceGate\Minion\keys'
+   New-Item -ItemType Directory -Force 'C:\ProgramData\SluiceGate\Minion\keys'
    openssl genpkey -algorithm ED25519 `
-     -out 'C:\Program Files\SluiceGate\Minion\keys\minion-private-key.pem'
+     -out 'C:\ProgramData\SluiceGate\Minion\keys\minion-private-key.pem'
    openssl pkey `
-     -in 'C:\Program Files\SluiceGate\Minion\keys\minion-private-key.pem' `
-     -pubout -out 'C:\Program Files\SluiceGate\Minion\keys\minion-public-key.pem'
+     -in 'C:\ProgramData\SluiceGate\Minion\keys\minion-private-key.pem' `
+     -pubout -out 'C:\ProgramData\SluiceGate\Minion\keys\minion-public-key.pem'
    ```
 
-   Do not send the private key to Linux. The public key is safe to register with SluiceGate.
+   Do not send the private key to Linux. The public key is safe to register with SluiceGate. The installer in Section 8 restricts access to this directory to Administrators, SYSTEM, and the Minion service account.
 
 4. In the **Minion Registry** tab, register a Minion with ID `PATCH-01` (or another ID you will use consistently), runtime type `powershell`, environment `prod`, and the capability `windows.patch.reconcile`. Paste the contents of `minion-public-key.pem` into the public-key field. Record the ID exactly; it must match `MinionId` in the Windows configuration.
-5. The Minion API key is shown once after registration. Save it in the organization's approved secrets vault in a record named for this Minion. The Windows Minion identity needs access to this value to populate its protected configuration. SluiceGate does not create `minion.config.json` yet; that registry feature is tracked as P2.5 in the backlog. If the key is lost, rotate or re-register it and update the Minion configuration.
+5. The Minion API key is shown once after registration. Save it in the organization's approved secrets vault in a record named for this Minion. The Windows Minion identity needs access to this value; Section 7 stores it in a protected file with `Set-MinionApiKey.ps1`. SluiceGate does not create `minion.config.json` yet; that registry feature is tracked as P2.5 in the backlog, and until then the installer generates it. If the key is lost, rotate or re-register it and store the new key the same way.
 6. Confirm both the Agent and Minion appear enabled in their registry tabs. Do not register capabilities that the deployed Minion runtime does not implement.
 
-## 7. Prepare the Windows Minion files
+## 7. Prepare the Windows Minion host
 
-This section places the Minion scripts, modules, keys, and configuration on Windows. The script relies on a particular directory relationship between `minions\patching` and `templates\powershell`, so preserve the repository layout rather than copying only the main script.
+This section places the release bundle and the Minion's keys on Windows. Binaries are installed under `C:\Program Files\SluiceGate\Minion` and replaced on upgrade; configuration, keys, and state live under `C:\ProgramData\SluiceGate\Minion` (`DataRoot`) and are never overwritten by an upgrade.
 
-1. Confirm the approved Minion release bundle contains the patching scripts and modules, the PowerShell Core module, and any required runtime files. In the source tree these are under `minion-registry\minions\patching` and `minion-registry\templates\powershell`.
-2. Copy the complete `minion-registry` directory from the approved release to `C:\Program Files\SluiceGate\minion-registry`, preserving its subdirectories. Verify that these files exist:
-   - `minions\patching\PatchingMinion.ps1`
-   - `minions\patching\PatchingCatalog.psm1`
-   - `minions\patching\PatchingEngine.psm1`
-   - `templates\powershell\SluiceGate.Minion.Core.psm1`
-3. Copy the Linux public signing key to `C:\Program Files\SluiceGate\Minion\keys\sg-public-key.pem`. Copy the Minion private key and public key into the same protected `keys` directory if they are not already there.
-4. The TLS server certificate and private key stay on the RHEL Nginx server; do not copy either to Windows. If the certificate was issued by a public CA already trusted by Windows, no certificate installation is needed on the Minion. If your organization uses a private CA, obtain its root CA certificate and verify its fingerprint with the CA administrator. On Windows, run `mmc.exe`, add the **Certificates** snap-in for **Computer account**, and import the verified root CA certificate into **Trusted Root Certification Authorities**. If the CA supplied an intermediate certificate, install it under **Intermediate Certification Authorities**. Never import the TLS server's private key.
+1. Extract the approved release bundle (built with `Build-DeploymentBundle.ps1`; see `deployment/windows/README.md`) to a temporary folder such as `C:\SluiceGate-bundle`. Check every file against the bundle's hash list and investigate any `MISMATCH` line:
 
-5. Verify that the Windows machine trusts the TLS endpoint and can reach it:
+   ```powershell
+   Set-Location 'C:\SluiceGate-bundle'
+   Get-Content .\SHA256SUMS.txt | ForEach-Object {
+     $hash, $path = $_ -split '  ', 2
+     if ((Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash -ne $hash) { "MISMATCH: $path" }
+   }
+   ```
+
+2. Copy the Linux public signing key to `C:\ProgramData\SluiceGate\Minion\keys\sg-public-key.pem`. The Minion key pair from Section 6 is already in the same `keys` directory.
+3. Store the Minion API key without putting it in a file you edit or a command line. From the bundle folder, run the helper and paste the key at the hidden prompt:
+
+   ```powershell
+   .\Set-MinionApiKey.ps1
+   ```
+
+   It writes `keys\minion-api-key.txt` with access limited to Administrators and SYSTEM; the installer later adds read access for the service account.
+4. Decide how the Minion will trust the service certificate. If it was issued by a public CA already trusted by Windows, do nothing. If it is self-signed or from a private CA, keep the public certificate file (never the private key) for the installer's `-TrustedServerCertificate` parameter in Section 8, which pins the Minion to exactly that certificate (see Section 5, self-signed option). As an alternative for a private CA, an administrator can import the verified root CA certificate into **Trusted Root Certification Authorities** for the computer account using `mmc.exe`; this trusts that CA for every application on the server.
+5. For a CA-issued certificate, verify that the Windows machine trusts the endpoint and can reach it:
 
    ```powershell
    Test-NetConnection sluicegate.example.internal -Port 443
    Invoke-RestMethod 'https://sluicegate.example.internal/health'
    ```
 
-   The health response should report `status` as `ok`. A successful TCP connection alone does not verify the certificate; `Invoke-RestMethod` must succeed without disabling certificate checks.
-6. Give the dedicated Minion identity the following permissions on the Windows host:
-   - Read and execute on the released Minion scripts, PowerShell modules, and OpenSSL executable.
-   - Read on `minion.config.json`, the SluiceGate public key, and the Minion private key. Restrict the private-key ACL to Administrators and this Minion identity.
-   - Modify on the Minion data directory that contains `nonces.txt`; the runtime must create and update this replay-protection file.
+   The health response should report `status` as `ok`; `Invoke-RestMethod` must succeed without disabling certificate checks. This check is expected to fail for a self-signed certificate, because Windows does not trust it; the Minion's pinned trust is exercised when the service starts.
+6. Give the dedicated Minion identity (a gMSA such as `CONTOSO\svc-sluicegate-minion$`, or a domain account) the following permissions. The installer applies the first three on the Minion host; you grant the rest:
+   - Read and execute on the installed Minion runtime (the default `Program Files` permissions already allow this).
+   - Read on `config` and `keys` under `DataRoot`; the installer removes every other reader except Administrators and SYSTEM.
+   - Modify on `data` (the replay-protection nonce file) and `MissionDiary` under `DataRoot`.
    - Read on both the catalog/mapping share and their NTFS files, plus read access to patch package files referenced by approved catalog rows.
 
    The current patching code also performs remote PowerShell commands with `Invoke-Command` and stages files through each target's `C$` administrative share. Consequently, its target-side requirements are not least privilege: the Minion identity currently needs WinRM/PowerShell Remoting access, SMB access to `C$`, permission to create/write/delete `C:\Windows\Temp\SluiceGate\Staging`, and rights to run the Windows Update Agent and installers. In the current implementation this effectively requires local-administrator rights on each target. 
 
-   To apply the Minion host file permissions, open an elevated PowerShell window, replace the account name below with the actual domain service account or gMSA, and run these commands. `RX` means read and run, `R` means read, and `M` means modify:
-
-   ```powershell
-   $minionIdentity = 'CONTOSO\svc-sluicegate-minion'
-   icacls 'C:\Program Files\SluiceGate\minion-registry' /grant "${minionIdentity}:(OI)(CI)RX" /T
-   icacls 'C:\Program Files\SluiceGate\Minion\keys\minion-private-key.pem' /inheritance:r /grant:r 'BUILTIN\Administrators:F' 'NT AUTHORITY\SYSTEM:F' "${minionIdentity}:R"
-   icacls 'C:\Program Files\SluiceGate\minion-registry\minions\patching\minion.config.json' /inheritance:r /grant:r 'BUILTIN\Administrators:F' 'NT AUTHORITY\SYSTEM:F' "${minionIdentity}:R"
-   New-Item -ItemType Directory -Force 'C:\Program Files\SluiceGate\Minion\data' | Out-Null
-   icacls 'C:\Program Files\SluiceGate\Minion\data' /grant "${minionIdentity}:(OI)(CI)M"
-   ```
-
-   Also grant that identity **Read** at both the SMB share and NTFS levels for the catalog, mapping, and approved patch files. Do not grant `Everyone` access. These ACL commands protect Minion files; they do not reduce the broad local-administrator requirement the current remote patch implementation has on target servers.
+   Also grant that identity **Read** at both the SMB share and NTFS levels for the catalog, mapping, and approved patch files. Do not grant `Everyone` access. The installer's ACLs protect the Minion's own files; they do not reduce the broad local-administrator requirement the current remote patch implementation has on target servers.
 
    Do not store reusable credentials in the catalog or mapping file.
 
-## 8. Configure the Windows Minion
+## 8. Install and configure the Windows Minion
 
-In this section, create the JSON file that tells the Minion where Mission Control is, which key to use, and which patch inputs it may read. Configuration paths must match the actual Windows paths and the Minion ID registered in the Admin Console.
+In this section, run the installer. It copies the runtime, writes the Minion configuration, protects the data directory, registers the Windows service under the service account, and checks that the service stays running. The Minion ID must match the one registered in the Admin Console.
 
-1. Copy `minion.config.example.json` from `minion-registry\minions\patching` to `minion.config.json` in that same directory.
-2. Edit `minion.config.json` and set the values below. Keep the JSON syntax valid, including quotation marks and commas:
+1. Open an elevated PowerShell window in the extracted bundle and run the installer. The Linux service hosts Mission Control in this topology, so install only the Minion. Add `-TrustedServerCertificate` for a self-signed or private-CA certificate; omit it when Windows already trusts the certificate. Use `-SkipSignatureCheck` only in a lab without a code-signing certificate:
+
+   ```powershell
+   .\Install-SluiceGate.ps1 `
+     -PackageRoot (Get-Location).Path `
+     -SkipServiceContainer `
+     -MissionControlUrl 'https://sluicegate.example.internal' `
+     -MinionId 'PATCH-01' `
+     -CatalogPath '\\fileserver\patchrepo\patch_catalog.csv' `
+     -NessusMappingPath '\\fileserver\patchrepo\nessus_mapping.csv' `
+     -ServiceAccount 'CONTOSO\svc-sluicegate-minion$' `
+     -TrustedServerCertificate '.\sg-server-cert.pem'
+   ```
+
+   For a gMSA account (name ending in `$`) there is no password. For an ordinary domain account the installer asks for its password at a hidden prompt; it is never placed on a command line. The installer stops with an error if a key file from Section 7 is missing.
+2. The installer writes `C:\ProgramData\SluiceGate\Minion\config\minion.config.json`. It contains no secrets (the API key is read from the protected `ApiKeyPath` file) and starts with `DryRun` set to `true`:
 
    ```json
    {
      "MissionControlUrl": "https://sluicegate.example.internal",
      "MinionId": "PATCH-01",
-     "ApiKey": "PASTE_THE_MINION_KEY_FROM_THE_SECRET_STORE",
-     "SluiceGatePublicKeyPath": "C:\\Program Files\\SluiceGate\\Minion\\keys\\sg-public-key.pem",
-     "MinionPrivateKeyPath": "C:\\Program Files\\SluiceGate\\Minion\\keys\\minion-private-key.pem",
+     "ApiKeyPath": "C:\\ProgramData\\SluiceGate\\Minion\\keys\\minion-api-key.txt",
+     "SluiceGatePublicKeyPath": "C:\\ProgramData\\SluiceGate\\Minion\\keys\\sg-public-key.pem",
+     "MinionPrivateKeyPath": "C:\\ProgramData\\SluiceGate\\Minion\\keys\\minion-private-key.pem",
      "CatalogPath": "\\\\fileserver\\patchrepo\\patch_catalog.csv",
      "NessusMappingPath": "\\\\fileserver\\patchrepo\\nessus_mapping.csv",
-     "NonceStorePath": "C:\\Program Files\\SluiceGate\\Minion\\data\\nonces.txt",
+     "NonceStorePath": "C:\\ProgramData\\SluiceGate\\Minion\\data\\nonces.txt",
+     "MissionDiaryDirectory": "C:\\ProgramData\\SluiceGate\\Minion\\MissionDiary",
      "PollIntervalSeconds": 3600,
      "DryRun": true
    }
    ```
 
-   Replace the example DNS name, API key, and file-share paths. JSON uses doubled backslashes in Windows paths. Keep `DryRun` set to `true` during setup, and restrict access to `minion.config.json` because it contains a bearer API key.
+   JSON uses doubled backslashes in Windows paths. Re-running the installer keeps an existing file; edit it directly for later changes (for example, `DryRun` after validation) and restart the service, or use `-ReplaceConfig` to regenerate it. The service refuses to start, and logs why in the Application event log, if this file or any key it names is missing, an inline `ApiKey` is present, or the Mission Control URL is not `https://`.
 
-   The Minion refuses to start with a Mission Control URL that is not `https://`, so the API key never crosses the network in clear text. If the service uses a self-signed certificate or a private CA that Windows does not already trust, add these settings:
+   The Minion refuses to start with a Mission Control URL that is not `https://`, so the API key never crosses the network in clear text. When you pass `-TrustedServerCertificate`, the installer copies the certificate to `keys\sg-server-cert.pem` and adds these settings:
 
    ```json
-     "TrustedServerCertificatePath": "C:\\Program Files\\SluiceGate\\Minion\\keys\\sg-server-cert.pem",
-     "TrustedServerCertificateSha256": ["PASTE_THE_FINGERPRINT_OF_EACH_CERTIFICATE_IN_THE_FILE"]
+     "TrustedServerCertificatePath": "C:\\ProgramData\\SluiceGate\\Minion\\keys\\sg-server-cert.pem",
+     "TrustedServerCertificateSha256": ["FINGERPRINT_OF_EACH_CERTIFICATE_IN_THE_FILE"]
    ```
 
    With `TrustedServerCertificatePath`, the Minion trusts only that certificate (or a certificate issued by it) instead of the Windows store, and still checks the host name and validity dates. `TrustedServerCertificateSha256` is optional; when present, every certificate in the file must match a listed fingerprint, so an altered trust file stops the Minion. For a certificate from a CA that Windows already trusts, omit both settings. Plain `http://` is accepted only for a loopback address when `AllowInsecureHttp` is `true`, which is for local development and must not be set for the pilot.
@@ -374,19 +388,23 @@ In this section, create the JSON file that tells the Minion where Mission Contro
 
 ## 9. Run a safe connectivity check
 
-This section performs a single Minion pass with dry-run enabled. It checks service communication and configuration without intending to install patches; it is a lab validation, not proof that Windows service recovery or production patch execution works.
+This section checks that the installed service is healthy and talking to Mission Control with dry-run enabled. It checks service communication and configuration without intending to install patches; it is a lab validation, not proof that Windows service recovery or production patch execution works.
 
-1. Open PowerShell under the dedicated Minion identity. Change to the patching directory:
+1. Confirm the service is running. If it is stopped or restarting, the Application event log (source `SluiceGateMinion`) names the startup check that failed, such as a missing key file or a non-HTTPS URL:
 
    ```powershell
-   Set-Location 'C:\Program Files\SluiceGate\minion-registry\minions\patching'
+   Get-Service SluiceGateMinion
+   Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'SluiceGateMinion' } -MaxEvents 20 | Format-List TimeCreated, Message
    ```
 
-2. Review the configuration and confirm `DryRun` is `true`, the Minion ID matches registration, and the Mission Control URL starts with `https://`.
-3. Run one pass:
+2. Review `C:\ProgramData\SluiceGate\Minion\config\minion.config.json` and confirm `DryRun` is `true`, the Minion ID matches registration, and the Mission Control URL starts with `https://`.
+3. Optionally run one foreground pass to see the output directly. Stop the service first so two workers are never active, run the pass as the Minion service account, then start the service again:
 
    ```powershell
-   .\PatchingMinion.ps1 -ConfigPath .\minion.config.json -SinglePass
+   Stop-Service SluiceGateMinion
+   & 'C:\Program Files\SluiceGate\Minion\runtime\PatchingMinion.ps1' `
+     -ConfigPath 'C:\ProgramData\SluiceGate\Minion\config\minion.config.json' -SinglePass
+   Start-Service SluiceGateMinion
    ```
 
    If PowerShell refuses to run the script, stop and have the administrator review the organization's script execution policy and verify the release signature. Do not disable security controls globally.

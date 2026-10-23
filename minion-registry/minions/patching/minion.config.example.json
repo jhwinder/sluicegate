@@ -1,15 +1,15 @@
 {
   "MissionControlUrl": "https://127.0.0.1:8443",
   "MinionId": "PATCH-01",
-  "ApiKey": "REPLACE_WITH_MINION_API_KEY",
-  "SluiceGatePublicKeyPath": "C:\\Program Files\\SluiceGate\\Minion\\keys\\sg-public-key.pem",
-  "MinionPrivateKeyPath": "C:\\Program Files\\SluiceGate\\Minion\\keys\\minion-private-key.pem",
+  "ApiKeyPath": "C:\\ProgramData\\SluiceGate\\Minion\\keys\\minion-api-key.txt",
+  "SluiceGatePublicKeyPath": "C:\\ProgramData\\SluiceGate\\Minion\\keys\\sg-public-key.pem",
+  "MinionPrivateKeyPath": "C:\\ProgramData\\SluiceGate\\Minion\\keys\\minion-private-key.pem",
   "CatalogPath": "\\\\fileshare\\patchrepo\\patch_catalog.csv",
   "NessusMappingPath": "\\\\fileshare\\patchrepo\\nessus_mapping.csv",
-  "NonceStorePath": "C:\\Program Files\\SluiceGate\\Minion\\data\\nonces.txt",
+  "NonceStorePath": "C:\\ProgramData\\SluiceGate\\Minion\\data\\nonces.txt",
   "MissionDiaryDirectory": "C:\\ProgramData\\SluiceGate\\Minion\\MissionDiary",
-  "TrustedServerCertificatePath": "C:\\Program Files\\SluiceGate\\Minion\\keys\\sg-server-cert.pem",
+  "TrustedServerCertificatePath": "C:\\ProgramData\\SluiceGate\\Minion\\keys\\sg-server-cert.pem",
   "TrustedServerCertificateSha256": ["REPLACE_WITH_CERTIFICATE_SHA256_FINGERPRINT"],
   "PollIntervalSeconds": 3600,
-  "DryRun": false
+  "DryRun": true
 }

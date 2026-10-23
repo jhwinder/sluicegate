@@ -38,7 +38,7 @@ Import-Module $engineModulePath -Force
 
 $MissionControlUrl       = if ($config.MissionControlUrl) { $config.MissionControlUrl } else { $config.CentralCommandUrl }
 $MinionId                = if ($config.MinionId) { $config.MinionId } else { "PATCH-01" }
-$ApiKey                  = $config.ApiKey
+$ApiKey                  = Get-MinionApiKey -Config $config
 $SluiceGatePublicKeyPath = $config.SluiceGatePublicKeyPath
 $MinionPrivateKeyPath    = $config.MinionPrivateKeyPath
 $CatalogPath             = $config.CatalogPath
