@@ -70,6 +70,11 @@ curl -fsS http://127.0.0.1:8443/health
 | `SG_MINION_OVERALL_TIMEOUT_SECONDS` | `900` | Signed overall execution deadline. |
 | `SG_MINION_HEARTBEAT_INTERVAL_SECONDS` | `30` | Minion lease-renewal cadence. |
 | `SG_MINION_CLAIM_LEASE_SECONDS` | `120` | Claim lease length; must exceed the heartbeat interval. |
+| `SG_PUBLIC_URL` | *(request host)* | External base URL used in notification and verification emails, such as `https://sluice.example.gov`. Set this behind a proxy. |
+| `RESEND_API_KEY` / `RESEND_API_KEY_FILE` | *(None)* | Resend API key, or a file containing it. |
+| `SG_SMTP_USERNAME` / `SG_SMTP_PASSWORD` (plus `_FILE`) | *(None)* | SMTP credentials for adapters that use `login` authentication. |
+| `SG_NOTIFY_MAX_ATTEMPTS` | `4` | Delivery attempts before a notification is marked `FAILED`. |
+| `SG_NOTIFY_RETRY_BASE_SECONDS` | `30` | First retry delay; each later retry is four times longer. |
 
 ---
 
@@ -116,9 +121,15 @@ The service includes a self-contained web console served directly at:
 - **Health & Heartbeat**: Displays `Last Contact` timestamp updated whenever the Minion checks in.
 
 #### 5. Notification Profiles Tab
-- **Register Notification Adapter**: Configure delivery sinks (e.g., `mock` audit sink, `webhook` HTTP POST, or email).
-- **Create Notification Profile**: Route specific lifecycle events (such as `PAUSE_CREATED`, `REQUEST_APPROVED`, `REQUEST_REJECTED`, `MISSION_COMPLETE_FAILED`) to chosen adapters and recipient lists.
-- **Delivery Audit Log**: Inspect the delivery history and status of every emitted notification.
+- **Create Notification Profile**: Route lifecycle events (such as `PAUSE_CREATED`, `REQUEST_APPROVED`, `REQUEST_REJECTED`, `MISSION_COMPLETE_FAILED`) to a chosen adapter and recipient list. Email profiles require valid recipient addresses.
+- **Delivery Audit Log**: Inspect each delivery's status (`PENDING`, `RETRYING`, `DELIVERED`, `FAILED`), attempt count, and the last error. Delivery runs in the background with bounded retries and exponential backoff; a duplicate event creates no duplicate delivery.
+
+#### 6. Notification Adapters Tab
+- **Providers**: Each adapter selects one provider: `resend`, `smtp` (on-premises Microsoft Exchange), `webhook`, or `mock`. A profile always names one adapter; there is no fallback between providers.
+- **Secrets**: Credentials are never stored in adapters or shown in the console. Resend reads `RESEND_API_KEY`; SMTP with username/password authentication reads `SG_SMTP_USERNAME` and `SG_SMTP_PASSWORD`. Each may instead be supplied as a file path in `<NAME>_FILE` (for example a Docker secret). The page shows only whether each secret is configured.
+- **SMTP/Exchange**: Set host, port, TLS mode (`starttls`, `tls`, or `none` for an approved relay), and authentication (`login` or `none`). Server certificates are always validated; use the optional CA bundle path for an internal CA. `login` requires TLS. NTLM/Kerberos authentication is not supported.
+- **Verification**: Email adapters send nothing until verified. **Send test email** mails a single-use link (valid 15 minutes) to an address you choose; opening it shows a confirmation page, and pressing **Confirm** marks the adapter verified. Changing the provider, sender, host, port, TLS/authentication mode, or the secret values requires verifying again. Nothing is sent or checked at service startup.
+- **Approval emails**: `PAUSE_CREATED` emails link to `SG_PUBLIC_URL/admin/ui#approvals`. Approving or rejecting always requires the authenticated Admin Console; opening a link or receiving an email never changes approval state.
 
 #### Header Action: Reload Policy
 - Click **Reload Policy** in the top navigation bar to reload the YAML policy file from disk on demand without restarting the container. SluiceGate will report the new policy provenance hash immediately.

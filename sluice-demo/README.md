@@ -53,17 +53,13 @@ All execution paths flow through the gate.
 
 ## Email approvals (optional)
 
-The demo supports human-in-the-loop approvals via email using Resend.
+Approval emails are sent by `sg-service`, not by the demo backend. To enable them:
 
-To enable approval emails, set the following environment variables in
-`docker-compose.yml`:
+1. Set `RESEND_API_KEY` in `.env` (read by `sg-service`).
+2. In the Admin Console (`http://localhost:8443/admin`), open **Notification Adapters**, add a Resend adapter with your verified sender address, and use **Send test email** to verify it.
+3. Under **Notification Profiles**, create a profile for `PAUSE_CREATED` that uses the adapter and lists the approver's address.
 
-- `RESEND_API_KEY` – your Resend API key
-- `APPROVER_EMAIL` – email address that will receive approval requests
-- `RESEND_FROM` – verified sender address in Resend (optional)
-
-If these variables are not set, the demo will still work, however
-approvals must be completed via the web UI instead of via email.
+The email links to the Admin Console, where an authenticated administrator approves or rejects. Opening a link never changes approval state. Without a profile, approvals are completed in the web UI.
 
 ## Running the Demo Locally
 

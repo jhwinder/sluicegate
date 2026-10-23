@@ -191,6 +191,7 @@
     <div class="nav-tab" onclick="switchTab('agents')">Agent Registry</div>
     <div class="nav-tab" onclick="switchTab('minions')">Minion Registry</div>
     <div class="nav-tab" onclick="switchTab('notifications')">Notification Profiles</div>
+    <div class="nav-tab" onclick="switchTab('adapters')">Notification Adapters</div>
     <div class="nav-tab" onclick="switchTab('policy')">Policies</div>
   </nav>
 
@@ -323,8 +324,7 @@
       <div class="card-header">
         <h2>Notification Profiles & Routing</h2>
         <div>
-          <button class="secondary" onclick="openModal('registerAdapterModal')">+ New Adapter</button>
-          <button onclick="openModal('createProfileModal')">+ New Profile</button>
+          <button onclick="openProfileModal()">+ New Profile</button>
         </div>
       </div>
       <table>
@@ -358,11 +358,41 @@
             <th>Request ID</th>
             <th>Adapter</th>
             <th>Status</th>
-            <th>Delivered At</th>
+            <th>Attempts</th>
+            <th>Detail</th>
+            <th>Last Update</th>
           </tr>
         </thead>
         <tbody id="deliveriesTableBody">
-          <tr><td colspan="6" style="text-align:center; color:var(--text-muted);">Loading delivery log...</td></tr>
+          <tr><td colspan="8" style="text-align:center; color:var(--text-muted);">Loading delivery log...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- TAB: NOTIFICATION ADAPTERS -->
+  <section id="tab-adapters" class="tab-content" style="display:none;">
+    <div class="card">
+      <div class="card-header">
+        <h2>Notification Adapters</h2>
+        <button onclick="openAdapterModal()">+ New Adapter</button>
+      </div>
+      <p style="color:var(--text-muted);">Each adapter selects one delivery provider. Email adapters (Resend or SMTP/Exchange) send only after the test-email verification is confirmed, and must be verified again if their settings or service-side credentials change. Credentials are read from the service's protected environment or secret files and are never shown here.</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Adapter ID</th>
+            <th>Name</th>
+            <th>Provider</th>
+            <th>Settings</th>
+            <th>Service Secrets</th>
+            <th>Verification</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="adaptersTableBody">
+          <tr><td colspan="8" style="text-align:center; color:var(--text-muted);">Loading adapters...</td></tr>
         </tbody>
       </table>
     </div>
@@ -432,26 +462,70 @@
   <!-- MODAL: CREATE NOTIFICATION ADAPTER -->
   <div id="registerAdapterModal" class="modal-backdrop">
     <div class="modal">
-      <h3>Register Notification Adapter</h3>
+      <h3>Notification Adapter</h3>
       <div class="form-group">
         <label>Adapter ID</label>
-        <input type="text" id="newAdapterId" placeholder="e.g. slack-security-alerts" />
+        <input type="text" id="newAdapterId" placeholder="e.g. exchange-smtp" />
       </div>
       <div class="form-group">
         <label>Adapter Name</label>
-        <input type="text" id="newAdapterName" placeholder="e.g. Security Slack Channel" />
+        <input type="text" id="newAdapterName" placeholder="e.g. Exchange approvals mail" />
       </div>
       <div class="form-group">
-        <label>Adapter Type</label>
-        <select id="newAdapterType">
-          <option value="mock">Mock / Audit-only</option>
+        <label>Provider</label>
+        <select id="newAdapterType" onchange="renderAdapterFields()">
+          <option value="resend">Resend (email)</option>
+          <option value="smtp">SMTP / Microsoft Exchange (email)</option>
           <option value="webhook">Webhook HTTP POST</option>
-          <option value="email">Email</option>
+          <option value="mock">Mock / Audit-only</option>
         </select>
       </div>
-      <div class="form-group">
-        <label>Config (JSON)</label>
-        <textarea id="newAdapterConfig" rows="3">{}</textarea>
+      <div id="adapterFieldsResend">
+        <div class="form-group">
+          <label>Sender address</label>
+          <input type="text" id="adapterResendSender" placeholder="sluicegate@example.gov" />
+        </div>
+        <p style="color:var(--text-muted);">The API key is read from the service secret <code>RESEND_API_KEY</code> (or <code>RESEND_API_KEY_FILE</code>).</p>
+      </div>
+      <div id="adapterFieldsSmtp" style="display:none;">
+        <div class="form-group">
+          <label>Sender address</label>
+          <input type="text" id="adapterSmtpSender" placeholder="sluicegate@example.gov" />
+        </div>
+        <div class="form-group">
+          <label>Exchange host</label>
+          <input type="text" id="adapterSmtpHost" placeholder="mail.example.gov" />
+        </div>
+        <div class="form-group">
+          <label>Port (blank = default for the TLS mode)</label>
+          <input type="number" id="adapterSmtpPort" min="1" max="65535" />
+        </div>
+        <div class="form-group">
+          <label>TLS mode</label>
+          <select id="adapterSmtpTls">
+            <option value="starttls">STARTTLS (587)</option>
+            <option value="tls">Implicit TLS (465)</option>
+            <option value="none">None (relay only, 25)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Authentication</label>
+          <select id="adapterSmtpAuth">
+            <option value="none">None (approved relay)</option>
+            <option value="login">Username and password</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>CA bundle path on the service (optional, for an internal CA)</label>
+          <input type="text" id="adapterSmtpCa" placeholder="/run/secrets/exchange-ca.pem" />
+        </div>
+        <p style="color:var(--text-muted);">Username and password are read from the service secrets <code>SG_SMTP_USERNAME</code> and <code>SG_SMTP_PASSWORD</code> (or their <code>_FILE</code> variants).</p>
+      </div>
+      <div id="adapterFieldsWebhook" style="display:none;">
+        <div class="form-group">
+          <label>Webhook URL</label>
+          <input type="text" id="adapterWebhookUrl" placeholder="https://hooks.example.gov/sluicegate" />
+        </div>
       </div>
       <div style="display:flex; justify-content:flex-end; gap:8px;">
         <button class="secondary" onclick="closeModal('registerAdapterModal')">Cancel</button>
@@ -473,8 +547,8 @@
         <input type="text" id="newProfileName" placeholder="e.g. Action Approval Alerts" />
       </div>
       <div class="form-group">
-        <label>Adapter ID</label>
-        <input type="text" id="newProfileAdapterId" placeholder="e.g. slack-security-alerts" />
+        <label>Adapter</label>
+        <select id="newProfileAdapterId"></select>
       </div>
       <div class="form-group">
         <label>Event Types (comma separated)</label>
@@ -526,6 +600,11 @@
       document.getElementById("tab-" + tabId).style.display = "block";
       event.target.classList.add("active");
       if (tabId === "policy") loadPolicyEditor();
+      if (tabId === "adapters") loadAdapters();
+    }
+
+    function esc(value) {
+      return String(value ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
     }
 
     function openModal(id) {
@@ -553,7 +632,10 @@
         "MISSION_COMPLETE_FAILED": "badge-danger",
         "MISSION_REJECTED": "badge-danger",
         "DELIVERED": "badge-success",
-        "FAILED": "badge-danger"
+        "FAILED": "badge-danger",
+        "PENDING": "badge-info",
+        "SENDING": "badge-info",
+        "RETRYING": "badge-warning"
       };
       const cls = map[status] || "badge-info";
       return `<span class="badge ${cls}">${status}</span>`;
@@ -805,11 +887,11 @@
         } else {
           tbody.innerHTML = data.map(p => `
             <tr>
-              <td class="mono"><b>${p.profile_id}</b></td>
-              <td>${p.name}</td>
-              <td>${(p.event_types || []).map(e => `<span class="badge badge-info">${e}</span>`).join(" ")}</td>
-              <td>${p.adapter_id}</td>
-              <td>${(p.recipients || []).join(", ") || '—'}</td>
+              <td class="mono"><b>${esc(p.profile_id)}</b></td>
+              <td>${esc(p.name)}</td>
+              <td>${(p.event_types || []).map(e => `<span class="badge badge-info">${esc(e)}</span>`).join(" ")}</td>
+              <td>${esc(p.adapter_id)}</td>
+              <td>${(p.recipients || []).map(esc).join(", ") || '—'}</td>
               <td>${p.enabled ? '<span class="badge badge-success">ACTIVE</span>' : '<span class="badge badge-danger">MUTED</span>'}</td>
               <td><button class="danger" onclick="deleteProfile('${p.profile_id}')">Delete</button></td>
             </tr>
@@ -827,16 +909,18 @@
         const data = await res.json();
         const tbody = document.getElementById("deliveriesTableBody");
         if (data.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No notification deliveries recorded.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color:var(--text-muted);">No notification deliveries recorded.</td></tr>';
           return;
         }
         tbody.innerHTML = data.map(d => `
           <tr>
-            <td class="mono">${d.delivery_id}</td>
-            <td><span class="badge badge-info">${d.event_type}</span></td>
-            <td class="mono">${d.request_id}</td>
-            <td>${d.adapter_id}</td>
+            <td class="mono">${esc(d.delivery_id)}</td>
+            <td><span class="badge badge-info">${esc(d.event_type)}</span></td>
+            <td class="mono">${esc(d.request_id)}</td>
+            <td>${esc(d.adapter_id)}</td>
             <td>${statusBadge(d.status)}</td>
+            <td>${esc(d.attempts)}</td>
+            <td>${esc((d.detail && d.detail.error) || "")}</td>
             <td>${formatTs(d.delivered_at)}</td>
           </tr>
         `).join("");
@@ -845,25 +929,158 @@
       }
     }
 
+    let adapterCache = [];
+
+    function renderAdapterFields() {
+      const type = document.getElementById("newAdapterType").value;
+      document.getElementById("adapterFieldsResend").style.display = type === "resend" ? "block" : "none";
+      document.getElementById("adapterFieldsSmtp").style.display = type === "smtp" ? "block" : "none";
+      document.getElementById("adapterFieldsWebhook").style.display = type === "webhook" ? "block" : "none";
+    }
+
+    function adapterSettingsText(a) {
+      const c = a.config || {};
+      if (a.adapter_type === "resend") return `From ${c.sender || ""}`;
+      if (a.adapter_type === "smtp") return `${c.host || ""}:${c.port || ""} ${c.tls_mode || ""}, auth ${c.auth_mode || "none"}, from ${c.sender || ""}`;
+      if (a.adapter_type === "webhook") return c.url || "";
+      return "";
+    }
+
+    function adapterSecretsHtml(a) {
+      const names = Object.keys(a.secrets_configured || {});
+      if (names.length === 0) return "—";
+      return names.map(n => `${esc(n)}: ${a.secrets_configured[n] ? '<span class="badge badge-success">configured</span>' : '<span class="badge badge-danger">missing</span>'}`).join("<br>");
+    }
+
+    async function loadAdapters() {
+      try {
+        const res = await fetch("/admin/v1/notification-adapters", { headers: getAuthHeaders() });
+        if (!res.ok) return;
+        adapterCache = await res.json();
+        const tbody = document.getElementById("adaptersTableBody");
+        if (adapterCache.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color:var(--text-muted);">No adapters configured.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = adapterCache.map((a, i) => `
+          <tr>
+            <td class="mono"><b>${esc(a.adapter_id)}</b></td>
+            <td>${esc(a.name)}</td>
+            <td>${esc(a.adapter_type)}</td>
+            <td>${esc(adapterSettingsText(a))}</td>
+            <td>${adapterSecretsHtml(a)}</td>
+            <td>${!a.requires_verification ? "Not required" : a.verified ? '<span class="badge badge-success">VERIFIED</span>' : '<span class="badge badge-warning">NOT VERIFIED</span>'}</td>
+            <td>${a.enabled ? '<span class="badge badge-success">ACTIVE</span>' : '<span class="badge badge-danger">DISABLED</span>'}</td>
+            <td>
+              <button class="secondary" onclick="openAdapterModal(${i})">Edit</button>
+              ${a.requires_verification ? `<button onclick="verifyAdapter(${i})">Send test email</button>` : ""}
+              <button class="secondary" onclick="toggleAdapter(${i})">${a.enabled ? "Disable" : "Enable"}</button>
+              <button class="danger" onclick="deleteAdapter(${i})">Delete</button>
+            </td>
+          </tr>
+        `).join("");
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    function openAdapterModal(index) {
+      const a = index === undefined ? null : adapterCache[index];
+      const c = (a && a.config) || {};
+      const set = (id, value) => { document.getElementById(id).value = value ?? ""; };
+      set("newAdapterId", a ? a.adapter_id : "");
+      document.getElementById("newAdapterId").disabled = !!a;
+      set("newAdapterName", a ? a.name : "");
+      set("newAdapterType", a ? a.adapter_type : "resend");
+      set("adapterResendSender", c.sender);
+      set("adapterSmtpSender", c.sender);
+      set("adapterSmtpHost", c.host);
+      set("adapterSmtpPort", c.port);
+      set("adapterSmtpTls", c.tls_mode || "starttls");
+      set("adapterSmtpAuth", c.auth_mode || "none");
+      set("adapterSmtpCa", c.ca_bundle_path);
+      set("adapterWebhookUrl", c.url);
+      renderAdapterFields();
+      openModal("registerAdapterModal");
+    }
+
+    function collectAdapterConfig(type) {
+      const val = id => document.getElementById(id).value.trim();
+      if (type === "resend") return { sender: val("adapterResendSender") };
+      if (type === "webhook") return { url: val("adapterWebhookUrl") };
+      if (type === "smtp") {
+        const config = { sender: val("adapterSmtpSender"), host: val("adapterSmtpHost"), tls_mode: val("adapterSmtpTls"), auth_mode: val("adapterSmtpAuth") };
+        if (val("adapterSmtpPort")) config.port = parseInt(val("adapterSmtpPort"), 10);
+        if (val("adapterSmtpCa")) config.ca_bundle_path = val("adapterSmtpCa");
+        return config;
+      }
+      return {};
+    }
+
     async function submitRegisterAdapter() {
       const adapter_id = document.getElementById("newAdapterId").value.trim();
       const name = document.getElementById("newAdapterName").value.trim();
       const adapter_type = document.getElementById("newAdapterType").value;
-      let config = {};
-      try { config = JSON.parse(document.getElementById("newAdapterConfig").value); } catch(e){}
+      const existing = adapterCache.find(a => a.adapter_id === adapter_id);
+      const config = collectAdapterConfig(adapter_type);
 
       try {
         const res = await fetch("/admin/v1/notification-adapters", {
           method: "POST",
           headers: getAuthHeaders(),
-          body: JSON.stringify({ adapter_id, name, adapter_type, config })
+          body: JSON.stringify({ adapter_id, name, adapter_type, config, enabled: existing ? existing.enabled : true })
         });
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
         closeModal("registerAdapterModal");
-        alert("Adapter created!");
+        await loadAdapters();
+        alert(adapter_type === "resend" || adapter_type === "smtp"
+          ? "Adapter saved. Send a test email to verify it before it can deliver notifications."
+          : "Adapter saved.");
       } catch (err) {
         alert("Failed to save adapter: " + err.message);
       }
+    }
+
+    async function verifyAdapter(index) {
+      const a = adapterCache[index];
+      const recipient = prompt("Send a verification email to which address?");
+      if (!recipient) return;
+      try {
+        const res = await fetch(`/admin/v1/notification-adapters/${encodeURIComponent(a.adapter_id)}/verify`, {
+          method: "POST",
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ recipient: recipient.trim() })
+        });
+        if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+        alert("Test email sent. Open the link in the message and press Confirm, then refresh this page.");
+      } catch (err) {
+        alert("Verification failed: " + err.message);
+      }
+    }
+
+    async function toggleAdapter(index) {
+      const a = adapterCache[index];
+      await fetch(`/admin/v1/notification-adapters/${encodeURIComponent(a.adapter_id)}`, {
+        method: "PATCH",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ enabled: !a.enabled })
+      });
+      loadAdapters();
+    }
+
+    async function deleteAdapter(index) {
+      const a = adapterCache[index];
+      if (!confirm("Delete adapter " + a.adapter_id + "?")) return;
+      const res = await fetch(`/admin/v1/notification-adapters/${encodeURIComponent(a.adapter_id)}`, { method: "DELETE", headers: getAuthHeaders() });
+      if (!res.ok) alert((await res.json()).detail || "Delete failed");
+      loadAdapters();
+    }
+
+    async function openProfileModal() {
+      await loadAdapters();
+      const select = document.getElementById("newProfileAdapterId");
+      select.innerHTML = adapterCache.map(a => `<option value="${esc(a.adapter_id)}">${esc(a.name)} (${esc(a.adapter_type)}${a.requires_verification && !a.verified ? ", not verified" : ""})</option>`).join("");
+      openModal("createProfileModal");
     }
 
     async function submitCreateProfile() {
@@ -977,6 +1194,7 @@
       loadAgents();
       loadMinions();
       loadNotifications();
+      loadAdapters();
     }
 
     // Auto-init on page load
@@ -985,6 +1203,7 @@
       document.getElementById("adminTokenInput").value = saved;
     }
     loadAll();
+    if (location.hash === "#approvals") document.querySelectorAll(".nav-tab")[1].click();
   </script>
 </body>
 </html>

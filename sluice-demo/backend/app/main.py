@@ -8,7 +8,6 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from app.approvals import maybe_send_email_approval
 from app.models import (
     ActionRequest,
     CreateDecisionResponse,
@@ -135,15 +134,6 @@ def decide(req: ActionRequest):
         else "Blocked by policy."
     )
 
-    if decision == "PAUSE":
-        maybe_send_email_approval(
-            request_id=request_id,
-            action=req.action,
-            amount=req.amount,
-            currency=req.currency,
-            base_url=BASE_URL,
-        )
-
     return CreateDecisionResponse(
         request_id=request_id,
         decision=decision,
@@ -198,7 +188,10 @@ def get_request(request_id: str):
 
 @app.api_route("/api/requests/{request_id}/approve", methods=["GET", "POST"])
 def approve(request_id: str, request: Request):
-    approver = "email_link" if request.method == "GET" else "admin_user"
+    # A GET (for example a followed link) only shows the request; approval requires an explicit POST.
+    if request.method == "GET":
+        return ui_redirect(request_id)
+    approver = "admin_user"
     try:
         r = requests.post(
             f"{SG_SERVICE_URL}/admin/v1/requests/{request_id}/approve",
@@ -212,14 +205,14 @@ def approve(request_id: str, request: Request):
     except requests.RequestException as e:
         raise HTTPException(status_code=503, detail=f"sg_service error: {e}")
 
-    if request.method == "GET":
-        return ui_redirect(request_id)
     return {"ok": True, "status": data.get("status")}
 
 
 @app.api_route("/api/requests/{request_id}/reject", methods=["GET", "POST"])
 def reject(request_id: str, request: Request):
-    approver = "email_link" if request.method == "GET" else "admin_user"
+    if request.method == "GET":
+        return ui_redirect(request_id)
+    approver = "admin_user"
     try:
         r = requests.post(
             f"{SG_SERVICE_URL}/admin/v1/requests/{request_id}/reject",
@@ -233,8 +226,6 @@ def reject(request_id: str, request: Request):
     except requests.RequestException as e:
         raise HTTPException(status_code=503, detail=f"sg_service error: {e}")
 
-    if request.method == "GET":
-        return ui_redirect(request_id)
     return {"ok": True, "status": data.get("status")}
 
 

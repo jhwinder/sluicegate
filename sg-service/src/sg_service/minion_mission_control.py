@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import html
 import json
+import logging
 import os
 import secrets
 import shutil
@@ -12,6 +14,7 @@ import tempfile
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,11 +24,13 @@ import yaml
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sg_core import GateRequest, PolicyEngine
 from sg_poledit.validate import validate_policy_dict
+
+from sg_service import notifications
 
 DATABASE_PATH = Path(os.environ.get("SG_DATABASE_PATH", "/data/sg-service.sqlite3"))
 SIGNING_KEY_PATH = Path(os.environ.get("SG_SIGNING_KEY_PATH", "/run/secrets/sg-signing-key.pem"))
@@ -40,12 +45,26 @@ MINION_ATTEMPT_TIMEOUT_SECONDS = int(os.environ.get("SG_MINION_ATTEMPT_TIMEOUT_S
 MINION_OVERALL_TIMEOUT_SECONDS = int(os.environ.get("SG_MINION_OVERALL_TIMEOUT_SECONDS", "900"))
 MINION_HEARTBEAT_INTERVAL_SECONDS = int(os.environ.get("SG_MINION_HEARTBEAT_INTERVAL_SECONDS", "30"))
 MINION_CLAIM_LEASE_SECONDS = int(os.environ.get("SG_MINION_CLAIM_LEASE_SECONDS", "120"))
+NOTIFICATION_MAX_ATTEMPTS = int(os.environ.get("SG_NOTIFY_MAX_ATTEMPTS", "4"))
+NOTIFICATION_RETRY_BASE_SECONDS = int(os.environ.get("SG_NOTIFY_RETRY_BASE_SECONDS", "30"))
+NOTIFICATION_POLL_SECONDS = 5.0
+NOTIFICATION_SEND_LEASE_SECONDS = 120
+NOTIFICATION_VERIFICATION_TTL_SECONDS = 900
+NOTIFICATION_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="sg-notify")
+notification_logger = logging.getLogger("sg_service.notifications")
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     initialize()
-    yield
+    stop_retries = threading.Event()
+    retry_worker = threading.Thread(target=notification_retry_loop, args=(stop_retries,), name="sg-notify-retry", daemon=True)
+    retry_worker.start()
+    try:
+        yield
+    finally:
+        stop_retries.set()
+        retry_worker.join(timeout=5)
 
 
 app = FastAPI(title="SluiceGate Service", version="0.1.0", lifespan=lifespan)
@@ -154,6 +173,14 @@ class CreateNotificationAdapterRequest(BaseModel):
     name: str = Field(min_length=1)
     config: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
+
+
+class UpdateNotificationAdapterRequest(BaseModel):
+    enabled: bool
+
+
+class VerifyNotificationAdapterRequest(BaseModel):
+    recipient: str = Field(min_length=3, max_length=254)
 
 
 class CreateNotificationProfileRequest(BaseModel):
@@ -369,6 +396,15 @@ def initialize() -> None:
                 detail TEXT DEFAULT '{}',
                 delivered_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS notification_adapter_verifications (
+                adapter_id TEXT PRIMARY KEY,
+                token_hash TEXT NOT NULL,
+                fingerprint TEXT NOT NULL,
+                recipient TEXT NOT NULL,
+                expires_at REAL NOT NULL,
+                used_at REAL,
+                created_at REAL NOT NULL
+            );
             """
         )
         try:
@@ -408,6 +444,24 @@ def initialize() -> None:
                 connection.execute(f"ALTER TABLE minions ADD COLUMN {col} {col_def}")
             except sqlite3.OperationalError:
                 pass
+        for table, col, col_def in [
+            ("notification_adapters", "verified_at", "REAL"),
+            ("notification_adapters", "verified_fingerprint", "TEXT"),
+            ("notification_deliveries", "attempts", "INTEGER NOT NULL DEFAULT 0"),
+            ("notification_deliveries", "next_attempt_at", "REAL"),
+            ("notification_deliveries", "idempotency_key", "TEXT"),
+            ("notification_deliveries", "payload", "TEXT NOT NULL DEFAULT '{}'"),
+        ]:
+            try:
+                connection.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_def}")
+            except sqlite3.OperationalError:
+                pass
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS notification_deliveries_idempotency ON notification_deliveries(idempotency_key) WHERE idempotency_key IS NOT NULL"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS notification_deliveries_due ON notification_deliveries(status, next_attempt_at)"
+        )
         bootstrap_admin_key = os.environ.get("SG_BOOTSTRAP_ADMIN_KEY", "")
         if bootstrap_admin_key:
             connection.execute(
@@ -714,58 +768,180 @@ def decide_patch_policy(
     return decision, authorized_servers, constraints, obligations, policy_hash
 
 
-def dispatch_notifications(event_type: str, request_id: str, summary: str, details: dict[str, Any]) -> None:
-    now = time.time()
+def public_base_url(request: Request | None = None) -> str:
+    configured = os.environ.get("SG_PUBLIC_URL", "").strip().rstrip("/")
+    if configured:
+        return configured
+    return str(request.base_url).rstrip("/") if request is not None else ""
+
+
+def notification_fingerprint(adapter_type: str, config: dict[str, Any]) -> str:
+    private_bytes = signing_private_key().private_bytes(
+        serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption()
+    )
+    key = hashlib.sha256(b"sg-notification-adapter-fingerprint\0" + private_bytes).digest()
+    return notifications.adapter_fingerprint(adapter_type, config, key)
+
+
+def adapter_is_verified(adapter_type: str, config: dict[str, Any], verified_fingerprint: str | None) -> bool:
+    if adapter_type not in notifications.EMAIL_ADAPTER_TYPES:
+        return True
+    if not verified_fingerprint:
+        return False
     try:
-        with connect() as conn:
+        return hmac.compare_digest(verified_fingerprint, notification_fingerprint(adapter_type, config))
+    except HTTPException:
+        return False
+
+
+def dispatch_notifications(event_type: str, request_id: str, summary: str, details: dict[str, Any]) -> None:
+    """Queue one durable delivery per matching profile; sending happens off the request path."""
+    now = time.time()
+    delivery_ids: list[str] = []
+    try:
+        with transaction() as conn:
             profiles = conn.execute(
                 """
-                SELECT p.profile_id, p.event_types, p.adapter_id, p.recipients, p.template,
-                       a.adapter_type, a.config, a.enabled AS adapter_enabled
+                SELECT p.profile_id, p.event_types, p.adapter_id, p.recipients, p.template
                 FROM notification_profiles p
                 JOIN notification_adapters a ON p.adapter_id = a.adapter_id
                 WHERE p.enabled = 1 AND a.enabled = 1
                 """
             ).fetchall()
-
             for prof in profiles:
-                ev_types = json.loads(prof["event_types"] or "[]")
-                if event_type not in ev_types:
+                if event_type not in json.loads(prof["event_types"] or "[]"):
                     continue
-
-                recipients = json.loads(prof["recipients"] or "[]")
-                adapter_type = prof["adapter_type"]
-                config = json.loads(prof["config"] or "{}")
-
+                idempotency_key = hashlib.sha256(f"{prof['profile_id']}\n{event_type}\n{request_id}".encode("utf-8")).hexdigest()
                 delivery_id = f"DELIV-{uuid.uuid4().hex}"
-                deliv_status = "DELIVERED"
-                deliv_detail: dict[str, Any] = {"recipients": recipients, "summary": summary}
-
-                try:
-                    if adapter_type == "webhook":
-                        url = config.get("url")
-                        if url:
-                            import httpx
-                            httpx.post(
-                                url,
-                                json={"event": event_type, "request_id": request_id, "summary": summary, "details": details},
-                                timeout=5.0,
-                            )
-                except Exception as ex:
-                    deliv_status = "FAILED"
-                    deliv_detail = {"error": str(ex), "recipients": recipients}
-
-                with transaction() as write_conn:
-                    write_conn.execute(
-                        """
-                        INSERT INTO notification_deliveries (delivery_id, profile_id, adapter_id, request_id, event_type, status, detail, delivered_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (delivery_id, prof["profile_id"], prof["adapter_id"], request_id, event_type, deliv_status, json.dumps(deliv_detail), now),
-                    )
+                payload = {
+                    "event_type": event_type,
+                    "request_id": request_id,
+                    "summary": summary,
+                    "details": details,
+                    "recipients": json.loads(prof["recipients"] or "[]"),
+                    "template": prof["template"] or "",
+                }
+                inserted = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO notification_deliveries
+                        (delivery_id, profile_id, adapter_id, request_id, event_type, status, detail, delivered_at, attempts, next_attempt_at, idempotency_key, payload)
+                    VALUES (?, ?, ?, ?, ?, 'PENDING', '{}', ?, 0, ?, ?, ?)
+                    """,
+                    (delivery_id, prof["profile_id"], prof["adapter_id"], request_id, event_type, now, now, idempotency_key, json.dumps(payload, default=str)),
+                )
+                if inserted.rowcount == 1:
+                    delivery_ids.append(delivery_id)
     except Exception:
         # Notifications must never crash core policy/mission path
-        pass
+        notification_logger.exception("Could not queue notifications for event %s", event_type)
+        return
+    for delivery_id in delivery_ids:
+        NOTIFICATION_EXECUTOR.submit(process_delivery, delivery_id)
+
+
+def attempt_delivery(row: sqlite3.Row, payload: dict[str, Any]) -> tuple[bool, str | None, bool]:
+    """Return (delivered, error, retryable) for one claimed delivery."""
+    adapter_type = row["adapter_type"]
+    if adapter_type is None:
+        return False, "Adapter no longer exists", False
+    if not row["enabled"]:
+        return False, "Adapter is disabled", False
+    config = json.loads(row["config"] or "{}")
+    try:
+        if adapter_type == "mock":
+            return True, None, False
+        if adapter_type == "webhook":
+            notifications.send_webhook(
+                config,
+                {key: payload[key] for key in ("summary", "details", "request_id")} | {"event": payload["event_type"]},
+            )
+            return True, None, False
+        if adapter_type in notifications.EMAIL_ADAPTER_TYPES:
+            if not adapter_is_verified(adapter_type, config, row["verified_fingerprint"]):
+                return False, "Adapter is not verified for its current configuration", False
+            recipients = payload.get("recipients") or []
+            if not recipients or not all(notifications.is_valid_address(item) for item in recipients):
+                return False, "Profile has no valid recipients", False
+            console_url = f"{public_base_url()}/admin/ui#approvals" if payload["event_type"] == "PAUSE_CREATED" and public_base_url() else ""
+            subject, body = notifications.build_message(
+                payload["event_type"], payload["request_id"], payload["summary"], payload["details"], payload.get("template", ""), console_url
+            )
+            notifications.send_email(adapter_type, config, recipients, subject, body, row["delivery_id"])
+            return True, None, False
+        return False, f"Unsupported adapter type '{adapter_type}'", False
+    except notifications.NotificationError as exc:
+        return False, str(exc), exc.retryable
+    except Exception as exc:
+        return False, f"Unexpected delivery error ({type(exc).__name__})", False
+
+
+def process_delivery(delivery_id: str, now: float | None = None) -> None:
+    now = time.time() if now is None else now
+    with transaction() as conn:
+        row = conn.execute(
+            """
+            SELECT d.delivery_id, d.profile_id, d.adapter_id, d.attempts, d.payload,
+                   a.adapter_type, a.config, a.enabled, a.verified_fingerprint
+            FROM notification_deliveries d
+            LEFT JOIN notification_adapters a ON a.adapter_id = d.adapter_id
+            WHERE d.delivery_id = ? AND d.status IN ('PENDING', 'RETRYING', 'SENDING') AND d.next_attempt_at <= ?
+            """,
+            (delivery_id, now),
+        ).fetchone()
+        if row is None:
+            return
+        attempts = int(row["attempts"]) + 1
+        conn.execute(
+            "UPDATE notification_deliveries SET status = 'SENDING', attempts = ?, next_attempt_at = ?, delivered_at = ? WHERE delivery_id = ?",
+            (attempts, now + NOTIFICATION_SEND_LEASE_SECONDS, now, delivery_id),
+        )
+    payload = json.loads(row["payload"] or "{}")
+    delivered, error, retryable = attempt_delivery(row, payload)
+    finished = max(now, time.time())
+    detail: dict[str, Any] = {
+        "recipients": payload.get("recipients", []),
+        "summary": payload.get("summary", ""),
+        "provider": row["adapter_type"],
+        "attempts": attempts,
+    }
+    if delivered:
+        new_status, next_attempt_at = "DELIVERED", None
+    elif retryable and attempts < NOTIFICATION_MAX_ATTEMPTS:
+        new_status = "RETRYING"
+        next_attempt_at = finished + NOTIFICATION_RETRY_BASE_SECONDS * (4 ** (attempts - 1))
+        detail["error"] = error
+    else:
+        new_status, next_attempt_at = "FAILED", None
+        detail["error"] = error
+    if new_status != "DELIVERED":
+        notification_logger.warning("Notification delivery %s attempt %d: %s (%s)", delivery_id, attempts, new_status, error)
+    with transaction() as conn:
+        conn.execute(
+            "UPDATE notification_deliveries SET status = ?, next_attempt_at = ?, detail = ?, delivered_at = ? WHERE delivery_id = ?",
+            (new_status, next_attempt_at, json.dumps(detail), finished, delivery_id),
+        )
+
+
+def process_due_deliveries(now: float | None = None) -> None:
+    due_time = time.time() if now is None else now
+    with connect() as conn:
+        due = [
+            item["delivery_id"]
+            for item in conn.execute(
+                "SELECT delivery_id FROM notification_deliveries WHERE status IN ('PENDING', 'RETRYING', 'SENDING') AND next_attempt_at <= ? ORDER BY next_attempt_at LIMIT 50",
+                (due_time,),
+            ).fetchall()
+        ]
+    for delivery_id in due:
+        process_delivery(delivery_id, due_time)
+
+
+def notification_retry_loop(stop: threading.Event) -> None:
+    while not stop.wait(NOTIFICATION_POLL_SECONDS):
+        try:
+            process_due_deliveries()
+        except Exception:
+            notification_logger.exception("Notification retry pass failed")
 
 
 @app.get("/health")
@@ -1893,10 +2069,44 @@ def enroll_minion(minion_id: str, public_key: str, _admin: str = Depends(require
     return {"minion_id": minion_id, "status": "ENROLLED"}
 
 
+def serialize_adapter(row: sqlite3.Row) -> dict[str, Any]:
+    config = json.loads(row["config"] or "{}")
+    adapter_type = row["adapter_type"]
+    requires_verification = adapter_type in notifications.EMAIL_ADAPTER_TYPES
+    return {
+        "adapter_id": row["adapter_id"],
+        "adapter_type": adapter_type,
+        "name": row["name"],
+        "config": config,
+        "enabled": bool(row["enabled"]),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "requires_verification": requires_verification,
+        "verified": adapter_is_verified(adapter_type, config, row["verified_fingerprint"]),
+        "verified_at": row["verified_at"],
+        "secrets_configured": notifications.secrets_status(adapter_type, config),
+    }
+
+
+ADAPTER_COLUMNS = "adapter_id, adapter_type, name, config, enabled, created_at, updated_at, verified_at, verified_fingerprint"
+
+
+def load_adapter_row(connection: sqlite3.Connection, adapter_id: str) -> sqlite3.Row:
+    row = connection.execute(f"SELECT {ADAPTER_COLUMNS} FROM notification_adapters WHERE adapter_id = ?", (adapter_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Notification adapter not found")
+    return row
+
+
 @app.post("/admin/v1/notification-adapters", status_code=status.HTTP_201_CREATED)
 def create_notification_adapter(body: CreateNotificationAdapterRequest, _admin: str = Depends(require_admin)) -> dict[str, Any]:
+    try:
+        config = notifications.validate_adapter_config(body.adapter_type, body.config)
+    except notifications.ConfigurationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     now = time.time()
     with transaction() as connection:
+        existing = connection.execute("SELECT adapter_type, config FROM notification_adapters WHERE adapter_id = ?", (body.adapter_id,)).fetchone()
         connection.execute(
             """
             INSERT INTO notification_adapters (adapter_id, adapter_type, name, config, enabled, created_at, updated_at)
@@ -1908,29 +2118,172 @@ def create_notification_adapter(body: CreateNotificationAdapterRequest, _admin: 
                 enabled = excluded.enabled,
                 updated_at = excluded.updated_at
             """,
-            (body.adapter_id, body.adapter_type, body.name, json.dumps(body.config), 1 if body.enabled else 0, now, now),
+            (body.adapter_id, body.adapter_type, body.name, json.dumps(config), 1 if body.enabled else 0, now, now),
         )
-    return body.model_dump()
+        if existing is not None and (existing["adapter_type"] != body.adapter_type or json.loads(existing["config"] or "{}") != config):
+            connection.execute("UPDATE notification_adapters SET verified_at = NULL, verified_fingerprint = NULL WHERE adapter_id = ?", (body.adapter_id,))
+            connection.execute("DELETE FROM notification_adapter_verifications WHERE adapter_id = ?", (body.adapter_id,))
+        row = load_adapter_row(connection, body.adapter_id)
+    return serialize_adapter(row)
 
 
 @app.get("/admin/v1/notification-adapters")
 def list_notification_adapters(_admin: str = Depends(require_admin)) -> list[dict[str, Any]]:
     with connect() as connection:
-        rows = connection.execute(
-            "SELECT adapter_id, adapter_type, name, config, enabled, created_at, updated_at FROM notification_adapters ORDER BY created_at DESC"
-        ).fetchall()
-    res = []
-    for r in rows:
-        d = dict(r)
-        d["config"] = json.loads(d["config"] or "{}")
-        res.append(d)
-    return res
+        rows = connection.execute(f"SELECT {ADAPTER_COLUMNS} FROM notification_adapters ORDER BY created_at DESC").fetchall()
+    return [serialize_adapter(row) for row in rows]
+
+
+@app.patch("/admin/v1/notification-adapters/{adapter_id}")
+def update_notification_adapter(adapter_id: str, body: UpdateNotificationAdapterRequest, _admin: str = Depends(require_admin)) -> dict[str, Any]:
+    with transaction() as connection:
+        load_adapter_row(connection, adapter_id)
+        connection.execute(
+            "UPDATE notification_adapters SET enabled = ?, updated_at = ? WHERE adapter_id = ?",
+            (1 if body.enabled else 0, time.time(), adapter_id),
+        )
+        row = load_adapter_row(connection, adapter_id)
+    return serialize_adapter(row)
+
+
+@app.delete("/admin/v1/notification-adapters/{adapter_id}")
+def delete_notification_adapter(adapter_id: str, _admin: str = Depends(require_admin)) -> dict[str, str]:
+    with transaction() as connection:
+        load_adapter_row(connection, adapter_id)
+        in_use = connection.execute("SELECT COUNT(*) FROM notification_profiles WHERE adapter_id = ?", (adapter_id,)).fetchone()[0]
+        if in_use:
+            raise HTTPException(status_code=409, detail="Adapter is used by notification profiles")
+        connection.execute("DELETE FROM notification_adapter_verifications WHERE adapter_id = ?", (adapter_id,))
+        connection.execute("DELETE FROM notification_adapters WHERE adapter_id = ?", (adapter_id,))
+    return {"adapter_id": adapter_id, "status": "DELETED"}
+
+
+@app.post("/admin/v1/notification-adapters/{adapter_id}/verify")
+def start_notification_adapter_verification(
+    adapter_id: str,
+    body: VerifyNotificationAdapterRequest,
+    request: Request,
+    _admin: str = Depends(require_admin),
+) -> dict[str, Any]:
+    if not notifications.is_valid_address(body.recipient):
+        raise HTTPException(status_code=422, detail="A valid recipient email address is required")
+    with connect() as connection:
+        row = load_adapter_row(connection, adapter_id)
+    adapter_type = row["adapter_type"]
+    if adapter_type not in notifications.EMAIL_ADAPTER_TYPES:
+        raise HTTPException(status_code=409, detail="Only email adapters require verification")
+    config = json.loads(row["config"] or "{}")
+    try:
+        config = notifications.validate_adapter_config(adapter_type, config)
+    except notifications.ConfigurationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    missing = [name for name, present in notifications.secrets_status(adapter_type, config).items() if not present]
+    if missing:
+        raise HTTPException(status_code=409, detail=f"Service secrets are not configured: {', '.join(missing)}")
+
+    token = secrets.token_urlsafe(32)
+    now = time.time()
+    expires_at = now + NOTIFICATION_VERIFICATION_TTL_SECONDS
+    with transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO notification_adapter_verifications (adapter_id, token_hash, fingerprint, recipient, expires_at, used_at, created_at)
+            VALUES (?, ?, ?, ?, ?, NULL, ?)
+            ON CONFLICT(adapter_id) DO UPDATE SET
+                token_hash = excluded.token_hash, fingerprint = excluded.fingerprint, recipient = excluded.recipient,
+                expires_at = excluded.expires_at, used_at = NULL, created_at = excluded.created_at
+            """,
+            (adapter_id, _token_hash(token), notification_fingerprint(adapter_type, config), body.recipient, expires_at, now),
+        )
+    link = f"{public_base_url(request)}/notification-verify/{token}"
+    message = (
+        f"This is a SluiceGate test message for the email adapter '{row['name']}'.\n\n"
+        f"Confirm that you received it by opening this link and pressing Confirm:\n{link}\n\n"
+        f"The link expires in {NOTIFICATION_VERIFICATION_TTL_SECONDS // 60} minutes and can be used once."
+    )
+    try:
+        notifications.send_email(adapter_type, config, [body.recipient], "[SluiceGate] Verify email adapter", message, f"verify-{uuid.uuid4().hex}")
+    except notifications.NotificationError as exc:
+        with transaction() as connection:
+            connection.execute("DELETE FROM notification_adapter_verifications WHERE adapter_id = ?", (adapter_id,))
+        raise HTTPException(status_code=502, detail=f"Test email was not sent: {exc}") from None
+    return {"adapter_id": adapter_id, "status": "VERIFICATION_SENT", "recipient": body.recipient, "expires_at": expires_at}
+
+
+def verification_page(title: str, message: str, token: str | None = None) -> str:
+    form = (
+        f'<form method="post" action="/notification-verify/{html.escape(token)}"><button type="submit">Confirm</button></form>'
+        if token
+        else ""
+    )
+    return (
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>SluiceGate</title></head>"
+        f"<body style=\"font-family:sans-serif;max-width:32rem;margin:4rem auto\"><h1>{html.escape(title)}</h1><p>{html.escape(message)}</p>{form}</body></html>"
+    )
+
+
+def find_adapter_verification(connection: sqlite3.Connection, token: str) -> sqlite3.Row | None:
+    return connection.execute(
+        """
+        SELECT v.adapter_id, v.fingerprint, v.expires_at, v.used_at, a.adapter_type, a.config, a.name
+        FROM notification_adapter_verifications v
+        JOIN notification_adapters a ON a.adapter_id = v.adapter_id
+        WHERE v.token_hash = ?
+        """,
+        (_token_hash(token),),
+    ).fetchone()
+
+
+@app.get("/notification-verify/{token}", response_class=HTMLResponse, include_in_schema=False)
+def show_adapter_verification(token: str) -> HTMLResponse:
+    # Read-only: mail scanners that prefetch links must not complete verification.
+    with connect() as connection:
+        row = find_adapter_verification(connection, token)
+    if row is None or row["used_at"] is not None or float(row["expires_at"]) <= time.time():
+        return HTMLResponse(verification_page("Link not valid", "This verification link is invalid, expired, or already used."), status_code=410)
+    return HTMLResponse(verification_page("Confirm email adapter", f"Confirm that you received the test message for '{row['name']}'.", token))
+
+
+@app.post("/notification-verify/{token}", response_class=HTMLResponse, include_in_schema=False)
+def confirm_adapter_verification(token: str) -> HTMLResponse:
+    invalid = HTMLResponse(verification_page("Link not valid", "This verification link is invalid, expired, or already used."), status_code=410)
+    now = time.time()
+    with transaction() as connection:
+        row = find_adapter_verification(connection, token)
+        if row is None or row["used_at"] is not None or float(row["expires_at"]) <= now:
+            return invalid
+        config = json.loads(row["config"] or "{}")
+        try:
+            current = notification_fingerprint(row["adapter_type"], config)
+        except HTTPException:
+            return invalid
+        if not hmac.compare_digest(current, row["fingerprint"]):
+            return invalid
+        connection.execute(
+            "UPDATE notification_adapters SET verified_at = ?, verified_fingerprint = ? WHERE adapter_id = ?",
+            (now, current, row["adapter_id"]),
+        )
+        connection.execute("UPDATE notification_adapter_verifications SET used_at = ? WHERE adapter_id = ?", (now, row["adapter_id"]))
+    return HTMLResponse(verification_page("Adapter verified", "The email adapter is verified and can now deliver notifications."))
+
+
+def validate_profile_target(connection: sqlite3.Connection, adapter_id: str, recipients: list[str]) -> None:
+    adapter = connection.execute("SELECT adapter_type FROM notification_adapters WHERE adapter_id = ?", (adapter_id,)).fetchone()
+    if adapter is None:
+        raise HTTPException(status_code=422, detail=f"Notification adapter '{adapter_id}' does not exist")
+    if adapter["adapter_type"] in notifications.EMAIL_ADAPTER_TYPES:
+        if not recipients or len(recipients) > notifications.MAX_EMAIL_RECIPIENTS:
+            raise HTTPException(status_code=422, detail=f"Email profiles need 1-{notifications.MAX_EMAIL_RECIPIENTS} recipients")
+        invalid = [item for item in recipients if not notifications.is_valid_address(item)]
+        if invalid:
+            raise HTTPException(status_code=422, detail="Recipients must be valid email addresses")
 
 
 @app.post("/admin/v1/notification-profiles", status_code=status.HTTP_201_CREATED)
 def create_notification_profile(body: CreateNotificationProfileRequest, _admin: str = Depends(require_admin)) -> dict[str, Any]:
     now = time.time()
     with transaction() as connection:
+        validate_profile_target(connection, body.adapter_id, body.recipients)
         connection.execute(
             """
             INSERT INTO notification_profiles (profile_id, name, event_types, adapter_id, recipients, template, enabled, created_at, updated_at)
@@ -1996,6 +2349,11 @@ def update_notification_profile(profile_id: str, body: UpdateNotificationProfile
         if row is None:
             raise HTTPException(status_code=404, detail="Notification profile not found")
 
+        validate_profile_target(
+            connection,
+            body.adapter_id if body.adapter_id is not None else row["adapter_id"],
+            body.recipients if body.recipients is not None else json.loads(row["recipients"] or "[]"),
+        )
         updates: list[str] = []
         params: list[Any] = []
         if body.name is not None:
@@ -2040,12 +2398,12 @@ def list_notification_deliveries(request_id: str | None = None, _admin: str = De
     with connect() as connection:
         if request_id:
             rows = connection.execute(
-                "SELECT delivery_id, profile_id, adapter_id, request_id, event_type, status, detail, delivered_at FROM notification_deliveries WHERE request_id = ? ORDER BY delivered_at DESC",
+                "SELECT delivery_id, profile_id, adapter_id, request_id, event_type, status, detail, delivered_at, attempts, next_attempt_at FROM notification_deliveries WHERE request_id = ? ORDER BY delivered_at DESC",
                 (request_id,),
             ).fetchall()
         else:
             rows = connection.execute(
-                "SELECT delivery_id, profile_id, adapter_id, request_id, event_type, status, detail, delivered_at FROM notification_deliveries ORDER BY delivered_at DESC LIMIT 100"
+                "SELECT delivery_id, profile_id, adapter_id, request_id, event_type, status, detail, delivered_at, attempts, next_attempt_at FROM notification_deliveries ORDER BY delivered_at DESC LIMIT 100"
             ).fetchall()
     res = []
     for r in rows:

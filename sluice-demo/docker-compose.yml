@@ -14,6 +14,8 @@ services:
       SG_DEV_AGENT_KEY: ${SG_DEMO_AGENT_KEY:?create a local .env file}
       SG_DEV_MINION_KEY: ${SG_DEMO_MINION_KEY:?create a local .env file}
       SG_DEV_MINION_PUBLIC_KEY_PATH: /run/secrets/demo-minion-public.pem
+      SG_PUBLIC_URL: http://localhost:8443
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
     ports:
       - "127.0.0.1:8443:8443"
     volumes:
@@ -52,9 +54,6 @@ services:
       POLICY_PATH: /policies/policy.yml
       BASE_URL: http://localhost:8000
       UI_URL: http://localhost:8080
-      RESEND_API_KEY: ${RESEND_API_KEY:-}
-      APPROVER_EMAIL: ${APPROVER_EMAIL:-}
-      RESEND_FROM: ${RESEND_FROM:-}
     volumes:
       - ./policies:/policies:ro
     depends_on:
