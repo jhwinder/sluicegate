@@ -184,26 +184,29 @@ The policy is the rule set that decides whether a request is allowed, paused for
 The Admin Console issues each API key once, so copy each directly into its protected destination.
 
 1. In **Agent Registry**, register an Agent for the operator or test client that will submit patch requests. Save its API key in the organization's approved password manager or secrets vault. Do not put it in source code, a normal text file, shell history, or a command-line argument.
-2. In **Minion Registry**, register a Minion whose ID matches `-MinionId` (`PATCH-01` above), with runtime type `powershell`, environment `prod`, and the capability `windows.patch.reconcile`. Paste the Minion's public key, which you can display with:
+2. In **Minion Registry**, register a Minion whose ID matches `-MinionId` (`PATCH-01` above), with runtime type `powershell`, environment `prod`, and the capability `windows.patch.reconcile`. Set its target scope to the servers it may patch (names or wildcards such as `*.contoso.com`, or `*` for all). A Minion with no scope receives no Missions, and neither does one that has not contacted the service in the last five minutes. Paste the Minion's public key, which you can display with:
 
    ```powershell
    Get-Content 'C:\ProgramData\SluiceGate\Minion\keys\minion-public-key.pem'
    ```
 
-3. The Minion's API key is shown once after registration. Store it in the secrets vault, then put it into its protected file on the server. The script reads it at a hidden prompt, so it is never on a command line:
+3. Click **Config** on the registered Minion row to generate `minion.config.json`. Confirm the HTTPS Mission Control URL, catalog and mapping UNC paths, certificate trust settings, and `DryRun: true`. The download contains `ApiKeyPath`, not the API key. Transfer it to `C:\ProgramData\SluiceGate\Minion\config\minion.config.json` through the approved secure channel and preserve the installer-created ACL: Administrators and SYSTEM have full control; the Minion service account has read access.
+4. The Minion's API key is shown once after registration. Store it in the secrets vault, then put it into its protected file on the server. The script reads it at a hidden prompt, so it is never on a command line:
 
    ```powershell
    Set-Location 'C:\SluiceGate-bundle'
-   .\Set-MinionApiKey.ps1
+   .\Set-MinionApiKey.ps1 -ServiceAccount 'CONTOSO\svc-sluicegate-minion$'
    ```
 
-4. Start the Minion service:
+   Use the same `-ServiceAccount` value as the installer so the key directory ACL continues to grant the Minion service account read access.
+
+5. Start the Minion service:
 
    ```powershell
    Start-Service SluiceGateMinion
    ```
 
-5. Confirm the Agent and the Minion show as enabled in their tabs.
+6. Confirm the Agent and the Minion show as enabled in their tabs.
 
 ## 7. Run a safe connectivity check
 
@@ -283,7 +286,8 @@ This removes the temporary setup password and records how to maintain the deploy
 
    Confirm the named administrator still works and the bootstrap key no longer signs in. Do not delete the only working administrator credential before testing its replacement.
 4. Back up `C:\ProgramData\SluiceGate\Minion` and the WSL distribution (stop the container first, then `wsl.exe --export Ubuntu <path>.tar`) using your organization's backup process. The export contains the signing key and the database, so protect it as sensitive data, and test a restore before relying on it.
-5. Record the service DNS name, the server's owner, the Minion ID and owner, the policy approval process, the backup location, the certificate renewal owner (a self-signed certificate lasts 365 days; see the deployment README for renewal), and the incident contact in the team's secure operations documentation. Do not record secret values there.
+5. Audit events are retained in the service SQLite database with no automatic expiry. Include the WSL database in regular protected backups, restrict access to the authenticated Admin Console, and test restoring it. SQLite triggers prevent ordinary application updates/deletes, but a host or database administrator can alter the file or remove the triggers; this is not tamper-proof audit storage. If the pilot needs independently verifiable audit, export events to an organization-managed append-only or immutable store.
+6. Record the service DNS name, the server's owner, the Minion ID and owner, the policy approval process, the backup location, the certificate renewal owner (a self-signed certificate lasts 365 days; see the deployment README for renewal), and the incident contact in the team's secure operations documentation. Do not record secret values there.
 
 ## 10. Optional: let other machines reach the service
 

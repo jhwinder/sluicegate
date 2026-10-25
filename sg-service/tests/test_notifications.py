@@ -41,6 +41,7 @@ def setup_test_service(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(service, "DATABASE_PATH", database_path)
     monkeypatch.setattr(service, "SIGNING_KEY_PATH", signing_key_path)
     monkeypatch.setattr(service, "POLICY_PATH", policy_path)
+    monkeypatch.setattr(service, "ALLOW_FALLBACK_MINION", True)
     monkeypatch.setenv("SG_BOOTSTRAP_ADMIN_KEY", "test-admin-secret")
 
     policy_content = "\n".join([

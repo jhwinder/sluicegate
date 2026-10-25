@@ -9,6 +9,19 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi.testclient import TestClient
 
+from sg_service.protocol import canonical_json
+
+
+def signed_status(key, minion_id, mission_id, claim_token, generation, event_id, status, detail=None, occurred_at=1_800_000_000):
+    detail = detail or {}
+    payload = {"event_id": event_id, "mission_id": mission_id, "minion_id": minion_id, "claim_generation": generation, "status": status, "detail": detail, "occurred_at": occurred_at}
+    return {"event_id": event_id, "claim_token": claim_token, "claim_generation": generation, "status": status, "detail": detail, "occurred_at": occurred_at, "signature": key.sign(canonical_json(payload)).hex()}
+
+
+def signed_result(key, minion_id, mission_id, claim_token, generation, event_id, status, result):
+    payload = {"event_id": event_id, "mission_id": mission_id, "minion_id": minion_id, "claim_generation": generation, "status": status, "result": result}
+    return {"event_id": event_id, "claim_token": claim_token, "claim_generation": generation, "status": status, "result": result, "signature": key.sign(canonical_json(payload)).hex()}
+
 
 def test_patch_request_claim_status_ownership_and_signed_result(tmp_path: Path, monkeypatch) -> None:
     from sg_service import mission_control as service
@@ -32,6 +45,7 @@ def test_patch_request_claim_status_ownership_and_signed_result(tmp_path: Path, 
     monkeypatch.setattr(service, "DATABASE_PATH", database_path)
     monkeypatch.setattr(service, "SIGNING_KEY_PATH", signing_key_path)
     monkeypatch.setattr(service, "POLICY_PATH", policy_path)
+    monkeypatch.setattr(service, "ALLOW_FALLBACK_MINION", True)
     policy_path.write_text(
         "\n".join(
             [
@@ -158,6 +172,18 @@ def test_patch_request_claim_status_ownership_and_signed_result(tmp_path: Path, 
         )
         assert blocked_admin.json()["policy_decision"] == "BLOCK"
         assert blocked_admin.json()["status"] == "CLOSED"
+        blocked_history = client.get(
+            "/admin/v1/audit-events",
+            params={"transaction_id": blocked_request.json()["request_id"], "event_type": "policy.decision"},
+            headers={"Authorization": f"Bearer {admin_key}"},
+        ).json()["events"]
+        assert len(blocked_history) == 1 and blocked_history[0]["status"] == "BLOCK"
+        paused_history = client.get(
+            "/admin/v1/audit-events",
+            params={"request_id": paused_request.json()["request_id"], "event_type": "policy.decision"},
+            headers={"Authorization": f"Bearer {admin_key}"},
+        ).json()["events"]
+        assert len(paused_history) == 1 and paused_history[0]["status"] == "PAUSE"
 
         assert client.get(
             f"/api/v1/requests/{request_id}",
@@ -205,7 +231,7 @@ def test_patch_request_claim_status_ownership_and_signed_result(tmp_path: Path, 
         assert claimed.json()["resume"] is False
         first_acknowledgement = client.post(
             f"/internal/v1/minions/PATCH-01/missions/{mission_id}/status",
-            json={"event_id": "evt-ack", "claim_token": first_claim_token, "status": "MISSION_ACKNOWLEDGED"},
+            json=signed_status(minion_private_key, "PATCH-01", mission_id, first_claim_token, claimed.json()["claim_generation"], "evt-ack", "MISSION_ACKNOWLEDGED"),
             headers={"Authorization": f"Bearer {minion_key}"},
         )
         assert first_acknowledgement.status_code == 200
@@ -259,48 +285,38 @@ def test_patch_request_claim_status_ownership_and_signed_result(tmp_path: Path, 
         assert stale_heartbeat.status_code == 409
         stale_status = client.post(
             f"/internal/v1/minions/PATCH-01/missions/{mission_id}/status",
-            json={"event_id": "evt-stale", "claim_token": first_claim_token, "status": "MISSION_IN_PROGRESS"},
+            json=signed_status(minion_private_key, "PATCH-01", mission_id, first_claim_token, claimed.json()["claim_generation"], "evt-stale", "MISSION_IN_PROGRESS"),
             headers={"Authorization": f"Bearer {minion_key}"},
         )
         assert stale_status.status_code == 409
 
         ack_retry = client.post(
             f"/internal/v1/minions/PATCH-01/missions/{mission_id}/status",
-            json={"event_id": "evt-ack", "claim_token": claim_token, "status": "MISSION_ACKNOWLEDGED"},
+            json=signed_status(minion_private_key, "PATCH-01", mission_id, claim_token, resumed_claim.json()["claim_generation"], "evt-ack", "MISSION_ACKNOWLEDGED"),
             headers={"Authorization": f"Bearer {minion_key}"},
         )
         assert ack_retry.status_code == 200
         assert ack_retry.json() == {"event_id": "evt-ack", "status": "ALREADY_RECORDED"}
         conflicting_ack_retry = client.post(
             f"/internal/v1/minions/PATCH-01/missions/{mission_id}/status",
-            json={"event_id": "evt-ack", "claim_token": claim_token, "status": "MISSION_ACKNOWLEDGED", "detail": {"changed": True}},
+            json=signed_status(minion_private_key, "PATCH-01", mission_id, claim_token, resumed_claim.json()["claim_generation"], "evt-ack", "MISSION_ACKNOWLEDGED", {"changed": True}),
             headers={"Authorization": f"Bearer {minion_key}"},
         )
         assert conflicting_ack_retry.status_code == 409
         progress = client.post(
             f"/internal/v1/minions/PATCH-01/missions/{mission_id}/status",
-            json={"event_id": "evt-progress", "claim_token": claim_token, "status": "MISSION_IN_PROGRESS"},
+            json=signed_status(minion_private_key, "PATCH-01", mission_id, claim_token, resumed_claim.json()["claim_generation"], "evt-progress", "MISSION_IN_PROGRESS"),
             headers={"Authorization": f"Bearer {minion_key}"},
         )
         assert progress.status_code == 200
 
-        retry_failure_payload = {
-            "event_id": "evt-retry-failure",
-            "mission_id": mission_id,
-            "minion_id": "PATCH-01",
-            "status": "MISSION_COMPLETE_FAILED",
-            "result": {"retryable": True, "error": "Temporary target communication failure."},
-        }
-        retry_failure_signature = minion_private_key.sign(service.canonical_json(retry_failure_payload)).hex()
+        retry_failure_body = signed_result(
+            minion_private_key, "PATCH-01", mission_id, claim_token, resumed_claim.json()["claim_generation"],
+            "evt-retry-failure", "MISSION_COMPLETE_FAILED", {"retryable": True, "error": "Temporary target communication failure."},
+        )
         retry_failure = client.post(
             f"/internal/v1/minions/PATCH-01/missions/{mission_id}/result",
-            json={
-                "event_id": retry_failure_payload["event_id"],
-                "claim_token": claim_token,
-                "status": retry_failure_payload["status"],
-                "result": retry_failure_payload["result"],
-                "signature": retry_failure_signature,
-            },
+            json=retry_failure_body,
             headers={"Authorization": f"Bearer {minion_key}"},
         )
         assert retry_failure.status_code == 200
@@ -332,47 +348,48 @@ def test_patch_request_claim_status_ownership_and_signed_result(tmp_path: Path, 
         ).status_code == 409
         second_attempt_ack = client.post(
             f"/internal/v1/minions/PATCH-01/missions/{mission_id}/status",
-            json={"event_id": "evt-ack-attempt-2", "claim_token": claim_token, "status": "MISSION_ACKNOWLEDGED"},
+            json=signed_status(minion_private_key, "PATCH-01", mission_id, claim_token, second_attempt.json()["claim_generation"], "evt-ack-attempt-2", "MISSION_ACKNOWLEDGED"),
             headers={"Authorization": f"Bearer {minion_key}"},
         )
         assert second_attempt_ack.status_code == 200
         second_attempt_progress = client.post(
             f"/internal/v1/minions/PATCH-01/missions/{mission_id}/status",
-            json={"event_id": "evt-progress-attempt-2", "claim_token": claim_token, "status": "MISSION_IN_PROGRESS"},
+            json=signed_status(minion_private_key, "PATCH-01", mission_id, claim_token, second_attempt.json()["claim_generation"], "evt-progress-attempt-2", "MISSION_IN_PROGRESS"),
             headers={"Authorization": f"Bearer {minion_key}"},
         )
         assert second_attempt_progress.status_code == 200
 
-        result_payload = {
-            "event_id": "evt-result",
-            "mission_id": mission_id,
-            "minion_id": "PATCH-01",
-            "status": "MISSION_COMPLETE_SUCCEEDED",
-            "result": {"targets": [{"server": "SERVER03.example.gov", "patches": []}]},
-        }
-        result_signature = minion_private_key.sign(service.canonical_json(result_payload)).hex()
+        result_body = signed_result(
+            minion_private_key, "PATCH-01", mission_id, claim_token, second_attempt.json()["claim_generation"],
+            "evt-result", "MISSION_COMPLETE_SUCCEEDED", {"targets": [{"server": "SERVER03.example.gov", "patches": []}]},
+        )
         result_response = client.post(
             f"/internal/v1/minions/PATCH-01/missions/{mission_id}/result",
-            json={
-                "event_id": result_payload["event_id"],
-                "claim_token": claim_token,
-                "status": result_payload["status"],
-                "result": result_payload["result"],
-                "signature": result_signature,
-            },
+            json=result_body,
             headers={"Authorization": f"Bearer {minion_key}"},
         )
         assert result_response.status_code == 200
         retry_response = client.post(
             f"/internal/v1/minions/PATCH-01/missions/{mission_id}/result",
-            json={**result_payload, "claim_token": claim_token, "signature": result_signature},
+            json=result_body,
             headers={"Authorization": f"Bearer {minion_key}"},
         )
         assert retry_response.status_code == 200
         assert retry_response.json() == {"status": "ALREADY_RECORDED"}
+        terminal_history = client.get(
+            "/admin/v1/audit-events",
+            params={"transaction_id": request_id},
+            headers={"Authorization": f"Bearer {admin_key}"},
+        ).json()["events"]
+        assert any(event["event_type"] == "minion.event_duplicate" for event in terminal_history)
+        assert any(event["event_type"] == "minion.result" and event["signature_verified"] is True for event in terminal_history)
+        conflicting_result = signed_result(
+            minion_private_key, "PATCH-01", mission_id, claim_token, second_attempt.json()["claim_generation"],
+            "evt-result", "MISSION_COMPLETE_SUCCEEDED", {"different": True},
+        )
         conflicting_retry = client.post(
             f"/internal/v1/minions/PATCH-01/missions/{mission_id}/result",
-            json={**result_payload, "claim_token": claim_token, "result": {"different": True}, "signature": result_signature},
+            json=conflicting_result,
             headers={"Authorization": f"Bearer {minion_key}"},
         )
         assert conflicting_retry.status_code == 409
@@ -381,6 +398,7 @@ def test_patch_request_claim_status_ownership_and_signed_result(tmp_path: Path, 
             json={
                 "event_id": "evt-oversized",
                 "claim_token": claim_token,
+                "claim_generation": second_attempt.json()["claim_generation"],
                 "status": "MISSION_COMPLETE_FAILED",
                 "result": {"output": "x" * (256 * 1024 + 1)},
                 "signature": "00",
@@ -395,9 +413,15 @@ def test_patch_request_claim_status_ownership_and_signed_result(tmp_path: Path, 
 
         assert client.post(
             f"/internal/v1/minions/PATCH-01/missions/{mission_id}/result",
-            json={**result_payload, "claim_token": claim_token, "signature": "00"},
+            json={**result_body, "signature": "0" * 128},
             headers={"Authorization": f"Bearer {minion_key}"},
-        ).status_code == 409
+        ).status_code == 401
+        rejected_signature = client.get(
+            "/admin/v1/audit-events",
+            params={"mission_id": mission_id, "event_type": "signature.verification", "status_filter": "REJECTED"},
+            headers={"Authorization": f"Bearer {admin_key}"},
+        ).json()["events"]
+        assert rejected_signature and rejected_signature[0]["signature_verified"] is False
 
         monkeypatch.setattr(service, "is_maintenance_window_open", lambda _window, now=None: True)
         window_request = client.post(
@@ -508,6 +532,16 @@ def test_patch_request_claim_status_ownership_and_signed_result(tmp_path: Path, 
         finally:
             connection.close()
         assert expired_status == "MISSION_EXPIRED"
+
+        service.initialize()
+        restored_history = client.get(
+            "/admin/v1/audit-events",
+            params={"request_id": request_id},
+            headers={"Authorization": f"Bearer {admin_key}"},
+        ).json()["events"]
+        assert any(event["event_type"] == "signature.verification" and event["signature_verified"] is False for event in restored_history)
+        assert any(event["event_type"] == "minion.result" and event["status"] == "MISSION_COMPLETE_SUCCEEDED" for event in restored_history)
+        assert any(event["event_type"] == "mission.claim_reissued" for event in restored_history)
 
 
 def test_outside_window_decision_comes_from_policy_obligation(monkeypatch) -> None:

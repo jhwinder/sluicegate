@@ -56,6 +56,14 @@ Copy `minion.config.example.json` to `minion.config.json` and configure:
 
 Validation failures (untrusted, wrong host name, or expired certificate) appear in the Minion log as `Mission Control TLS validation failed ... : <reason>`.
 
+## Sample CSVs and Safe Test Workflow
+
+The `samples` directory contains `sample-patch-catalog.csv` and `sample-nessus-mapping.csv`. The sample uses the real public Tenable finding [plugin 214542, 7-Zip < 24.09 (ZDI-25-045)](https://www.tenable.com/plugins/nessus/214542), with IAVA `2025-A-0042-S`; the matching CVE is `CVE-2025-0411`. It is still only a template: the catalog row is `DRAFT`, and the target host, staged installer filename, SHA-256, and package reboot behavior must be confirmed in your environment. Do not mark it `APPROVED` or submit it as-is. Nessus must actually detect plugin 214542 on the target for this mapping to match.
+
+For a controlled catalog test, 7-Zip x64 MSI is a simple third-party package to install and inventory. Prefer a disposable Windows test VM; deliberately testing an outdated vulnerable version on the SluiceGate control-plane host increases risk. Run an authorized Nessus scan against the exact host and use the exported finding's `PLUGIN_ID` plus that host's exact `DNS_NAME` in the mapping. Select a finding that corresponds to the installed 7-Zip version, then stage the matching vendor MSI on a Minion-readable share, verify its provenance and SHA-256, and replace every catalog placeholder. Keep the row `DRAFT` while preparing it; only an administrator-approved, hash-verified row should become `APPROVED`.
+
+Start with `DryRun: true`. DryRun can validate the mapping, policy match, executable authorization, package existence, and source hash without installing the MSI. It does not prove the installation succeeds. Only after that review, on a disposable authorized target and within an approved maintenance window, use the normal installation workflow with policy allowing `msiexec.exe`. Nessus `PLUGIN_ID` values are scanner/plugin-version specific; obtain them from your own scan export rather than copying an example ID.
+
 ## Mission Recovery
 
 The current pilot runs one registered Minion identity on one Minion host. Mission Control grants a 120-second claim lease, renewed every 30 seconds with a claim token; a resumed claim rotates the token and increments the claim generation. The PowerShell worker keeps a per-Mission, per-attempt, per-generation Diary in `MissionDiaryDirectory`. A resumed worker verifies the Mission ID and envelope signature against the prior Diary, records a new generation, and retires the prior host Diary only after the new one is durable.

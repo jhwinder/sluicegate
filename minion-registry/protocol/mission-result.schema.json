@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sluicegate.example/schemas/mission-result-1.0.json",
+  "title": "SluiceGate Mission Result",
+  "description": "Body of POST /internal/v1/minions/{minion_id}/missions/{mission_id}/result. The signature covers event_id, mission_id, minion_id, claim_generation, status and result. The UTF-8 JSON result is limited to 256 KiB, which is enforced separately.",
+  "type": "object",
+  "required": ["event_id", "claim_token", "claim_generation", "status", "result", "signature"],
+  "properties": {
+    "event_id": {"type": "string", "minLength": 1, "maxLength": 160},
+    "claim_token": {"type": "string", "minLength": 32, "maxLength": 128},
+    "claim_generation": {"type": "integer", "minimum": 1},
+    "status": {"enum": ["MISSION_COMPLETE_SUCCEEDED", "MISSION_COMPLETE_PARTIAL", "MISSION_COMPLETE_FAILED", "MISSION_REJECTED", "MISSION_CANCELLED", "MISSION_EXPIRED"]},
+    "result": {
+      "type": "object",
+      "properties": {
+        "capability": {"type": "string"},
+        "success": {"type": "boolean"},
+        "retryable": {"type": "boolean"},
+        "error": {"type": "string"}
+      }
+    },
+    "signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+  },
+  "additionalProperties": false
+}

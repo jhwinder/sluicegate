@@ -10,6 +10,6 @@
   "MissionDiaryDirectory": "C:\\ProgramData\\SluiceGate\\Minion\\MissionDiary",
   "TrustedServerCertificatePath": "C:\\ProgramData\\SluiceGate\\Minion\\keys\\sg-server-cert.pem",
   "TrustedServerCertificateSha256": ["REPLACE_WITH_CERTIFICATE_SHA256_FINGERPRINT"],
-  "PollIntervalSeconds": 3600,
+  "PollIntervalSeconds": 60,
   "DryRun": true
 }

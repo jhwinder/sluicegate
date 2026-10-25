@@ -220,7 +220,9 @@
     <div class="card">
       <div class="card-header">
         <h2>Transactions & Execution Ledger</h2>
-        <button class="secondary" onclick="loadMissions()">Refresh</button>
+        <div style="display:flex; gap:8px;">
+          <button class="secondary" onclick="loadMissions(); loadAudit()">Refresh</button>
+        </div>
       </div>
       <table>
         <thead>
@@ -237,6 +239,36 @@
           <tr><td colspan="6" style="text-align:center; color:var(--text-muted);">Loading missions...</td></tr>
         </tbody>
       </table>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <h2>Audit Events</h2>
+      </div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:12px;">
+        <input id="auditRequestId" type="text" placeholder="Request / transaction ID" aria-label="Request or transaction ID" />
+        <input id="auditMissionId" type="text" placeholder="Mission ID" aria-label="Mission ID" />
+        <input id="auditAgentId" type="text" placeholder="Agent ID" aria-label="Agent ID" />
+        <input id="auditMinionId" type="text" placeholder="Minion ID" aria-label="Minion ID" />
+        <input id="auditStatus" type="text" placeholder="Status" aria-label="Status" />
+        <input id="auditEventType" type="text" placeholder="Event type" aria-label="Event type" />
+        <input id="auditSince" type="datetime-local" aria-label="From time" />
+        <input id="auditUntil" type="datetime-local" aria-label="Until time" />
+      </div>
+      <div style="display:flex; gap:8px; margin-bottom:12px;">
+        <button onclick="loadAudit(true)">Filter</button>
+        <button class="secondary" onclick="clearAuditFilters()">Clear</button>
+      </div>
+      <table>
+        <thead>
+          <tr><th>Time</th><th>Event</th><th>Actor</th><th>Request</th><th>Mission</th><th>Agent</th><th>Minion</th><th>Status</th><th>Signature</th><th>Detail</th></tr>
+        </thead>
+        <tbody id="auditEventsTableBody">
+          <tr><td colspan="10" style="text-align:center; color:var(--text-muted);">Loading audit events...</td></tr>
+        </tbody>
+      </table>
+      <div style="display:flex; justify-content:flex-end; margin-top:10px;">
+        <button id="auditOlderButton" class="secondary" style="display:none;" onclick="loadAudit(false)">Older events</button>
+      </div>
     </div>
   </section>
 
@@ -280,13 +312,14 @@
             <th>Team</th>
             <th>Environment</th>
             <th>Rate Limits (Sub/Poll)</th>
+            <th>Credential</th>
             <th>Status</th>
             <th>Last Used</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody id="agentsTableBody">
-          <tr><td colspan="8" style="text-align:center; color:var(--text-muted);">Loading agents...</td></tr>
+          <tr><td colspan="9" style="text-align:center; color:var(--text-muted);">Loading agents...</td></tr>
         </tbody>
       </table>
     </div>
@@ -304,15 +337,17 @@
           <tr>
             <th>Minion ID</th>
             <th>Name</th>
+            <th>Runtime / Environment</th>
             <th>Capabilities</th>
-            <th>Transport</th>
-            <th>Last Contact</th>
-            <th>Status</th>
+            <th>Target Scope</th>
+            <th>Package</th>
+            <th>Health / Last Contact</th>
+            <th>Work / Credential</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody id="minionsTableBody">
-          <tr><td colspan="7" style="text-align:center; color:var(--text-muted);">Loading minions...</td></tr>
+          <tr><td colspan="9" style="text-align:center; color:var(--text-muted);">Loading minions...</td></tr>
         </tbody>
       </table>
     </div>
@@ -445,8 +480,20 @@
         <input type="text" id="newMinionName" placeholder="e.g. Windows Server Patcher" />
       </div>
       <div class="form-group">
+        <label>Approved package version</label>
+        <input type="text" id="newMinionVersion" value="1.0" />
+      </div>
+      <div class="form-group">
+        <label>Approved package SHA-256</label>
+        <input type="text" id="newMinionPackageSha256" placeholder="64 hexadecimal characters" minlength="64" maxlength="64" pattern="[0-9a-fA-F]{64}" />
+      </div>
+      <div class="form-group">
         <label>Capabilities (comma separated)</label>
         <input type="text" id="newMinionCaps" value="windows.patch.reconcile, windows.patch.status" />
+      </div>
+      <div class="form-group">
+        <label>Target scope (comma separated names or wildcards, e.g. *.example.gov; * for all)</label>
+        <input type="text" id="newMinionTargets" placeholder="e.g. server-01.example.gov, web-*.example.gov" />
       </div>
       <div class="form-group">
         <label>Public Key (Ed25519 PEM)</label>
@@ -455,6 +502,31 @@
       <div style="display:flex; justify-content:flex-end; gap:8px;">
         <button class="secondary" onclick="closeModal('registerMinionModal')">Cancel</button>
         <button onclick="submitRegisterMinion()">Register</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="minionConfigModal" class="modal-backdrop">
+    <div class="modal" style="max-width:760px; max-height:90vh; overflow:auto;">
+      <h3>Generate Minion Configuration</h3>
+      <p id="minionConfigId" class="mono"></p>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:10px;">
+        <div class="form-group"><label>Mission Control HTTPS URL</label><input id="configMissionControlUrl" type="url" required /></div>
+        <div class="form-group"><label>Catalog path</label><input id="configCatalogPath" required /></div>
+        <div class="form-group"><label>Nessus mapping path</label><input id="configMappingPath" required /></div>
+        <div class="form-group"><label>Protected API key file path</label><input id="configApiKeyPath" required /></div>
+        <div class="form-group"><label>SluiceGate public key path</label><input id="configPublicKeyPath" required /></div>
+        <div class="form-group"><label>Minion private key path</label><input id="configPrivateKeyPath" required /></div>
+        <div class="form-group"><label>Nonce store path</label><input id="configNoncePath" required /></div>
+        <div class="form-group"><label>Mission diary directory</label><input id="configDiaryPath" required /></div>
+        <div class="form-group"><label>Trusted server certificate path (optional)</label><input id="configTrustedCertPath" /></div>
+        <div class="form-group"><label>Certificate SHA-256 fingerprints (comma separated)</label><input id="configTrustedCertFingerprints" placeholder="Optional; 64 hex characters each" /></div>
+        <div class="form-group"><label>Idle poll interval (seconds)</label><input id="configPollInterval" type="number" min="1" max="86400" value="60" required /></div>
+      </div>
+      <label style="display:flex; align-items:center; gap:8px; margin:12px 0;"><input id="configDryRun" type="checkbox" checked /> Dry run</label>
+      <div style="display:flex; justify-content:flex-end; gap:8px;">
+        <button class="secondary" onclick="closeModal('minionConfigModal')">Cancel</button>
+        <button onclick="downloadMinionConfig()">Download JSON</button>
       </div>
     </div>
   </div>
@@ -631,6 +703,10 @@
         "CLOSED": "badge-danger",
         "MISSION_COMPLETE_FAILED": "badge-danger",
         "MISSION_REJECTED": "badge-danger",
+        "HEALTHY": "badge-success",
+        "NEVER_CHECKED_IN": "badge-warning",
+        "STALE": "badge-danger",
+        "DISABLED": "badge-danger",
         "DELIVERED": "badge-success",
         "FAILED": "badge-danger",
         "PENDING": "badge-info",
@@ -640,6 +716,10 @@
       const cls = map[status] || "badge-info";
       return `<span class="badge ${cls}">${status}</span>`;
     }
+
+    let auditBeforeId = null;
+    let auditQuery = "";
+    const auditEventsById = new Map();
 
     async function loadMissions() {
       try {
@@ -664,6 +744,72 @@
       } catch (err) {
         document.getElementById("missionsTableBody").innerHTML = `<tr><td colspan="6" style="color:var(--danger);">Error: ${err.message}</td></tr>`;
       }
+    }
+
+    async function loadAudit(reset = true) {
+      const tbody = document.getElementById("auditEventsTableBody");
+      if (reset) {
+        auditBeforeId = null;
+        const params = new URLSearchParams();
+        const fields = [
+          ["request_id", "auditRequestId"], ["mission_id", "auditMissionId"],
+          ["agent_id", "auditAgentId"], ["minion_id", "auditMinionId"],
+          ["status_filter", "auditStatus"], ["event_type", "auditEventType"]
+        ];
+        for (const [name, id] of fields) {
+          const value = document.getElementById(id).value.trim();
+          if (value) params.set(name, value);
+        }
+        for (const [name, id] of [["since", "auditSince"], ["until", "auditUntil"]]) {
+          const value = document.getElementById(id).value;
+          if (value) params.set(name, String(Date.parse(value) / 1000));
+        }
+        auditQuery = params.toString();
+        auditEventsById.clear();
+        tbody.innerHTML = '<tr><td colspan="10" style="text-align:center; color:var(--text-muted);">Loading audit events...</td></tr>';
+      }
+      const params = new URLSearchParams(auditQuery);
+      if (auditBeforeId) params.set("before_id", String(auditBeforeId));
+      try {
+        const res = await fetch(`/admin/v1/audit-events?${params.toString()}`, { headers: getAuthHeaders() });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        for (const item of data.events) auditEventsById.set(item.audit_id, item);
+        const rows = data.events.map(item => `
+          <tr>
+            <td>${esc(formatTs(item.occurred_at))}</td>
+            <td class="mono">${esc(item.event_type)}</td>
+            <td>${esc(item.actor_type)}: ${esc(item.actor_id)}</td>
+            <td class="mono">${esc(item.request_id || "")}</td>
+            <td class="mono">${esc(item.mission_id || "")}</td>
+            <td>${esc(item.agent_id || "")}</td>
+            <td>${esc(item.minion_id || "")}</td>
+            <td>${esc(item.status || "")}</td>
+            <td>${item.signature_verified === null ? "—" : item.signature_verified ? "Verified" : "Rejected"}</td>
+            <td><button class="secondary" onclick="viewAuditEvent(${Number(item.audit_id)})">Inspect</button></td>
+          </tr>`).join("");
+        tbody.innerHTML = reset ? rows : tbody.innerHTML + rows;
+        if (!tbody.innerHTML.trim()) tbody.innerHTML = '<tr><td colspan="10" style="text-align:center; color:var(--text-muted);">No matching audit events.</td></tr>';
+        auditBeforeId = data.next_before_id;
+        document.getElementById("auditOlderButton").style.display = auditBeforeId ? "inline-block" : "none";
+      } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="10" style="color:var(--danger);">Error: ${esc(err.message)}</td></tr>`;
+        document.getElementById("auditOlderButton").style.display = "none";
+      }
+    }
+
+    function clearAuditFilters() {
+      ["auditRequestId", "auditMissionId", "auditAgentId", "auditMinionId", "auditStatus", "auditEventType", "auditSince", "auditUntil"]
+        .forEach(id => { document.getElementById(id).value = ""; });
+      loadAudit(true);
+    }
+
+    function viewAuditEvent(auditId) {
+      const item = auditEventsById.get(auditId);
+      if (!item) return;
+      document.getElementById("detailTitle").innerText = `${item.event_type} #${item.audit_id}`;
+      document.getElementById("detailContent").innerText = JSON.stringify(item, null, 2);
+      openModal("missionDetailModal");
     }
 
     async function viewMissionDetail(requestId) {
@@ -747,21 +893,24 @@
         const data = await res.json();
         const tbody = document.getElementById("agentsTableBody");
         if (data.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color:var(--text-muted);">No agents registered.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; color:var(--text-muted);">No agents registered.</td></tr>';
           return;
         }
         tbody.innerHTML = data.map(a => `
           <tr>
-            <td class="mono"><b>${a.agent_id}</b></td>
-            <td>${a.name}</td>
-            <td>${a.owner_team || '—'}</td>
-            <td><span class="badge badge-info">${a.environment}</span></td>
+            <td class="mono"><b>${esc(a.agent_id)}</b></td>
+            <td>${esc(a.name)}</td>
+            <td>${esc(a.owner_team || '—')}</td>
+            <td><span class="badge badge-info">${esc(a.environment)}</span></td>
             <td>${a.rate_limit_per_minute}/m | ${a.poll_rate_limit_per_minute}/m</td>
+            <td>${renderCredentialSummary(a.keys)}</td>
             <td>${a.enabled ? '<span class="badge badge-success">ACTIVE</span>' : '<span class="badge badge-danger">DISABLED</span>'}</td>
             <td>${formatTs(a.last_used_at)}</td>
             <td style="display:flex; gap:6px;">
-              <button class="secondary" onclick="toggleAgent('${a.agent_id}', ${!a.enabled})">${a.enabled ? 'Disable' : 'Enable'}</button>
-              <button class="secondary" onclick="rotateAgentKey('${a.agent_id}')">Rotate Key</button>
+              <button class="secondary" onclick="viewAgentDetail(this.dataset.id)" data-id="${esc(a.agent_id)}">Inspect</button>
+              <button class="secondary" onclick="revokeAgentKey(this.dataset.id)" data-id="${esc(a.agent_id)}">Revoke Key</button>
+              <button class="secondary" onclick="toggleAgent(this.dataset.id, ${!a.enabled})" data-id="${esc(a.agent_id)}">${a.enabled ? 'Disable' : 'Enable'}</button>
+              <button class="secondary" onclick="rotateAgentKey(this.dataset.id)" data-id="${esc(a.agent_id)}">Rotate Key</button>
             </td>
           </tr>
         `).join("");
@@ -810,26 +959,62 @@
       loadAgents();
     }
 
+    async function revokeAgentKey(id) {
+      const keysRes = await fetch(`/admin/v1/agents/${encodeURIComponent(id)}/keys`, { headers: getAuthHeaders() });
+      if (!keysRes.ok) { alert("Failed to load keys: " + await keysRes.text()); return; }
+      const active = (await keysRes.json()).find(key => key.status === "ACTIVE");
+      if (!active) { alert("No active Agent key to revoke."); return; }
+      if (!confirm(`Revoke key ${active.key_id}? Requests using it will be rejected.`)) return;
+      const res = await fetch(`/admin/v1/credentials/${encodeURIComponent(active.key_id)}/revoke`, { method: "POST", headers: getAuthHeaders() });
+      if (!res.ok) { alert("Key revocation failed: " + await res.text()); return; }
+      loadAgents();
+    }
+
+    function renderCredentialSummary(keys) {
+      const active = (keys || []).find(key => key.status === "ACTIVE");
+      if (!active) return '<span class="badge badge-danger">No active key</span>';
+      return `<span class="badge badge-success">ACTIVE</span><br><small class="mono">${esc(active.fingerprint.slice(0, 23))}…</small>`;
+    }
+
+    async function viewAgentDetail(id) {
+      try {
+        const res = await fetch(`/admin/v1/agents/${encodeURIComponent(id)}`, { headers: getAuthHeaders() });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        document.getElementById("detailTitle").innerText = `Agent: ${data.agent_id}`;
+        document.getElementById("detailContent").innerText = JSON.stringify(data, null, 2);
+        openModal("missionDetailModal");
+      } catch (err) {
+        alert("Failed to load Agent details: " + err.message);
+      }
+    }
+
     async function loadMinions() {
       try {
         const res = await fetch("/admin/v1/minions", { headers: getAuthHeaders() });
         const data = await res.json();
         const tbody = document.getElementById("minionsTableBody");
         if (data.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No minions registered.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; color:var(--text-muted);">No minions registered.</td></tr>';
           return;
         }
         tbody.innerHTML = data.map(m => `
           <tr>
-            <td class="mono"><b>${m.minion_id}</b></td>
-            <td>${m.name}</td>
-            <td>${(m.capabilities || []).map(c => `<span class="badge badge-info">${c}</span>`).join(" ")}</td>
-            <td>${m.transport_type}</td>
-            <td>${formatTs(m.last_contact_at)}</td>
-            <td>${m.enabled ? '<span class="badge badge-success">READY</span>' : '<span class="badge badge-danger">DISABLED</span>'}</td>
+            <td class="mono"><b>${esc(m.minion_id)}</b></td>
+            <td>${esc(m.name)}</td>
+            <td>${esc(m.runtime_type)} ${esc(m.version)}<br><small>${esc(m.environment)} · ${esc(m.transport_type)}</small></td>
+            <td>${(m.capabilities || []).map(c => `<span class="badge badge-info">${esc(c)}</span>`).join(" ")}</td>
+            <td>${(m.scope_metadata?.targets || []).map(esc).join(", ") || '—'}</td>
+            <td>${m.package_approved ? '<span class="badge badge-success">APPROVED</span>' : '<span class="badge badge-warning">UNAPPROVED</span>'}<br><small class="mono">${esc(m.package_sha256 || 'No hash')}</small></td>
+            <td>${statusBadge(m.health_status)}<br><small>${formatTs(m.last_contact_at)}</small></td>
+            <td>${m.active_mission_count} active<br><small>${renderCredentialSummary(m.keys)}</small></td>
             <td style="display:flex; gap:6px;">
-              <button class="secondary" onclick="toggleMinion('${m.minion_id}', ${!m.enabled})">${m.enabled ? 'Disable' : 'Enable'}</button>
-              <button class="secondary" onclick="rotateMinionKey('${m.minion_id}')">Rotate Key</button>
+              <button class="secondary" onclick="viewMinionDetail(this.dataset.id)" data-id="${esc(m.minion_id)}">Inspect</button>
+              <button class="secondary" onclick="openMinionConfig(this.dataset.id)" data-id="${esc(m.minion_id)}">Config</button>
+              <button class="secondary" onclick="approveMinionPackage(this.dataset.id)" data-id="${esc(m.minion_id)}">Package</button>
+              <button class="secondary" onclick="revokeMinionKey(this.dataset.id)" data-id="${esc(m.minion_id)}">Revoke Key</button>
+              <button class="secondary" onclick="toggleMinion(this.dataset.id, ${!m.enabled})" data-id="${esc(m.minion_id)}">${m.enabled ? 'Disable' : 'Enable'}</button>
+              <button class="secondary" onclick="rotateMinionKey(this.dataset.id)" data-id="${esc(m.minion_id)}">Rotate Key</button>
             </td>
           </tr>
         `).join("");
@@ -841,14 +1026,17 @@
     async function submitRegisterMinion() {
       const minion_id = document.getElementById("newMinionId").value.trim();
       const name = document.getElementById("newMinionName").value.trim();
+      const version = document.getElementById("newMinionVersion").value.trim();
+      const package_sha256 = document.getElementById("newMinionPackageSha256").value.trim();
       const capabilities = document.getElementById("newMinionCaps").value.split(",").map(c => c.trim()).filter(Boolean);
       const public_key = document.getElementById("newMinionPubKey").value.trim();
+      const targets = document.getElementById("newMinionTargets").value.split(",").map(t => t.trim()).filter(Boolean);
 
       try {
         const res = await fetch("/admin/v1/minions", {
           method: "POST",
           headers: getAuthHeaders(),
-          body: JSON.stringify({ minion_id, name, capabilities, public_key })
+          body: JSON.stringify({ minion_id, name, version, package_sha256: package_sha256 || null, capabilities, scope_metadata: { targets }, public_key })
         });
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
@@ -875,6 +1063,115 @@
       const data = await res.json();
       prompt("New Minion API Key (copy now):", data.api_key);
       loadMinions();
+    }
+
+    async function revokeMinionKey(id) {
+      const keysRes = await fetch(`/admin/v1/minions/${encodeURIComponent(id)}/keys`, { headers: getAuthHeaders() });
+      if (!keysRes.ok) { alert("Failed to load keys: " + await keysRes.text()); return; }
+      const active = (await keysRes.json()).find(key => key.status === "ACTIVE");
+      if (!active) { alert("No active Minion key to revoke."); return; }
+      if (!confirm(`Revoke key ${active.key_id}? This Minion will no longer be able to check in.`)) return;
+      const res = await fetch(`/admin/v1/credentials/${encodeURIComponent(active.key_id)}/revoke`, { method: "POST", headers: getAuthHeaders() });
+      if (!res.ok) { alert("Key revocation failed: " + await res.text()); return; }
+      loadMinions();
+    }
+
+    async function approveMinionPackage(id) {
+      const version = prompt("Approved package version:", "");
+      if (version === null) return;
+      const package_sha256 = prompt("Approved package SHA-256 (64 hexadecimal characters):", "");
+      if (package_sha256 === null) return;
+      if (!/^[0-9a-fA-F]{64}$/.test(package_sha256.trim())) {
+        alert("Package SHA-256 must contain exactly 64 hexadecimal characters.");
+        return;
+      }
+      const res = await fetch(`/admin/v1/minions/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ version: version.trim(), package_sha256: package_sha256.trim() })
+      });
+      if (!res.ok) { alert("Package approval failed: " + await res.text()); return; }
+      loadMinions();
+    }
+
+    async function viewMinionDetail(id) {
+      try {
+        const [minionRes, missionsRes] = await Promise.all([
+          fetch(`/admin/v1/minions/${encodeURIComponent(id)}`, { headers: getAuthHeaders() }),
+          fetch(`/admin/v1/minions/${encodeURIComponent(id)}/missions?limit=20`, { headers: getAuthHeaders() })
+        ]);
+        if (!minionRes.ok) throw new Error(await minionRes.text());
+        if (!missionsRes.ok) throw new Error(await missionsRes.text());
+        const [minion, missions] = await Promise.all([minionRes.json(), missionsRes.json()]);
+        document.getElementById("detailTitle").innerText = `Minion: ${minion.minion_id}`;
+        document.getElementById("detailContent").innerText = JSON.stringify({ ...minion, recent_missions: missions }, null, 2);
+        openModal("missionDetailModal");
+      } catch (err) {
+        alert("Failed to load Minion details: " + err.message);
+      }
+    }
+
+    async function openMinionConfig(id) {
+      try {
+        const res = await fetch(`/admin/v1/minions/${encodeURIComponent(id)}/configuration`, { headers: getAuthHeaders() });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        const defaults = data.defaults;
+        document.getElementById("minionConfigModal").dataset.minionId = data.minion_id;
+        document.getElementById("minionConfigId").textContent = data.minion_id;
+        document.getElementById("configMissionControlUrl").value = defaults.mission_control_url;
+        document.getElementById("configCatalogPath").value = defaults.catalog_path;
+        document.getElementById("configMappingPath").value = defaults.nessus_mapping_path;
+        document.getElementById("configApiKeyPath").value = defaults.api_key_path;
+        document.getElementById("configPublicKeyPath").value = defaults.sluicegate_public_key_path;
+        document.getElementById("configPrivateKeyPath").value = defaults.minion_private_key_path;
+        document.getElementById("configNoncePath").value = defaults.nonce_store_path;
+        document.getElementById("configDiaryPath").value = defaults.mission_diary_directory;
+        document.getElementById("configTrustedCertPath").value = defaults.trusted_server_certificate_path;
+        document.getElementById("configTrustedCertFingerprints").value = defaults.trusted_server_certificate_sha256.join(", ");
+        document.getElementById("configPollInterval").value = defaults.poll_interval_seconds;
+        document.getElementById("configDryRun").checked = defaults.dry_run;
+        openModal("minionConfigModal");
+      } catch (err) {
+        alert("Failed to load configuration defaults: " + err.message);
+      }
+    }
+
+    async function downloadMinionConfig() {
+      const modal = document.getElementById("minionConfigModal");
+      const minionId = modal.dataset.minionId;
+      const fingerprints = document.getElementById("configTrustedCertFingerprints").value
+        .split(",").map(value => value.trim()).filter(Boolean);
+      const body = {
+        mission_control_url: document.getElementById("configMissionControlUrl").value.trim(),
+        catalog_path: document.getElementById("configCatalogPath").value.trim(),
+        nessus_mapping_path: document.getElementById("configMappingPath").value.trim(),
+        api_key_path: document.getElementById("configApiKeyPath").value.trim(),
+        sluicegate_public_key_path: document.getElementById("configPublicKeyPath").value.trim(),
+        minion_private_key_path: document.getElementById("configPrivateKeyPath").value.trim(),
+        nonce_store_path: document.getElementById("configNoncePath").value.trim(),
+        mission_diary_directory: document.getElementById("configDiaryPath").value.trim(),
+        trusted_server_certificate_path: document.getElementById("configTrustedCertPath").value.trim() || null,
+        trusted_server_certificate_sha256: fingerprints,
+        poll_interval_seconds: Number(document.getElementById("configPollInterval").value),
+        dry_run: document.getElementById("configDryRun").checked
+      };
+      try {
+        const res = await fetch(`/admin/v1/minions/${encodeURIComponent(minionId)}/configuration`, {
+          method: "POST", headers: getAuthHeaders(), body: JSON.stringify(body)
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const blob = await res.blob();
+        const downloadUrl = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = downloadUrl;
+        link.download = "minion.config.json";
+        link.click();
+        URL.revokeObjectURL(downloadUrl);
+        closeModal("minionConfigModal");
+      } catch (err) {
+        alert("Configuration was not generated: " + err.message);
+      }
     }
 
     async function loadNotifications() {
@@ -1190,6 +1487,7 @@
 
     function loadAll() {
       loadMissions();
+      loadAudit();
       loadApprovals();
       loadAgents();
       loadMinions();

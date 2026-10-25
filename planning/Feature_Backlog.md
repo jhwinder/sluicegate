@@ -169,7 +169,7 @@ The service durably stores Mission rows, Minion-submitted status/result events, 
 - Persist signature verification outcome and enough signed result/envelope data to support later authorized audit.
 - Add an authorized event-history API/UI with search/filter by request, transaction, Mission, Agent, Minion, status, and time.
 - Test that BLOCK, PAUSE, approval re-evaluation, failed signature, duplicate event, administrative change, and terminal success/failure are reconstructable after service restart.
-- Define retention, backup/restore, access controls, and tamper-resistance appropriate to the pilot; SQLite persistence alone is not tamper-resistant audit storage.
+- Define retention, backup/restore, access controls, and tamper-resistance appropriate to the pilot; SQLite persistence alone is not tamper-resistant audit storage. **Pilot decision:** retain events indefinitely with no automatic expiry; restrict history to authenticated administrators; back up the WSL database using the protected WSL export procedure and test restore. SQLite triggers prevent ordinary application edits/deletes but do not resist a host/database administrator; independent immutable export is deferred until stronger tamper evidence is required.
 
 ### P1.2 Make deduplication atomic under concurrent requests
 
@@ -194,7 +194,7 @@ The JSON Schema is present but is not integrated into service/runtime validation
 
 - Validate Mission and result payloads against a versioned schema at service and Minion boundaries; reject unknown/malformed required fields before execution.
 - Define and validate the schema for generic action Missions as well as patch Missions, and add a versioned Mission Result schema; the current Mission schema is patch-specific.
-- Sign progress/status event payloads as required by the protocol, or document and approve an explicit authenticated-transport-only exception.
+- Sign progress/status event payloads (event ID, Mission ID, claim generation, status, timestamp) with the Minion key; reject and audit unsigned or invalid events. Heartbeats are an approved exception and rely on the authenticated transport and claim token only.
 - Make nonce consumption durable and atomic, with retention at least through the maximum Mission validity/replay window; do not evict unexpired replay records.
 - Require valid expiry, intended Minion, capability, signature, and nonce before accepting work.
 - Add cross-language canonicalization/signature test vectors shared by Python and PowerShell.
@@ -232,41 +232,41 @@ The UI provides useful core Agent/Minion/Mission/notification workflows, but lac
 
 **Requirements:** Sections 3.9, 22.4, 23.
 
-Beyond the missing runtime payload/configuration tracked in P0.1, the scripts need end-to-end validation on the target platform. The installer expects pre-provisioned files under `InstallRoot` before it creates/copies into that directory. The uninstall script removes the Docker container but intentionally preserves the named SQLite volume; backup/retention behavior should be explicit. The bundle hash manifest is generated but the installer does not validate it.
+The Windows bundle now includes the service host, runtime, config template, and Docker image, and the installer creates `InstallRoot` itself. Upgrade protection and non-destructive uninstall behavior are implemented and documented. Remaining work is target-platform validation and verification of the generated bundle manifest. The installer currently does not validate `SHA256SUMS.txt`. Authenticode signing is optional by decision; `-RequireSignature` is available to enforce it.
 
 **Acceptance criteria:**
 
 - Validate prerequisites and create/copy directories in a safe order without overwriting secrets during upgrades.
-- Verify artifact hashes before install and document what is signed versus only hashed; keep signature bypass restricted to explicit development/lab use.
-- Preserve/export the SQLite volume and required Minion state on uninstall unless an explicit destructive option is selected.
-- Add idempotent install/upgrade/uninstall tests or scripted validation on clean Windows Server 2022 snapshots.
+- Validate every bundled artifact against `SHA256SUMS.txt` before install, and document that the manifest is not itself signed. Keep Authenticode optional for this pilot, document the trust tradeoff, and verify `-RequireSignature` enforcement where deployment policy requires signed binaries.
+- Validate that upgrades preserve existing service/Minion configuration and keys, and that uninstall preserves data unless `-RemoveData` is selected.
+- Run the idempotent install/upgrade/uninstall scripts on clean Windows Server 2022 snapshots; existing fake-WSL tests do not validate the real host.
 - Verify gMSA/service-logon setup, PowerShell edition/runtime, Docker Engine mode/support, local port binding, firewall, and target permissions with the deployment environment.
 
 ### P2.2 Secure bootstrap and administration operations
 
 **Requirements:** Sections 3.1.2, 3.2-3.3, 17.17, 18.1-18.3.
 
-The service uses bearer API keys and a bootstrap admin key; production TLS, operator authentication integration, least-privilege administrative roles, and durable auditing of administrative actions are not complete. The pilot allows a shared server-authenticated admin boundary, so a full application RBAC model is not required for the initial pilot, but the deployed authentication boundary must be explicit and protected.
+The service uses named bearer API keys for administrators, HTTPS in the service container, and a documented bootstrap/revoke/replace procedure. P1.1 now provides durable administrative audit events. The pilot allows a shared server-authenticated admin boundary, so a full application RBAC model is not required. Remaining work is to decide whether external operator identity integration is needed and whether bootstrap revocation should be enforced automatically: today the bootstrap key remains valid until explicitly revoked through the documented procedure.
 
 **Acceptance criteria:**
 
-- Define how human operators authenticate to the admin UI/API in the Windows deployment and protect credentials in transit.
-- Enforce one-time bootstrap behavior and document removal/rotation; avoid long-lived shared bootstrap credentials.
-- Validate key rotation/revocation and failure recovery, with audit events for each administrative mutation.
+- Validate the documented named-admin bearer-key flow on the Windows deployment, protect browser-local tokens, and decide whether an external identity provider is required for the pilot.
+- Test bootstrap key issuance, explicit revocation, settings removal, and recovery together; avoid long-lived shared bootstrap credentials.
+- Exercise key rotation/revocation and recovery on Windows, and confirm administrative mutations appear in the audit history.
 - Do not log bearer tokens, signing keys, or patch repository credentials.
 
 ### P2.3 Establish deployment observability and support procedures
 
 **Requirements:** Sections 3.9, 11, 12.4, 16, 22.6, 22.15.
 
-The service has `/health` and database-backed Mission state, and the Windows host emits standard .NET logs. Operational health checks, stale-Minion detection/alerting, log retention/export, database backup/restore, and documented recovery procedures remain incomplete.
+The service has a process-level `/health` endpoint, database-backed Mission state, and the Admin Console now shows Minion health/staleness and recent Mission activity. The endpoint does not establish readiness of the policy, signing key, or database; stale status is visible but does not alert. Container/Event Log retention and export, tested backup restore, long-running-Mission alerting, and recovery exercises remain open. Audit retention is indefinite and documented; cleanup/retention for Missions, status events, and notifications is not defined.
 
 **Acceptance criteria:**
 
 - Provide readiness checks for database, policy, signing key, and required service dependencies; distinguish readiness from process liveness.
 - Configure Windows Event Log and container log retention/collection, with correlation IDs and secret redaction.
 - Define SQLite backup/restore and schema migration behavior; exercise recovery from a valid backup.
-- Configure stale-Minion/long-running-Mission detection and an operator-visible remediation path.
+- Add alerts for stale Minions and long-running Missions, building on the existing health state and operator-visible Mission history.
 - Define and test Mission/event/notification retention and cleanup policies.
 
 ### P2.4 Support URI-based patch package sources
@@ -287,31 +287,22 @@ The patch catalog currently assumes `patch_path` names a local or UNC file that 
 
 ### P2.5 Generate Minion configuration from the Minion Registry
 
-The Minion Registry should generate a valid `minion.config.json` for a registered Minion, so operators do not have to manually copy registry values into a file and risk mismatched IDs, URLs, key paths, or capabilities.
+The Minion Registry now generates and downloads a runtime-shaped `minion.config.json` for a registered Minion, defaulting the endpoint from `SG_PUBLIC_URL` and letting operators enter deployment-specific paths and trust settings. The API key is deliberately not embedded: the runtime rejects inline keys, and the generator includes the protected `ApiKeyPath` instead. The key is issued once and stored separately with `Set-MinionApiKey.ps1`. Automated export validation is implemented; real Windows delivery/ACL and successful check-in still require target-host validation.
 
 **Acceptance criteria:**
 
-- Add a registry action to create/download a configuration file for the selected Minion using its registered ID and deployment settings.
-- Include the Mission Control URL, Minion ID, API key, signing-key paths, catalog/mapping paths, nonce store path, polling interval, and safe initial `DryRun` setting.
-- Collect or validate deployment-specific paths and endpoint values; validate the generated JSON against the runtime configuration contract.
-- Display or export the API key only at issuance/rotation time; do not persist plaintext credentials in the registry, logs, or ordinary downloads after the one-time response.
-- Document secure delivery and Windows ACL requirements for the generated file, and test that the generated config can check in successfully.
+- **Implemented:** provide a registry action to create/download JSON using the registered Minion ID, service URL default, deployment paths, certificate trust, polling interval, and `DryRun: true` default.
+- **Implemented:** include `ApiKeyPath`, not an inline key, along with signing-key paths, catalog/mapping paths, nonce store path, and diary path. The API rejects invalid HTTP URLs, malformed fingerprints, and invalid paths; the export has `Cache-Control: no-store`.
+- **Implemented:** keep the reusable API key out of registry data and generated JSON; issue it once and store it in the protected key file.
+- **Remaining:** validate secure delivery and ACL preservation, then install the exported file and verify Minion check-in on Windows Server 2022.
 
-### P2.6 Make patch execution constraints policy-owned
+### P2.6 Resolved by P0.3: make patch execution constraints policy-owned
 
-The patch request should identify the target server(s), while the active, administrator-authored policy controls allowed patch sources/types, maintenance constraints, and reboot behavior. The current endpoint accepts Agent-supplied patch settings and copies them into the Mission, so policy evaluation alone does not ensure those execution constraints are policy-owned.
+P0.3 implemented this contract: Agent patch requests select targets only; policy supplies approved targets, sources, patch types, maintenance window, and reboot permission; those constraints are bound into the signed Mission and enforced by the Minion. The duplicate P2 work item is closed. Remaining target-platform validation is tracked by P0.3 and P2.1.
 
-**Acceptance criteria:**
+### P2.7 Support the optional Linux-service/Windows-Minion two-server deployment
 
-- Define policy syntax and service behavior for deriving the effective patch constraints from trusted policy/configuration, rather than accepting Agent-selected execution constraints.
-- Reduce the Agent patch request contract to the requested target server(s) and non-authoritative request metadata.
-- Bind the policy-derived allowed sources, patch types, maintenance window, and reboot permission into the signed Mission; reject attempts to override them in the request.
-- Ensure the Minion enforces the signed constraints before selecting/installing patches or rebooting.
-- Test policy changes, omitted and malicious override fields, PAUSE/approval re-evaluation, and that no Mission can exceed the constraints of the policy decision that authorized it.
-
-### P2.7 Support the Linux-service/Windows-Minion two-server deployment
-
-The installation guide describes `sg-service` on a Linux host and the patching Minion on a separate Windows host, but the checked-in Windows installer currently deploys the service container on the same host and the split setup is only a manual lab procedure. Define and deliver the two-server topology as a supported deployment, with platform-specific installation, secure service-to-Minion communication, and end-to-end validation.
+The supported installation guide now describes one Windows Server 2022 host: `sg-service` runs in a Linux container using Docker Engine inside WSL 2, alongside the Windows Minion. A separate Linux service host with a remote Windows Minion remains a possible optional topology; the Windows installer currently always deploys a local service container, and the split setup is not a supported bundled install. Keep this item only if the pilot still needs that alternate topology.
 
 **Acceptance criteria:**
 
@@ -321,7 +312,7 @@ The installation guide describes `sg-service` on a Linux host and the patching M
 - Ensure Agent/admin access reaches the Linux service, while only the required Mission Control endpoint is reachable by the Windows Minion; document port bindings and allowed network paths.
 - Align service, installer, Minion runtime, configuration, and deployment documentation on the remote URL, Minion ID, key provisioning, and service ownership contracts.
 - Exercise clean installation, service startup, Minion check-in, Mission claim, safe dry-run execution, restart/recovery, upgrade, and uninstall across separate Linux and Windows hosts.
-- Update the installation guide and deployment references to distinguish the supported two-server installation from a same-host topology, which should also continue to be supported.
+- If this topology is approved, document it as an optional alternate to the supported single-Windows-host WSL/Docker installation and keep the two procedures distinct.
 
 ## Explicitly Deferred / Not Backlog Items
 The following items are future build-out ideas:

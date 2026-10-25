@@ -16,10 +16,12 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY sg-service/pyproject.toml /tmp/sg-service-pyproject.toml
 COPY --from=build /wheels /wheels
+COPY minion-registry/protocol/*.schema.json /opt/sluicegate/protocol/
 RUN python -m venv /opt/venv \
-	&& /opt/venv/bin/pip install --no-cache-dir /wheels/sg_core-*.whl /wheels/sg_service-*.whl \
-	&& rm -rf /wheels /tmp/sg-service-pyproject.toml
+        && /opt/venv/bin/pip install --no-cache-dir /wheels/sg_core-*.whl /wheels/sg_service-*.whl \
+        && rm -rf /wheels /tmp/sg-service-pyproject.toml
 ENV PATH="/opt/venv/bin:${PATH}"
+ENV SG_PROTOCOL_DIR=/opt/sluicegate/protocol
 ENV SG_DATABASE_PATH=/data/sg-service.sqlite3
 EXPOSE 8443
 CMD ["python", "-m", "sg_service"]

@@ -76,12 +76,14 @@ def test_canonical_action_api_allow_pause_approval(tmp_path: Path, monkeypatch) 
                 "minion_id": "REFUND-MINION-01",
                 "name": "Payments Refund Minion",
                 "capabilities": ["payments.refund"],
+                "scope_metadata": {"targets": ["*"]},
                 "public_key": minion_pub_pem,
             },
             headers=admin_headers,
         ).json()
         minion_key = minion_reg["api_key"]
         minion_headers = {"Authorization": f"Bearer {minion_key}"}
+        client.post("/internal/v1/minions/REFUND-MINION-01/check-in", headers=minion_headers)
 
         # Register billing agent
         agent_data = client.post(
@@ -170,4 +172,4 @@ def test_canonical_action_api_allow_pause_approval(tmp_path: Path, monkeypatch) 
         assert claimed2.status_code == 200
         mission2 = claimed2.json()
         assert mission2["envelope"]["parameters"]["amount"] == 500
-        assert mission2["envelope"]["approval_evidence"]["approver"] == "finance-vp"
+        assert mission2["envelope"]["approval_evidence"]["approver"] == "admin"

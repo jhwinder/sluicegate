@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import hmac
 import html
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import sqlite3
@@ -14,6 +16,7 @@ import tempfile
 import threading
 import time
 import uuid
+from urllib.parse import urlsplit
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
@@ -25,13 +28,14 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sg_core import GateRequest, PolicyEngine
 from sg_poledit.validate import validate_policy_dict
 
 from sg_service import notifications
 from sg_service.hardening import HardeningMiddleware
+from sg_service.protocol import canonical_json, schema_errors
 
 DATABASE_PATH = Path(os.environ.get("SG_DATABASE_PATH", "/data/sg-service.sqlite3"))
 SIGNING_KEY_PATH = Path(os.environ.get("SG_SIGNING_KEY_PATH", "/run/secrets/sg-signing-key.pem"))
@@ -39,6 +43,9 @@ PATCH_MINION_ID = os.environ.get("SG_PATCH_MINION_ID", "PATCH-01")
 POLICY_PATH = Path(os.environ.get("SG_POLICY_PATH", "/config/policy.yml"))
 ADMIN_HTML_PATH = Path(__file__).resolve().parent / "static" / "admin.html"
 MAX_MINION_RESULT_BYTES = 256 * 1024
+MINION_STALE_SECONDS = int(os.environ.get("SG_MINION_STALE_SECONDS", "300"))
+ALLOW_FALLBACK_MINION = os.environ.get("SG_ALLOW_FALLBACK_MINION", "false").lower() == "true"
+routing_logger = logging.getLogger("sg_service.routing")
 POLICY_LOCK = threading.RLock()
 MINION_MAX_ATTEMPTS = int(os.environ.get("SG_MINION_MAX_ATTEMPTS", "3"))
 MINION_RETRY_INTERVAL_SECONDS = int(os.environ.get("SG_MINION_RETRY_INTERVAL_SECONDS", "30"))
@@ -73,6 +80,29 @@ app.add_middleware(HardeningMiddleware)
 policy_engine: PolicyEngine | None = None
 
 
+@app.middleware("http")
+async def audit_admin_mutations(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/admin/v1/") and request.method in {"POST", "PATCH", "PUT", "DELETE"} and 200 <= response.status_code < 300:
+        authorization = request.headers.get("authorization", "")
+        token = authorization.removeprefix("Bearer ") if authorization.startswith("Bearer ") else ""
+        if token:
+            with connect() as connection:
+                row = connection.execute(
+                    "SELECT key_id, principal_id FROM api_keys WHERE kind = 'admin' AND secret_hash = ?",
+                    (_token_hash(token),),
+                ).fetchone()
+            if row:
+                record_audit_event(
+                    "admin.mutation",
+                    "ADMIN",
+                    f"{row['principal_id']}:{row['key_id']}",
+                    status=str(response.status_code),
+                    detail={"method": request.method, "path": request.url.path},
+                )
+    return response
+
+
 class PatchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -87,11 +117,15 @@ class CanonicalActionRequest(BaseModel):
 
 
 class MissionStatusRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     event_id: str = Field(min_length=1, max_length=160)
     claim_token: str = Field(min_length=32, max_length=128)
+    claim_generation: int = Field(ge=1)
     status: str
     detail: dict[str, Any] = Field(default_factory=dict)
-    occurred_at: float | None = None
+    occurred_at: float
+    signature: str
 
 
 class MissionHeartbeatRequest(BaseModel):
@@ -102,8 +136,11 @@ class MissionHeartbeatRequest(BaseModel):
 
 
 class MissionResultRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     event_id: str = Field(min_length=1, max_length=160)
     claim_token: str = Field(min_length=32, max_length=128)
+    claim_generation: int = Field(ge=1)
     status: str
     result: dict[str, Any] = Field(default_factory=dict)
     signature: str
@@ -147,6 +184,7 @@ class RegisterMinionRequest(BaseModel):
     description: str = ""
     runtime_type: str = "powershell"
     version: str = "1.0"
+    package_sha256: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
     environment: str = "prod"
     capabilities: list[str] = Field(default_factory=lambda: ["windows.patch.reconcile"])
     scope_metadata: dict[str, Any] = Field(default_factory=dict)
@@ -160,6 +198,7 @@ class UpdateMinionRequest(BaseModel):
     description: str | None = None
     runtime_type: str | None = None
     version: str | None = None
+    package_sha256: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
     environment: str | None = None
     capabilities: list[str] | None = None
     scope_metadata: dict[str, Any] | None = None
@@ -167,6 +206,38 @@ class UpdateMinionRequest(BaseModel):
     endpoint_info: str | None = None
     enabled: bool | None = None
     public_key: str | None = None
+
+
+class MinionConfigExportRequest(BaseModel):
+    mission_control_url: str = Field(default="", max_length=2048)
+    api_key_path: str = Field(default=r"C:\ProgramData\SluiceGate\Minion\keys\minion-api-key.txt", min_length=1, max_length=1024)
+    sluicegate_public_key_path: str = Field(default=r"C:\ProgramData\SluiceGate\Minion\keys\sg-public-key.pem", min_length=1, max_length=1024)
+    minion_private_key_path: str = Field(default=r"C:\ProgramData\SluiceGate\Minion\keys\minion-private-key.pem", min_length=1, max_length=1024)
+    catalog_path: str = Field(min_length=1, max_length=1024)
+    nessus_mapping_path: str = Field(min_length=1, max_length=1024)
+    nonce_store_path: str = Field(default=r"C:\ProgramData\SluiceGate\Minion\data\nonces.txt", min_length=1, max_length=1024)
+    mission_diary_directory: str = Field(default=r"C:\ProgramData\SluiceGate\Minion\MissionDiary", min_length=1, max_length=1024)
+    trusted_server_certificate_path: str | None = Field(default=None, max_length=1024)
+    trusted_server_certificate_sha256: list[str] = Field(default_factory=list, max_length=16)
+    poll_interval_seconds: int = Field(default=60, ge=1, le=86400)
+    dry_run: bool = True
+
+    @field_validator("mission_control_url")
+    @classmethod
+    def valid_mission_control_url(cls, value: str) -> str:
+        value = value.strip()
+        if value:
+            parsed = urlsplit(value)
+            if parsed.scheme.lower() != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+                raise ValueError("Mission Control URL must be an absolute HTTPS URL without embedded credentials or a fragment")
+        return value
+
+    @field_validator("trusted_server_certificate_sha256")
+    @classmethod
+    def valid_certificate_fingerprints(cls, values: list[str]) -> list[str]:
+        if any(re.fullmatch(r"[0-9a-fA-F]{64}", value) is None for value in values):
+            raise ValueError("certificate fingerprints must be 64 hexadecimal characters")
+        return [value.upper() for value in values]
 
 
 class CreateNotificationAdapterRequest(BaseModel):
@@ -225,6 +296,90 @@ def transaction() -> Generator[sqlite3.Connection, None, None]:
         connection.close()
 
 
+OPEN_MISSION_STATUSES = ("QUEUED", "WAITING_FOR_APPROVAL", "CLAIMED", "MISSION_ACKNOWLEDGED", "MISSION_IN_PROGRESS", "MISSION_WAITING_FOR_REBOOT")
+OPEN_STATUS_SQL = ", ".join(f"'{name}'" for name in OPEN_MISSION_STATUSES)
+
+
+def equivalence_key(kind: str, principal: str, capability: str, target: dict[str, Any], parameters: dict[str, Any]) -> str:
+    """Stable identity of a request; `kind` keeps patch requests and generic actions from colliding."""
+    if kind == "patch":
+        target = {"servers": sorted(set(target.get("servers", [])))}
+    return hashlib.sha256(
+        json.dumps(
+            {"kind": kind, "agent": principal, "capability": capability, "target": target, "parameters": parameters},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def raw_request_equivalence_key(principal: str, raw: dict[str, Any]) -> str:
+    if "capability" in raw:
+        target = raw.get("target", {})
+        return equivalence_key(
+            "action", principal, raw["capability"], target if isinstance(target, dict) else {"id": str(target)}, raw.get("parameters", {})
+        )
+    return equivalence_key("patch", principal, "windows.patch.reconcile", {"servers": raw.get("servers", [])}, {})
+
+
+def find_open_equivalent(connection: sqlite3.Connection, key: str) -> str | None:
+    row = connection.execute(
+        f"SELECT request_id FROM missions WHERE equivalence_key = ? AND status IN ({OPEN_STATUS_SQL})", (key,)
+    ).fetchone()
+    return str(row["request_id"]) if row else None
+
+
+def insert_mission_once(values: tuple[Any, ...], key: str, audit_records: list[dict[str, Any]] | None = None) -> str | None:
+    """Insert a Mission unless an equivalent one is open; return the existing request_id in that case, else None."""
+    columns = "mission_id, request_id, agent_id, minion_id, envelope, status, raw_request, routing, created_at, updated_at, equivalence_key"
+    try:
+        with transaction() as connection:
+            existing = find_open_equivalent(connection, key)
+            if existing:
+                return existing
+            connection.execute(f"INSERT INTO missions ({columns}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (*values, key))
+            for record in audit_records or []:
+                record_audit_event(**record, connection=connection)
+            return None
+    except sqlite3.IntegrityError:
+        with connect() as connection:
+            existing = find_open_equivalent(connection, key)
+        if existing is None:
+            raise
+        return existing
+
+
+def record_deduplicated_request(agent_id: str, request_id: str, capability: str) -> None:
+    with connect() as connection:
+        row = connection.execute("SELECT mission_id, minion_id, status FROM missions WHERE request_id = ?", (request_id,)).fetchone()
+    record_audit_event(
+        "request.deduplicated",
+        "AGENT",
+        agent_id,
+        request_id=request_id,
+        mission_id=row["mission_id"] if row else None,
+        agent_id=agent_id,
+        minion_id=row["minion_id"] if row else None,
+        status=row["status"] if row else None,
+        detail={"capability": capability, "matched_open_request": True},
+    )
+
+
+def backfill_equivalence_keys(connection: sqlite3.Connection) -> None:
+    """Key open Missions created before the column existed; older duplicates stay unkeyed so the unique index can be built."""
+    rows = connection.execute(
+        f"SELECT mission_id, agent_id, raw_request, equivalence_key FROM missions WHERE status IN ({OPEN_STATUS_SQL}) ORDER BY created_at DESC"
+    ).fetchall()
+    taken = {row["equivalence_key"] for row in rows if row["equivalence_key"]}
+    for row in rows:
+        if row["equivalence_key"] or not row["raw_request"]:
+            continue
+        key = raw_request_equivalence_key(row["agent_id"], json.loads(row["raw_request"]))
+        if key not in taken:
+            taken.add(key)
+            connection.execute("UPDATE missions SET equivalence_key = ? WHERE mission_id = ?", (key, row["mission_id"]))
+
+
 def validate_policy_content(content: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]], bool]:
     try:
         policy = yaml.safe_load(content)
@@ -233,6 +388,44 @@ def validate_policy_content(content: str) -> tuple[dict[str, Any] | None, list[d
 
     validation = validate_policy_dict(policy)
     return policy, [issue.__dict__ for issue in validation.issues], validation.is_valid
+
+
+def record_audit_event(
+    event_type: str,
+    actor_type: str,
+    actor_id: str,
+    *,
+    request_id: str | None = None,
+    mission_id: str | None = None,
+    agent_id: str | None = None,
+    minion_id: str | None = None,
+    status: str | None = None,
+    detail: dict[str, Any] | None = None,
+    signature_verified: bool | None = None,
+    occurred_at: float | None = None,
+    connection: sqlite3.Connection | None = None,
+) -> None:
+    received_at = time.time()
+    values = (
+        event_type,
+        actor_type,
+        actor_id,
+        request_id,
+        mission_id,
+        agent_id,
+        minion_id,
+        status,
+        json.dumps(detail or {}, ensure_ascii=False, separators=(",", ":")),
+        occurred_at if occurred_at is not None else received_at,
+        received_at,
+        None if signature_verified is None else int(signature_verified),
+    )
+    sql = "INSERT INTO audit_events (event_type, actor_type, actor_id, request_id, mission_id, agent_id, minion_id, status, detail, occurred_at, received_at, signature_verified) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    if connection is not None:
+        connection.execute(sql, values)
+    else:
+        with transaction() as audit_connection:
+            audit_connection.execute(sql, values)
 
 
 def record_policy_event(
@@ -246,6 +439,14 @@ def record_policy_event(
         connection.execute(
             "INSERT INTO policy_events (event_id, actor, action, outcome, previous_hash, policy_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (f"POLICY-{uuid.uuid4().hex}", actor, action, outcome, previous_hash, policy_hash, time.time()),
+        )
+        record_audit_event(
+            "policy.mutation",
+            "ADMIN",
+            actor,
+            status=outcome,
+            detail={"action": action, "previous_hash": previous_hash, "policy_hash": policy_hash},
+            connection=connection,
         )
 
 
@@ -295,6 +496,7 @@ def initialize() -> None:
                 description TEXT DEFAULT '',
                 runtime_type TEXT DEFAULT 'powershell',
                 version TEXT DEFAULT '1.0',
+                package_sha256 TEXT,
                 environment TEXT DEFAULT 'prod',
                 capabilities TEXT NOT NULL DEFAULT '["windows.patch.reconcile"]',
                 scope_metadata TEXT DEFAULT '{}',
@@ -338,6 +540,30 @@ def initialize() -> None:
                 received_at REAL NOT NULL,
                 UNIQUE(mission_id, event_id)
             );
+            CREATE TABLE IF NOT EXISTS audit_events (
+                audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                actor_type TEXT NOT NULL,
+                actor_id TEXT NOT NULL,
+                request_id TEXT,
+                mission_id TEXT,
+                agent_id TEXT,
+                minion_id TEXT,
+                status TEXT,
+                detail TEXT NOT NULL DEFAULT '{}',
+                occurred_at REAL NOT NULL,
+                received_at REAL NOT NULL,
+                signature_verified INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS audit_request_idx ON audit_events(request_id, audit_id);
+            CREATE INDEX IF NOT EXISTS audit_mission_idx ON audit_events(mission_id, audit_id);
+            CREATE INDEX IF NOT EXISTS audit_agent_idx ON audit_events(agent_id, audit_id);
+            CREATE INDEX IF NOT EXISTS audit_minion_idx ON audit_events(minion_id, audit_id);
+            CREATE INDEX IF NOT EXISTS audit_type_status_idx ON audit_events(event_type, status, audit_id);
+            CREATE TRIGGER IF NOT EXISTS audit_events_no_update
+                BEFORE UPDATE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit_events is append-only'); END;
+            CREATE TRIGGER IF NOT EXISTS audit_events_no_delete
+                BEFORE DELETE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit_events is append-only'); END;
             CREATE TABLE IF NOT EXISTS policy_events (
                 event_id TEXT PRIMARY KEY,
                 actor TEXT NOT NULL,
@@ -424,6 +650,8 @@ def initialize() -> None:
             ("worker_process_id", "INTEGER"),
             ("worker_process_started_at", "REAL"),
             ("process_detail", "TEXT NOT NULL DEFAULT '{}'"),
+            ("routing", "TEXT"),
+            ("equivalence_key", "TEXT"),
         ]:
             try:
                 connection.execute(f"ALTER TABLE missions ADD COLUMN {col} {col_def}")
@@ -464,6 +692,10 @@ def initialize() -> None:
         connection.execute(
             "CREATE INDEX IF NOT EXISTS notification_deliveries_due ON notification_deliveries(status, next_attempt_at)"
         )
+        backfill_equivalence_keys(connection)
+        connection.execute(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS missions_open_equivalence ON missions(equivalence_key) WHERE equivalence_key IS NOT NULL AND status IN ({OPEN_STATUS_SQL})"
+        )
         bootstrap_admin_key = os.environ.get("SG_BOOTSTRAP_ADMIN_KEY", "")
         if bootstrap_admin_key:
             connection.execute(
@@ -479,9 +711,9 @@ def initialize() -> None:
                 now = time.time()
                 connection.execute(
                     """
-                    INSERT INTO minions (minion_id, name, capabilities, public_key, created_at, updated_at)
-                    VALUES ('DEMO-STUB-01', 'Demo Stub Minion', '["windows.patch.reconcile", "demo.action", "stripe.refund", "stripe.charge"]', ?, ?, ?)
-                    ON CONFLICT(minion_id) DO UPDATE SET public_key = excluded.public_key, capabilities = excluded.capabilities, enabled = 1
+                    INSERT INTO minions (minion_id, name, capabilities, scope_metadata, public_key, created_at, updated_at)
+                    VALUES ('DEMO-STUB-01', 'Demo Stub Minion', '["windows.patch.reconcile", "demo.action", "stripe.refund", "stripe.charge"]', '{"targets": ["*"]}', ?, ?, ?)
+                    ON CONFLICT(minion_id) DO UPDATE SET public_key = excluded.public_key, capabilities = excluded.capabilities, scope_metadata = excluded.scope_metadata, enabled = 1
                     """,
                     (public_key, now, now),
                 )
@@ -515,6 +747,11 @@ def require_live_claim(connection: sqlite3.Connection, mission_id: str, minion_i
     if row["lease_expires_at"] is None or float(row["lease_expires_at"]) <= now:
         raise HTTPException(status_code=409, detail="Mission claim lease expired")
     return row
+
+
+def require_claim_generation(row: sqlite3.Row, claim_generation: int) -> None:
+    if int(row["claim_generation"]) != claim_generation:
+        raise HTTPException(status_code=409, detail="Mission claim generation is stale")
 
 
 def mission_execution_settings() -> dict[str, int]:
@@ -610,10 +847,6 @@ def signing_private_key() -> ed25519.Ed25519PrivateKey:
     return key
 
 
-def canonical_json(payload: dict[str, Any]) -> bytes:
-    return json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
-
-
 def verify_minion_signature(minion_id: str, payload: dict[str, Any], signature: str) -> None:
     with connect() as connection:
         row = connection.execute(
@@ -628,7 +861,25 @@ def verify_minion_signature(minion_id: str, payload: dict[str, Any], signature: 
             raise ValueError("Minion public key must be Ed25519")
         public_key.verify(bytes.fromhex(signature), canonical_json(payload))
     except (InvalidSignature, ValueError, TypeError):
-        raise HTTPException(status_code=401, detail="Invalid Mission Result signature") from None
+        raise HTTPException(status_code=401, detail="Invalid Minion signature") from None
+
+
+def require_schema(name: str, payload: dict[str, Any]) -> None:
+    errors = schema_errors(name, payload)
+    if errors:
+        raise HTTPException(status_code=422, detail={"message": f"Payload does not match the {name} schema", "errors": errors[:10]})
+
+
+def sign_envelope(envelope: dict[str, Any], deliverable: bool = True) -> None:
+    """Sign the envelope; an envelope that Minions can receive must also match the Mission schema."""
+    envelope.pop("signature", None)
+    envelope["signing_key_id"] = "sg-service-ed25519-v1"
+    envelope["signature"] = signing_private_key().sign(canonical_json(envelope)).hex()
+    if deliverable:
+        errors = schema_errors("envelope", envelope)
+        if errors:
+            routing_logger.error("Refusing to issue a Mission that violates the envelope schema: %s", errors[:10])
+            raise HTTPException(status_code=500, detail="Mission could not be issued")
 
 
 def validate_transition(current: str, new: str) -> None:
@@ -642,19 +893,52 @@ def validate_transition(current: str, new: str) -> None:
         raise HTTPException(status_code=409, detail=f"Invalid Mission status transition: {current} -> {new}")
 
 
-def resolve_minion(capability: str, environment: str = "prod", scope_target: dict[str, Any] | None = None) -> str:
+def target_names(scope_target: dict[str, Any] | None) -> list[str]:
+    """Names a Minion's scope must cover: `servers` for patch Missions, otherwise the target `id`."""
+    target = scope_target or {}
+    servers = target.get("servers")
+    if isinstance(servers, list):
+        return [str(name) for name in servers]
+    if target.get("id") not in (None, ""):
+        return [str(target["id"])]
+    return []
+
+
+def minion_scope_covers(scope_metadata: dict[str, Any], names: list[str]) -> bool:
+    patterns = scope_metadata.get("targets")
+    if not isinstance(patterns, list) or not patterns:
+        return False
+    lowered = [str(pattern).lower() for pattern in patterns]
+    if not names:
+        return "*" in lowered
+    return all(any(fnmatch.fnmatchcase(name.lower(), pattern) for pattern in lowered) for name in names)
+
+
+def resolve_minion(capability: str, environment: str = "prod", scope_target: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Pick the oldest enabled, fresh Minion whose capability, environment and scope all match; fail closed otherwise."""
+    names = target_names(scope_target)
+    now = time.time()
+    rejected: dict[str, str] = {}
     with connect() as conn:
         rows = conn.execute(
-            "SELECT minion_id, capabilities, environment, scope_metadata FROM minions WHERE enabled = 1 ORDER BY created_at ASC"
+            "SELECT minion_id, capabilities, environment, scope_metadata, last_contact_at FROM minions WHERE enabled = 1 ORDER BY created_at ASC, minion_id ASC"
         ).fetchall()
-        for r in rows:
-            if r["environment"] != environment:
-                continue
-            caps = json.loads(r["capabilities"] or "[]")
-            if capability in caps:
-                return str(r["minion_id"])
-    if PATCH_MINION_ID:
-        return PATCH_MINION_ID
+    for r in rows:
+        minion_id = str(r["minion_id"])
+        if r["environment"] != environment:
+            rejected[minion_id] = "environment"
+        elif capability not in json.loads(r["capabilities"] or "[]"):
+            rejected[minion_id] = "capability"
+        elif not minion_scope_covers(json.loads(r["scope_metadata"] or "{}"), names):
+            rejected[minion_id] = "scope"
+        elif MINION_STALE_SECONDS > 0 and (r["last_contact_at"] is None or now - r["last_contact_at"] > MINION_STALE_SECONDS):
+            rejected[minion_id] = "stale"
+        else:
+            return {"minion_id": minion_id, "reason": "eligible", "fallback": False, "decided_at": now}
+    if ALLOW_FALLBACK_MINION and PATCH_MINION_ID:
+        routing_logger.warning("Routing %s to fallback Minion %s (SG_ALLOW_FALLBACK_MINION); rejected: %s", capability, PATCH_MINION_ID, rejected)
+        return {"minion_id": PATCH_MINION_ID, "reason": "development fallback", "fallback": True, "decided_at": now}
+    routing_logger.warning("No eligible Minion for %s in %s (targets %s); rejected: %s", capability, environment, names, rejected)
     raise HTTPException(
         status_code=503,
         detail=f"No eligible Minion found for capability '{capability}' in environment '{environment}'",
@@ -967,26 +1251,12 @@ def admin_ui() -> HTMLResponse:
 def create_patch_request(request: PatchRequest, principal: str = Depends(require_agent)) -> dict[str, Any]:
     check_agent_rate_limit(principal, "submit")
 
-    # Idempotent deduplication check: associate matching open request
-    normalized_params = json.dumps({"servers": sorted(request.servers)}, sort_keys=True)
-
+    key = equivalence_key("patch", principal, "windows.patch.reconcile", {"servers": request.servers}, {})
     with connect() as connection:
-        open_rows = connection.execute(
-            """
-            SELECT request_id, raw_request FROM missions
-            WHERE agent_id = ? AND status IN ('QUEUED', 'WAITING_FOR_APPROVAL', 'CLAIMED', 'MISSION_ACKNOWLEDGED', 'MISSION_IN_PROGRESS', 'MISSION_WAITING_FOR_REBOOT')
-            ORDER BY created_at DESC
-            """,
-            (principal,),
-        ).fetchall()
-        for open_row in open_rows:
-            raw = json.loads(open_row["raw_request"] or "{}")
-            raw_normalized = json.dumps({"servers": sorted(raw.get("servers", []))}, sort_keys=True)
-            if raw_normalized == normalized_params:
-                return {
-                    "request_id": open_row["request_id"],
-                    "status": "ACCEPTED",
-                }
+        existing = find_open_equivalent(connection, key)
+    if existing:
+        record_deduplicated_request(principal, existing, "windows.patch.reconcile")
+        return {"request_id": existing, "status": "ACCEPTED"}
 
     request_id = f"REQ-{uuid.uuid4().hex}"
     mission_id = f"MISSION-{uuid.uuid4().hex}"
@@ -994,15 +1264,17 @@ def create_patch_request(request: PatchRequest, principal: str = Depends(require
         principal,
         request.servers,
     )
-    assigned_minion_id = (
+    routing = (
         resolve_minion(
             capability="windows.patch.reconcile",
             environment="prod",
             scope_target={"servers": authorized_servers},
         )
         if decision in {"ALLOW", "PAUSE"}
-        else "UNASSIGNED"
+        else {"minion_id": "UNASSIGNED", "reason": "not routed", "fallback": False, "decided_at": time.time()}
     )
+    assigned_minion_id = routing["minion_id"]
+    issued_at = int(time.time())
     status_by_decision = {"ALLOW": "QUEUED", "PAUSE": "WAITING_FOR_APPROVAL", "BLOCK": "CLOSED"}
     mission_state = status_by_decision.get(decision, "CLOSED")
     envelope = {
@@ -1022,22 +1294,31 @@ def create_patch_request(request: PatchRequest, principal: str = Depends(require
             "maintenance_window": patch_constraints.get("maintenance_window"),
         },
         "execution": mission_execution_settings(),
-        "issued_at": time.time(),
-        "expires_at": time.time() + 86400,
+        "issued_at": issued_at,
+        "expires_at": issued_at + 86400,
         "nonce": secrets.token_urlsafe(24),
         "requested_by": principal,
         "policy_hash": policy_hash,
         "policy_decision": decision,
         "obligations": [{"type": item.type, "data": item.data} for item in obligations],
     }
-    envelope["signing_key_id"] = "sg-service-ed25519-v1"
-    envelope["signature"] = signing_private_key().sign(canonical_json(envelope)).hex()
+    sign_envelope(envelope, deliverable=decision in {"ALLOW", "PAUSE"})
     raw_req_json = json.dumps(request.model_dump())
-    with transaction() as connection:
-        connection.execute(
-            "INSERT INTO missions (mission_id, request_id, agent_id, minion_id, envelope, status, raw_request, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (mission_id, request_id, principal, assigned_minion_id, json.dumps(envelope), mission_state, raw_req_json, time.time(), time.time()),
-        )
+    action_hash = hashlib.sha256(canonical_json({"servers": sorted(set(request.servers))})).hexdigest()
+    audit_records = [
+        {"event_type": "request.received", "actor_type": "AGENT", "actor_id": principal, "request_id": request_id, "mission_id": mission_id, "agent_id": principal, "status": "RECEIVED", "detail": {"capability": "windows.patch.reconcile", "requested_targets": request.servers, "normalized_action_sha256": action_hash}},
+        {"event_type": "policy.decision", "actor_type": "SERVICE", "actor_id": "sg-service", "request_id": request_id, "mission_id": mission_id, "agent_id": principal, "status": decision, "detail": {"policy_hash": policy_hash, "authorized_targets": authorized_servers, "obligations": [{"type": item.type, "data": item.data} for item in obligations]}},
+        {"event_type": "routing.selected", "actor_type": "SERVICE", "actor_id": "sg-service", "request_id": request_id, "mission_id": mission_id, "agent_id": principal, "minion_id": assigned_minion_id, "status": "FALLBACK" if routing["fallback"] else "SELECTED", "detail": routing},
+        {"event_type": "mission.issued", "actor_type": "SERVICE", "actor_id": "sg-service", "request_id": request_id, "mission_id": mission_id, "agent_id": principal, "minion_id": assigned_minion_id, "status": mission_state, "detail": {"signed_envelope": envelope}},
+    ]
+    existing = insert_mission_once(
+        (mission_id, request_id, principal, assigned_minion_id, json.dumps(envelope), mission_state, raw_req_json, json.dumps(routing), time.time(), time.time()),
+        key,
+        audit_records,
+    )
+    if existing:
+        record_deduplicated_request(principal, existing, "windows.patch.reconcile")
+        return {"request_id": existing, "status": "ACCEPTED"}
     if decision == "PAUSE":
             dispatch_notifications("PAUSE_CREATED", request_id, "Patch reconciliation paused pending approval", {"servers": authorized_servers})
     return {"request_id": request_id, "status": "ACCEPTED" if decision != "BLOCK" else "CLOSED"}
@@ -1049,40 +1330,12 @@ def create_action(request: CanonicalActionRequest, principal: str = Depends(requ
 
     target_dict = request.target if isinstance(request.target, dict) else {"id": str(request.target)}
 
-    # Idempotent deduplication check: associate matching open request
-    normalized_params = json.dumps({
-        "capability": request.capability,
-        "target": target_dict,
-        "parameters": request.parameters,
-    }, sort_keys=True)
-
+    key = equivalence_key("action", principal, request.capability, target_dict, request.parameters)
     with connect() as connection:
-        open_rows = connection.execute(
-            """
-            SELECT request_id, raw_request FROM missions
-            WHERE agent_id = ? AND status IN ('QUEUED', 'WAITING_FOR_APPROVAL', 'CLAIMED', 'MISSION_ACKNOWLEDGED', 'MISSION_IN_PROGRESS', 'MISSION_WAITING_FOR_REBOOT')
-            ORDER BY created_at DESC
-            """,
-            (principal,),
-        ).fetchall()
-        for open_row in open_rows:
-            raw = json.loads(open_row["raw_request"] or "{}")
-            if "capability" in raw:
-                raw_target = raw.get("target", {})
-                raw_target_dict = raw_target if isinstance(raw_target, dict) else {"id": str(raw_target)}
-                raw_normalized = json.dumps({
-                    "capability": raw.get("capability"),
-                    "target": raw_target_dict,
-                    "parameters": raw.get("parameters", {}),
-                }, sort_keys=True)
-                if raw_normalized == normalized_params:
-                    return {"request_id": open_row["request_id"], "status": "ACCEPTED"}
-
-    assigned_minion_id = resolve_minion(
-        capability=request.capability,
-        environment="prod",
-        scope_target=target_dict,
-    )
+        existing = find_open_equivalent(connection, key)
+    if existing:
+        record_deduplicated_request(principal, existing, request.capability)
+        return {"request_id": existing, "status": "ACCEPTED"}
 
     request_id = f"REQ-{uuid.uuid4().hex}"
     mission_id = f"MISSION-{uuid.uuid4().hex}"
@@ -1108,6 +1361,13 @@ def create_action(request: CanonicalActionRequest, principal: str = Depends(requ
     )
     status_by_decision = {"ALLOW": "QUEUED", "PAUSE": "WAITING_FOR_APPROVAL", "BLOCK": "CLOSED"}
     mission_state = status_by_decision.get(decision, "CLOSED")
+    routing = (
+        resolve_minion(capability=request.capability, environment="prod", scope_target=target_dict)
+        if decision in {"ALLOW", "PAUSE"}
+        else {"minion_id": "UNASSIGNED", "reason": "not routed", "fallback": False, "decided_at": time.time()}
+    )
+    assigned_minion_id = routing["minion_id"]
+    issued_at = int(time.time())
     envelope = {
         "protocol_version": "1.0",
         "request_id": request_id,
@@ -1116,22 +1376,32 @@ def create_action(request: CanonicalActionRequest, principal: str = Depends(requ
         "capability": request.capability,
         "target": target_dict,
         "parameters": request.parameters,
-        "issued_at": time.time(),
-        "expires_at": time.time() + 86400,
+        "execution": mission_execution_settings(),
+        "issued_at": issued_at,
+        "expires_at": issued_at + 86400,
         "nonce": secrets.token_urlsafe(24),
         "requested_by": principal,
         "policy_hash": policy_hash,
         "policy_decision": decision,
         "obligations": [{"type": item.type, "data": item.data} for item in obligations],
     }
-    envelope["signing_key_id"] = "sg-service-ed25519-v1"
-    envelope["signature"] = signing_private_key().sign(canonical_json(envelope)).hex()
+    sign_envelope(envelope, deliverable=decision in {"ALLOW", "PAUSE"})
     raw_req_json = json.dumps(request.model_dump())
-    with transaction() as connection:
-        connection.execute(
-            "INSERT INTO missions (mission_id, request_id, agent_id, minion_id, envelope, status, raw_request, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (mission_id, request_id, principal, assigned_minion_id, json.dumps(envelope), mission_state, raw_req_json, time.time(), time.time()),
-        )
+    action_hash = hashlib.sha256(canonical_json({"capability": request.capability, "target": target_dict, "parameters": request.parameters})).hexdigest()
+    audit_records = [
+        {"event_type": "request.received", "actor_type": "AGENT", "actor_id": principal, "request_id": request_id, "mission_id": mission_id, "agent_id": principal, "status": "RECEIVED", "detail": {"capability": request.capability, "target": target_dict, "normalized_action_sha256": action_hash}},
+        {"event_type": "policy.decision", "actor_type": "SERVICE", "actor_id": "sg-service", "request_id": request_id, "mission_id": mission_id, "agent_id": principal, "status": decision, "detail": {"policy_hash": policy_hash, "obligations": [{"type": item.type, "data": item.data} for item in obligations]}},
+        {"event_type": "routing.selected", "actor_type": "SERVICE", "actor_id": "sg-service", "request_id": request_id, "mission_id": mission_id, "agent_id": principal, "minion_id": assigned_minion_id, "status": "FALLBACK" if routing["fallback"] else "SELECTED", "detail": routing},
+        {"event_type": "mission.issued", "actor_type": "SERVICE", "actor_id": "sg-service", "request_id": request_id, "mission_id": mission_id, "agent_id": principal, "minion_id": assigned_minion_id, "status": mission_state, "detail": {"signed_envelope": envelope}},
+    ]
+    existing = insert_mission_once(
+        (mission_id, request_id, principal, assigned_minion_id, json.dumps(envelope), mission_state, raw_req_json, json.dumps(routing), time.time(), time.time()),
+        key,
+        audit_records,
+    )
+    if existing:
+        record_deduplicated_request(principal, existing, request.capability)
+        return {"request_id": existing, "status": "ACCEPTED"}
     if decision == "PAUSE":
         dispatch_notifications("PAUSE_CREATED", request_id, f"Action '{request.capability}' paused pending approval", {"capability": request.capability, "target": target_dict})
     return {"request_id": request_id, "status": "ACCEPTED" if decision != "BLOCK" else "CLOSED"}
@@ -1275,6 +1545,7 @@ def claim_mission(minion_id: str, principal: str = Depends(require_minion)) -> d
                     "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
                     (f"EVT-EXPIRED-{uuid.uuid4().hex}", row["mission_id"], "MISSION_EXPIRED", json.dumps({"reason": "OVERALL_TIMEOUT"}), now, now),
                 )
+                record_audit_event("mission.expired", "SERVICE", "sg-service", request_id=row["request_id"], mission_id=row["mission_id"], minion_id=minion_id, status="MISSION_EXPIRED", detail={"reason": "OVERALL_TIMEOUT"}, connection=connection)
                 continue
 
             attempt_started_at = row["attempt_started_at"]
@@ -1288,6 +1559,7 @@ def claim_mission(minion_id: str, principal: str = Depends(require_minion)) -> d
                         "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
                         (f"EVT-EXPIRED-{uuid.uuid4().hex}", row["mission_id"], "MISSION_EXPIRED", json.dumps({"reason": "ATTEMPT_TIMEOUT", "attempts": int(row["attempt_count"])}), now, now),
                     )
+                    record_audit_event("mission.expired", "SERVICE", "sg-service", request_id=row["request_id"], mission_id=row["mission_id"], minion_id=minion_id, status="MISSION_EXPIRED", detail={"reason": "ATTEMPT_TIMEOUT", "attempts": int(row["attempt_count"])}, connection=connection)
                     continue
                 connection.execute(
                     "UPDATE missions SET status = 'QUEUED', claim_token_hash = NULL, lease_expires_at = NULL, next_retry_at = ?, updated_at = ? WHERE mission_id = ?",
@@ -1297,6 +1569,7 @@ def claim_mission(minion_id: str, principal: str = Depends(require_minion)) -> d
                     "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
                     (f"EVT-ATTEMPT-TIMEOUT-{uuid.uuid4().hex}", row["mission_id"], "QUEUED", json.dumps({"reason": "ATTEMPT_TIMEOUT", "attempts": int(row["attempt_count"]), "retry_at": now + retry_interval}), now, now),
                 )
+                record_audit_event("mission.retry_scheduled", "SERVICE", "sg-service", request_id=row["request_id"], mission_id=row["mission_id"], minion_id=minion_id, status="QUEUED", detail={"reason": "ATTEMPT_TIMEOUT", "attempts": int(row["attempt_count"]), "retry_at": now + retry_interval}, connection=connection)
                 retry_deadlines.append(now + retry_interval)
                 continue
 
@@ -1309,6 +1582,7 @@ def claim_mission(minion_id: str, principal: str = Depends(require_minion)) -> d
                     "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
                     (f"EVT-ATTEMPTS-{uuid.uuid4().hex}", row["mission_id"], "MISSION_EXPIRED", json.dumps({"reason": "MAX_ATTEMPTS_EXHAUSTED", "attempts": int(row["attempt_count"])}), now, now),
                 )
+                record_audit_event("mission.expired", "SERVICE", "sg-service", request_id=row["request_id"], mission_id=row["mission_id"], minion_id=minion_id, status="MISSION_EXPIRED", detail={"reason": "MAX_ATTEMPTS_EXHAUSTED", "attempts": int(row["attempt_count"])}, connection=connection)
                 continue
 
             window = envelope.get("parameters", {}).get("maintenance_window")
@@ -1318,8 +1592,7 @@ def claim_mission(minion_id: str, principal: str = Depends(require_minion)) -> d
                     outside_decision = "BLOCK"
                 next_status = "WAITING_FOR_APPROVAL" if outside_decision == "PAUSE" else "CLOSED"
                 envelope["policy_decision"] = outside_decision
-                envelope.pop("signature", None)
-                envelope["signature"] = signing_private_key().sign(canonical_json(envelope)).hex()
+                sign_envelope(envelope, deliverable=False)
                 connection.execute(
                     "UPDATE missions SET envelope = ?, status = ?, updated_at = ? WHERE mission_id = ? AND status = 'QUEUED'",
                     (json.dumps(envelope), next_status, now, row["mission_id"]),
@@ -1335,6 +1608,7 @@ def claim_mission(minion_id: str, principal: str = Depends(require_minion)) -> d
                         now,
                     ),
                 )
+                record_audit_event("policy.window_blocked", "SERVICE", "sg-service", request_id=row["request_id"], mission_id=row["mission_id"], minion_id=minion_id, status=next_status, detail={"reason": "OUTSIDE_MAINTENANCE_WINDOW", "decision": outside_decision, "policy_hash": envelope.get("policy_hash")}, connection=connection)
                 if outside_decision == "PAUSE":
                     outside_window_notifications.append((row["request_id"], row["mission_id"]))
                 continue
@@ -1366,6 +1640,18 @@ def claim_mission(minion_id: str, principal: str = Depends(require_minion)) -> d
                 "resume_status": status_before_claim if not is_new_attempt else "CLAIMED",
                 "lease_expires_at": now + lease_seconds,
             }
+            record_audit_event(
+                "mission.claimed" if is_new_attempt else "mission.claim_reissued",
+                "MINION",
+                minion_id,
+                request_id=row["request_id"],
+                mission_id=row["mission_id"],
+                agent_id=envelope.get("requested_by"),
+                minion_id=minion_id,
+                status=claimed_mission["resume_status"],
+                detail={"attempt": claimed_mission["attempt"], "claim_generation": claimed_mission["claim_generation"], "resume": claimed_mission["resume"], "prior_status": status_before_claim},
+                connection=connection,
+            )
             break
 
         if claimed_mission is None and retry_deadlines:
@@ -1391,9 +1677,39 @@ def mission_status(
     if minion_id != principal:
         raise HTTPException(status_code=403, detail="Minion identity not authorized")
     received = time.time()
+    body = request.model_dump()
+    require_schema("status", body)
+    signed_payload = {
+        "event_id": request.event_id,
+        "mission_id": mission_id,
+        "minion_id": minion_id,
+        "claim_generation": request.claim_generation,
+        "status": request.status,
+        "detail": request.detail,
+        "occurred_at": request.occurred_at,
+    }
+    with connect() as lookup_connection:
+        mission_ref = lookup_connection.execute("SELECT request_id, agent_id FROM missions WHERE mission_id = ? AND minion_id = ?", (mission_id, minion_id)).fetchone()
+    try:
+        verify_minion_signature(minion_id, signed_payload, request.signature)
+    except HTTPException as exc:
+        record_audit_event(
+            "signature.verification",
+            "MINION",
+            minion_id,
+            request_id=mission_ref["request_id"] if mission_ref else None,
+            mission_id=mission_id,
+            agent_id=mission_ref["agent_id"] if mission_ref else None,
+            minion_id=minion_id,
+            status="REJECTED",
+            detail={"event_id": request.event_id, "error": exc.detail, "signed_payload": signed_payload, "signature": request.signature},
+            signature_verified=False,
+            occurred_at=request.occurred_at,
+        )
+        raise
     with transaction() as connection:
         row = connection.execute(
-            "SELECT status, claim_token_hash, lease_expires_at, attempt_started_at, execution_started_at, envelope, attempt_count FROM missions WHERE mission_id = ? AND minion_id = ?",
+            "SELECT status, claim_token_hash, claim_generation, lease_expires_at, attempt_started_at, execution_started_at, envelope, attempt_count FROM missions WHERE mission_id = ? AND minion_id = ?",
             (mission_id, minion_id),
         ).fetchone()
         if row is None:
@@ -1412,10 +1728,13 @@ def mission_status(
                 and existing_event["occurred_at"] == request.occurred_at
             ):
                 verify_claim_token(row["claim_token_hash"], request.claim_token)
+                record_audit_event("minion.event_duplicate", "MINION", minion_id, request_id=mission_ref["request_id"] if mission_ref else None, mission_id=mission_id, agent_id=mission_ref["agent_id"] if mission_ref else None, minion_id=minion_id, status=request.status, detail={"event_id": request.event_id, "outcome": "ALREADY_RECORDED"}, signature_verified=True, occurred_at=request.occurred_at, connection=connection)
                 return {"event_id": request.event_id, "status": "ALREADY_RECORDED"}
+            record_audit_event("minion.event_conflict", "MINION", minion_id, mission_id=mission_id, minion_id=minion_id, status=request.status, detail={"event_id": request.event_id, "outcome": "CONFLICT"}, signature_verified=True, occurred_at=request.occurred_at, connection=connection)
             raise HTTPException(status_code=409, detail="Event ID is already used for a different status")
 
         require_live_claim(connection, mission_id, minion_id, request.claim_token, received)
+        require_claim_generation(row, request.claim_generation)
         validate_transition(str(row["status"]), request.status)
         try:
             connection.execute(
@@ -1435,7 +1754,9 @@ def mission_status(
                 and existing_event["occurred_at"] == request.occurred_at
             ):
                 verify_claim_token(row["claim_token_hash"], request.claim_token)
+                record_audit_event("minion.event_duplicate", "MINION", minion_id, request_id=mission_ref["request_id"] if mission_ref else None, mission_id=mission_id, agent_id=mission_ref["agent_id"] if mission_ref else None, minion_id=minion_id, status=request.status, detail={"event_id": request.event_id, "outcome": "ALREADY_RECORDED"}, signature_verified=True, occurred_at=request.occurred_at, connection=connection)
                 return {"event_id": request.event_id, "status": "ALREADY_RECORDED"}
+            record_audit_event("minion.event_conflict", "MINION", minion_id, mission_id=mission_id, minion_id=minion_id, status=request.status, detail={"event_id": request.event_id, "outcome": "CONFLICT"}, signature_verified=True, occurred_at=request.occurred_at, connection=connection)
             raise HTTPException(status_code=409, detail="Event ID is already used for a different status") from None
         terminal_status = request.status in {"MISSION_REJECTED", "MISSION_CANCELLED", "MISSION_EXPIRED"}
         connection.execute(
@@ -1453,6 +1774,19 @@ def mission_status(
                 received,
                 mission_id,
             ),
+        )
+        record_audit_event(
+            "minion.status",
+            "MINION",
+            minion_id,
+            request_id=connection.execute("SELECT request_id FROM missions WHERE mission_id = ?", (mission_id,)).fetchone()["request_id"],
+            mission_id=mission_id,
+            minion_id=minion_id,
+            status=request.status,
+            detail={"event_id": request.event_id, "claim_generation": request.claim_generation, "signed_payload": signed_payload, "signature": request.signature},
+            signature_verified=True,
+            occurred_at=request.occurred_at,
+            connection=connection,
         )
     return {"event_id": request.event_id, "status": "RECORDED"}
 
@@ -1472,9 +1806,36 @@ def mission_result(
     if len(result_bytes) > MAX_MINION_RESULT_BYTES:
         raise HTTPException(status_code=413, detail="Mission result exceeds the 256 KiB limit")
     received = time.time()
+    require_schema("result", request.model_dump())
+    signed_payload = {
+        "event_id": request.event_id,
+        "mission_id": mission_id,
+        "minion_id": minion_id,
+        "claim_generation": request.claim_generation,
+        "status": request.status,
+        "result": request.result,
+    }
+    with connect() as lookup_connection:
+        mission_ref = lookup_connection.execute("SELECT request_id, agent_id FROM missions WHERE mission_id = ? AND minion_id = ?", (mission_id, minion_id)).fetchone()
+    try:
+        verify_minion_signature(minion_id, signed_payload, request.signature)
+    except HTTPException as exc:
+        record_audit_event(
+            "signature.verification",
+            "MINION",
+            minion_id,
+            request_id=mission_ref["request_id"] if mission_ref else None,
+            mission_id=mission_id,
+            agent_id=mission_ref["agent_id"] if mission_ref else None,
+            minion_id=minion_id,
+            status="REJECTED",
+            detail={"event_id": request.event_id, "error": exc.detail, "signed_payload": signed_payload, "signature": request.signature},
+            signature_verified=False,
+        )
+        raise
     with transaction() as connection:
         row = connection.execute(
-            "SELECT status, claim_token_hash, lease_expires_at, attempt_started_at, execution_started_at, envelope, attempt_count FROM missions WHERE mission_id = ? AND minion_id = ?",
+            "SELECT status, claim_token_hash, claim_generation, lease_expires_at, attempt_started_at, execution_started_at, envelope, attempt_count FROM missions WHERE mission_id = ? AND minion_id = ?",
             (mission_id, minion_id),
         ).fetchone()
         if row is None:
@@ -1491,19 +1852,13 @@ def mission_result(
                 and json.loads(existing_event["detail"]) == result_detail
             ):
                 verify_claim_token(row["claim_token_hash"], request.claim_token)
+                record_audit_event("minion.event_duplicate", "MINION", minion_id, request_id=mission_ref["request_id"] if mission_ref else None, mission_id=mission_id, agent_id=mission_ref["agent_id"] if mission_ref else None, minion_id=minion_id, status=request.status, detail={"event_id": request.event_id, "outcome": "ALREADY_RECORDED"}, signature_verified=True, connection=connection)
                 return {"status": "ALREADY_RECORDED"}
             raise HTTPException(status_code=409, detail="Event ID is already used for a different result")
 
         require_live_claim(connection, mission_id, minion_id, request.claim_token, received)
+        require_claim_generation(row, request.claim_generation)
         validate_transition(str(row["status"]), request.status)
-        signed_payload = {
-            "event_id": request.event_id,
-            "mission_id": mission_id,
-            "minion_id": minion_id,
-            "status": request.status,
-            "result": request.result,
-        }
-        verify_minion_signature(minion_id, signed_payload, request.signature)
         try:
             connection.execute(
                 "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -1520,6 +1875,7 @@ def mission_result(
                 and existing_event["status"] == request.status
                 and json.loads(existing_event["detail"]) == result_detail
             ):
+                record_audit_event("minion.event_duplicate", "MINION", minion_id, request_id=mission_ref["request_id"] if mission_ref else None, mission_id=mission_id, agent_id=mission_ref["agent_id"] if mission_ref else None, minion_id=minion_id, status=request.status, detail={"event_id": request.event_id, "outcome": "ALREADY_RECORDED"}, signature_verified=True, connection=connection)
                 return {"status": "ALREADY_RECORDED"}
             raise HTTPException(status_code=409, detail="Event ID is already used for a different result") from None
         envelope = json.loads(row["envelope"])
@@ -1546,6 +1902,19 @@ def mission_result(
                 "UPDATE missions SET status = ?, lease_expires_at = NULL, worker_process_id = NULL, worker_process_started_at = NULL, updated_at = ? WHERE mission_id = ?",
                 (request.status, received, mission_id),
             )
+        record_audit_event(
+            "minion.result",
+            "MINION",
+            minion_id,
+            request_id=mission_ref["request_id"] if mission_ref else None,
+            mission_id=mission_id,
+            agent_id=mission_ref["agent_id"] if mission_ref else None,
+            minion_id=minion_id,
+            status="RETRY_SCHEDULED" if retry_at is not None else request.status,
+            detail={"event_id": request.event_id, "claim_generation": request.claim_generation, "signed_payload": signed_payload, "signature": request.signature, "retry_at": retry_at},
+            signature_verified=True,
+            connection=connection,
+        )
     if retry_at is not None:
         return {"status": "RETRY_SCHEDULED", "retry_at": retry_at}
     dispatch_notifications(request.status, mission_id, f"Mission {mission_id} reached terminal state {request.status}", {"minion_id": minion_id, "result": request.result})
@@ -1571,6 +1940,66 @@ def list_missions(_admin: str = Depends(require_admin)) -> list[dict[str, Any]]:
             "SELECT mission_id, request_id, minion_id, status, created_at, updated_at FROM missions ORDER BY created_at DESC"
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+@app.get("/admin/v1/audit-events")
+def list_audit_events(
+    request_id: str | None = None,
+    transaction_id: str | None = None,
+    mission_id: str | None = None,
+    agent_id: str | None = None,
+    minion_id: str | None = None,
+    status_filter: str | None = None,
+    event_type: str | None = None,
+    since: float | None = None,
+    until: float | None = None,
+    limit: int = 100,
+    before_id: int | None = None,
+    _admin: str = Depends(require_admin),
+) -> dict[str, Any]:
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 500")
+    if since is not None and until is not None and since > until:
+        raise HTTPException(status_code=422, detail="since must be earlier than until")
+    if request_id and transaction_id and request_id != transaction_id:
+        raise HTTPException(status_code=422, detail="request_id and transaction_id must match when both are provided")
+    request_id = request_id or transaction_id
+    filters = {
+        "request_id": request_id,
+        "mission_id": mission_id,
+        "agent_id": agent_id,
+        "minion_id": minion_id,
+        "status": status_filter,
+        "event_type": event_type,
+    }
+    clauses: list[str] = []
+    values: list[Any] = []
+    for column, value in filters.items():
+        if value:
+            clauses.append(f"{column} = ?")
+            values.append(value)
+    if since is not None:
+        clauses.append("occurred_at >= ?")
+        values.append(since)
+    if until is not None:
+        clauses.append("occurred_at <= ?")
+        values.append(until)
+    if before_id is not None:
+        clauses.append("audit_id < ?")
+        values.append(before_id)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    with connect() as connection:
+        rows = connection.execute(
+            f"SELECT audit_id, event_type, actor_type, actor_id, request_id, mission_id, agent_id, minion_id, status, detail, occurred_at, received_at, signature_verified FROM audit_events {where} ORDER BY audit_id DESC LIMIT ?",
+            (*values, limit),
+        ).fetchall()
+    events = [dict(row) for row in rows]
+    for item in events:
+        item["transaction_id"] = item["request_id"]
+        item["detail"] = json.loads(item["detail"] or "{}")
+        if item["signature_verified"] is not None:
+            item["signature_verified"] = bool(item["signature_verified"])
+    return {"events": events, "next_before_id": events[-1]["audit_id"] if len(events) == limit else None}
 
 
 @app.get("/admin/v1/requests/{request_id}")
@@ -1617,7 +2046,7 @@ def approve_request(
             raise HTTPException(status_code=409, detail=f"Request is not awaiting approval (current status: {current_status})")
 
         raw_req = json.loads(row["raw_request"] or "{}")
-        approver_name = action.approver or admin
+        approver_name = admin
         now = time.time()
         approval_evidence = {
             "approved": True,
@@ -1683,26 +2112,26 @@ def approve_request(
         envelope["approval_evidence"] = approval_evidence
         envelope["obligations"] = [{"type": item.type, "data": item.data} for item in new_obligations]
 
+        routing = None
         if new_decision == "ALLOW":
             new_status = "QUEUED"
-            envelope["minion_id"] = resolve_minion(capability_name, environment="prod", scope_target=target_obj)
-            envelope["signing_key_id"] = "sg-service-ed25519-v1"
-            # Remove previous signature before signing
-            envelope.pop("signature", None)
-            envelope["signature"] = signing_private_key().sign(canonical_json(envelope)).hex()
+            routing = resolve_minion(capability_name, environment="prod", scope_target=target_obj)
+            envelope["minion_id"] = routing["minion_id"]
+            sign_envelope(envelope)
         elif new_decision == "BLOCK":
             new_status = "CLOSED"
         else:
             new_status = "WAITING_FOR_APPROVAL"
 
         connection.execute(
-            "UPDATE missions SET envelope = ?, status = ?, updated_at = ? WHERE request_id = ?",
-            (json.dumps(envelope), new_status, now, request_id),
+            "UPDATE missions SET envelope = ?, status = ?, minion_id = ?, routing = COALESCE(?, routing), updated_at = ? WHERE request_id = ?",
+            (json.dumps(envelope), new_status, envelope["minion_id"], json.dumps(routing) if routing else None, now, request_id),
         )
         connection.execute(
             "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
             (f"EVT-APPROVE-{uuid.uuid4().hex}", row["mission_id"], new_status, json.dumps({"decision": new_decision, "approval": approval_evidence}), now, now),
         )
+        record_audit_event("approval.re_evaluated", "ADMIN", admin, request_id=request_id, mission_id=row["mission_id"], agent_id=row["agent_id"], minion_id=envelope.get("minion_id"), status=new_decision, detail={"approval": approval_evidence, "policy_hash": new_policy_hash, "routing": routing}, connection=connection)
 
     dispatch_notifications("REQUEST_APPROVED", request_id, f"Request {request_id} approved by {approver_name}", {"decision": new_decision, "approver": approver_name})
 
@@ -1733,7 +2162,7 @@ def reject_request(
             raise HTTPException(status_code=409, detail=f"Request is not awaiting approval (current status: {current_status})")
 
         now = time.time()
-        approver_name = action.approver or admin
+        approver_name = admin
         rejection_evidence = {
             "approved": False,
             "approver": approver_name,
@@ -1753,6 +2182,7 @@ def reject_request(
             "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
             (f"EVT-REJECT-{uuid.uuid4().hex}", row["mission_id"], "CLOSED", json.dumps({"decision": "REJECTED", "rejection": rejection_evidence}), now, now),
         )
+        record_audit_event("approval.rejected", "ADMIN", admin, request_id=request_id, mission_id=row["mission_id"], status="REJECTED", detail={"rejection": rejection_evidence}, connection=connection)
 
     dispatch_notifications("REQUEST_REJECTED", request_id, f"Request {request_id} rejected by {approver_name}", {"approver": approver_name})
 
@@ -1895,13 +2325,14 @@ def register_minion(body: RegisterMinionRequest, _admin: str = Depends(require_a
     with transaction() as connection:
         connection.execute(
             """
-            INSERT INTO minions (minion_id, name, description, runtime_type, version, environment, capabilities, scope_metadata, transport_type, endpoint_info, public_key, enabled, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            INSERT INTO minions (minion_id, name, description, runtime_type, version, package_sha256, environment, capabilities, scope_metadata, transport_type, endpoint_info, public_key, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
             ON CONFLICT(minion_id) DO UPDATE SET
                 name = excluded.name,
                 description = excluded.description,
                 runtime_type = excluded.runtime_type,
                 version = excluded.version,
+                package_sha256 = excluded.package_sha256,
                 environment = excluded.environment,
                 capabilities = excluded.capabilities,
                 scope_metadata = excluded.scope_metadata,
@@ -1917,6 +2348,7 @@ def register_minion(body: RegisterMinionRequest, _admin: str = Depends(require_a
                 body.description,
                 body.runtime_type,
                 body.version,
+                body.package_sha256.lower() if body.package_sha256 else None,
                 body.environment,
                 json.dumps(body.capabilities),
                 json.dumps(body.scope_metadata),
@@ -1935,45 +2367,210 @@ def register_minion(body: RegisterMinionRequest, _admin: str = Depends(require_a
             "INSERT INTO api_keys (key_id, principal_id, secret_hash, kind, created_at) VALUES (?, ?, ?, 'minion', ?)",
             (key_id, body.minion_id, _token_hash(token), now),
         )
+        if body.package_sha256:
+            record_audit_event(
+                "minion.package_approved", "ADMIN", _admin, minion_id=body.minion_id, status="APPROVED",
+                detail={"version": body.version, "sha256": body.package_sha256.lower()}, connection=connection,
+            )
 
     return {
         "minion_id": body.minion_id,
         "name": body.name,
         "capabilities": body.capabilities,
         "environment": body.environment,
+        "version": body.version,
+        "package_sha256": body.package_sha256.lower() if body.package_sha256 else None,
+        "package_approved": body.package_sha256 is not None,
         "api_key": token,
         "key_id": key_id,
     }
+
+
+def credential_lifecycle(connection: sqlite3.Connection, kind: str, principal_id: str, enabled: bool = True) -> list[dict[str, Any]]:
+    rows = connection.execute(
+        "SELECT key_id, secret_hash, enabled, created_at, revoked_at FROM api_keys WHERE kind = ? AND principal_id = ? ORDER BY created_at DESC",
+        (kind, principal_id),
+    ).fetchall()
+    result = []
+    for row in rows:
+        status_value = "REVOKED" if row["revoked_at"] is not None else "ACTIVE" if row["enabled"] and enabled else "DISABLED"
+        secret_hash = str(row["secret_hash"])
+        fingerprint = hashlib.sha256(b"sluicegate-api-key-fingerprint-v1\0" + bytes.fromhex(secret_hash)).hexdigest().upper()
+        result.append({
+            "key_id": row["key_id"],
+            "fingerprint": f"SHA256:{fingerprint}",
+            "status": status_value,
+            "created_at": row["created_at"],
+            "revoked_at": row["revoked_at"],
+        })
+    return result
+
+
+def serialize_minion_registry_row(connection: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
+    item = dict(row)
+    item["capabilities"] = json.loads(item["capabilities"] or "[]")
+    item["scope_metadata"] = json.loads(item["scope_metadata"] or "{}")
+    item["keys"] = credential_lifecycle(connection, "minion", item["minion_id"], bool(item["enabled"]))
+    item["package_approved"] = bool(item.get("package_sha256"))
+    if not item["enabled"]:
+        item["health_status"] = "DISABLED"
+    elif item["last_contact_at"] is None:
+        item["health_status"] = "NEVER_CHECKED_IN"
+    elif MINION_STALE_SECONDS > 0 and time.time() - float(item["last_contact_at"]) > MINION_STALE_SECONDS:
+        item["health_status"] = "STALE"
+    else:
+        item["health_status"] = "HEALTHY"
+    item["active_mission_count"] = connection.execute(
+        "SELECT COUNT(*) FROM missions WHERE minion_id = ? AND status IN (?, ?, ?, ?, ?, ?)",
+        (item["minion_id"], *OPEN_MISSION_STATUSES),
+    ).fetchone()[0]
+    recent = connection.execute(
+        "SELECT mission_id, request_id, status, updated_at FROM missions WHERE minion_id = ? ORDER BY updated_at DESC LIMIT 1",
+        (item["minion_id"],),
+    ).fetchone()
+    item["last_mission"] = dict(recent) if recent else None
+    return item
 
 
 @app.get("/admin/v1/minions")
 def list_minions(_admin: str = Depends(require_admin)) -> list[dict[str, Any]]:
     with connect() as connection:
         rows = connection.execute(
-            "SELECT minion_id, name, description, runtime_type, version, environment, capabilities, scope_metadata, transport_type, endpoint_info, enabled, created_at, updated_at, last_contact_at FROM minions ORDER BY created_at DESC"
+            "SELECT minion_id, name, description, runtime_type, version, package_sha256, environment, capabilities, scope_metadata, transport_type, endpoint_info, enabled, created_at, updated_at, last_contact_at FROM minions ORDER BY created_at DESC"
         ).fetchall()
-    result = []
-    for r in rows:
-        d = dict(r)
-        d["capabilities"] = json.loads(d["capabilities"] or "[]")
-        d["scope_metadata"] = json.loads(d["scope_metadata"] or "{}")
-        result.append(d)
-    return result
+        return [serialize_minion_registry_row(connection, row) for row in rows]
 
 
 @app.get("/admin/v1/minions/{minion_id}")
 def get_minion(minion_id: str, _admin: str = Depends(require_admin)) -> dict[str, Any]:
     with connect() as connection:
         row = connection.execute(
-            "SELECT minion_id, name, description, runtime_type, version, environment, capabilities, scope_metadata, transport_type, endpoint_info, enabled, created_at, updated_at, last_contact_at FROM minions WHERE minion_id = ?",
+            "SELECT minion_id, name, description, runtime_type, version, package_sha256, environment, capabilities, scope_metadata, transport_type, endpoint_info, enabled, created_at, updated_at, last_contact_at FROM minions WHERE minion_id = ?",
             (minion_id,),
         ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Minion not found")
+        return serialize_minion_registry_row(connection, row)
+
+
+@app.get("/admin/v1/minions/{minion_id}/keys")
+def list_minion_keys(minion_id: str, _admin: str = Depends(require_admin)) -> list[dict[str, Any]]:
+    with connect() as connection:
+        row = connection.execute("SELECT enabled FROM minions WHERE minion_id = ?", (minion_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Minion not found")
+        return credential_lifecycle(connection, "minion", minion_id, bool(row["enabled"]))
+
+
+@app.get("/admin/v1/minions/{minion_id}/missions")
+def list_minion_missions(minion_id: str, limit: int = 20, _admin: str = Depends(require_admin)) -> list[dict[str, Any]]:
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 100")
+    with connect() as connection:
+        if connection.execute("SELECT 1 FROM minions WHERE minion_id = ?", (minion_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Minion not found")
+        rows = connection.execute(
+            "SELECT mission_id, request_id, status, created_at, updated_at, attempt_count, claim_generation, envelope FROM missions WHERE minion_id = ? ORDER BY updated_at DESC LIMIT ?",
+            (minion_id, limit),
+        ).fetchall()
+    result = []
+    for row in rows:
+        envelope = json.loads(row["envelope"])
+        result.append({
+            "mission_id": row["mission_id"],
+            "request_id": row["request_id"],
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "attempt_count": row["attempt_count"],
+            "claim_generation": row["claim_generation"],
+            "capability": envelope.get("capability"),
+            "policy_hash": envelope.get("policy_hash"),
+        })
+    return result
+
+
+@app.get("/admin/v1/minions/{minion_id}/configuration")
+def minion_configuration_defaults(minion_id: str, _admin: str = Depends(require_admin)) -> dict[str, Any]:
+    with connect() as connection:
+        row = connection.execute("SELECT minion_id FROM minions WHERE minion_id = ?", (minion_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Minion not found")
-    d = dict(row)
-    d["capabilities"] = json.loads(d["capabilities"] or "[]")
-    d["scope_metadata"] = json.loads(d["scope_metadata"] or "{}")
-    return d
+    mission_control_url = os.environ.get("SG_PUBLIC_URL", "").strip().rstrip("/") or "https://127.0.0.1:8443"
+    return {
+        "minion_id": minion_id,
+        "defaults": {
+            "mission_control_url": mission_control_url,
+            "api_key_path": r"C:\ProgramData\SluiceGate\Minion\keys\minion-api-key.txt",
+            "sluicegate_public_key_path": r"C:\ProgramData\SluiceGate\Minion\keys\sg-public-key.pem",
+            "minion_private_key_path": r"C:\ProgramData\SluiceGate\Minion\keys\minion-private-key.pem",
+            "catalog_path": "",
+            "nessus_mapping_path": "",
+            "nonce_store_path": r"C:\ProgramData\SluiceGate\Minion\data\nonces.txt",
+            "mission_diary_directory": r"C:\ProgramData\SluiceGate\Minion\MissionDiary",
+            "trusted_server_certificate_path": "",
+            "trusted_server_certificate_sha256": [],
+            "poll_interval_seconds": 60,
+            "dry_run": True,
+        },
+    }
+
+
+@app.post("/admin/v1/minions/{minion_id}/configuration")
+def download_minion_configuration(
+    minion_id: str,
+    request: MinionConfigExportRequest,
+    _admin: str = Depends(require_admin),
+) -> Response:
+    with connect() as connection:
+        row = connection.execute("SELECT minion_id, capabilities FROM minions WHERE minion_id = ?", (minion_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Minion not found")
+    values = request.model_dump()
+    mission_control_url = values["mission_control_url"] or os.environ.get("SG_PUBLIC_URL", "").strip().rstrip("/") or "https://127.0.0.1:8443"
+    parsed_url = urlsplit(mission_control_url)
+    if parsed_url.scheme.lower() != "https" or not parsed_url.hostname or parsed_url.username or parsed_url.password or parsed_url.fragment:
+        raise HTTPException(status_code=422, detail="Configured Mission Control URL must be an absolute HTTPS URL without embedded credentials or a fragment")
+    path_values = (
+        values["api_key_path"], values["sluicegate_public_key_path"], values["minion_private_key_path"],
+        values["catalog_path"], values["nessus_mapping_path"], values["nonce_store_path"], values["mission_diary_directory"],
+    )
+    if any(not value.strip() or "\r" in value or "\n" in value for value in path_values):
+        raise HTTPException(status_code=422, detail="Configuration paths must be non-empty single-line values")
+    trusted_path = (values["trusted_server_certificate_path"] or "").strip()
+    fingerprints = values["trusted_server_certificate_sha256"]
+    if fingerprints and not trusted_path:
+        raise HTTPException(status_code=422, detail="A trusted certificate path is required when certificate fingerprints are supplied")
+
+    configuration: dict[str, Any] = {
+        "MissionControlUrl": mission_control_url,
+        "MinionId": minion_id,
+        "SupportedCapabilities": json.loads(row["capabilities"] or "[]"),
+        "ApiKeyPath": values["api_key_path"].strip(),
+        "SluiceGatePublicKeyPath": values["sluicegate_public_key_path"].strip(),
+        "MinionPrivateKeyPath": values["minion_private_key_path"].strip(),
+        "CatalogPath": values["catalog_path"].strip(),
+        "NessusMappingPath": values["nessus_mapping_path"].strip(),
+        "NonceStorePath": values["nonce_store_path"].strip(),
+        "MissionDiaryDirectory": values["mission_diary_directory"].strip(),
+        "PollIntervalSeconds": values["poll_interval_seconds"],
+        "DryRun": values["dry_run"],
+    }
+    if trusted_path:
+        configuration["TrustedServerCertificatePath"] = trusted_path
+        configuration["TrustedServerCertificateSha256"] = fingerprints
+    required_runtime_fields = {
+        "MissionControlUrl", "MinionId", "ApiKeyPath", "SluiceGatePublicKeyPath", "MinionPrivateKeyPath",
+        "CatalogPath", "NessusMappingPath", "NonceStorePath",
+    }
+    if not required_runtime_fields.issubset(configuration) or "ApiKey" in configuration:
+        raise HTTPException(status_code=500, detail="Generated configuration does not match the Minion runtime contract")
+    body = json.dumps(configuration, indent=2, ensure_ascii=False) + "\n"
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="minion.config.json"', "Cache-Control": "no-store"},
+    )
 
 
 @app.patch("/admin/v1/minions/{minion_id}")
@@ -1997,6 +2594,9 @@ def update_minion(minion_id: str, body: UpdateMinionRequest, _admin: str = Depen
         if body.version is not None:
             updates.append("version = ?")
             params.append(body.version)
+        if body.package_sha256 is not None:
+            updates.append("package_sha256 = ?")
+            params.append(body.package_sha256.lower())
         if body.environment is not None:
             updates.append("environment = ?")
             params.append(body.environment)
@@ -2034,6 +2634,14 @@ def update_minion(minion_id: str, body: UpdateMinionRequest, _admin: str = Depen
             params.append(time.time())
             params.append(minion_id)
             connection.execute(f"UPDATE minions SET {', '.join(updates)} WHERE minion_id = ?", params)
+        if body.package_sha256 is not None or body.version is not None:
+            package_hash = body.package_sha256.lower() if body.package_sha256 is not None else row["package_sha256"]
+            package_version = body.version if body.version is not None else row["version"]
+            record_audit_event(
+                "minion.package_approved" if package_hash else "minion.package_metadata_updated",
+                "ADMIN", _admin, minion_id=minion_id, status="APPROVED" if package_hash else "UNAPPROVED",
+                detail={"version": package_version, "sha256": package_hash}, connection=connection,
+            )
 
     return get_minion(minion_id, _admin)
 
@@ -2443,13 +3051,19 @@ def register_agent(body: RegisterAgentRequest, _admin: str = Depends(require_adm
     }
 
 
+def serialize_agent_registry_row(connection: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
+    item = dict(row)
+    item["keys"] = credential_lifecycle(connection, "agent", item["agent_id"], bool(item["enabled"]))
+    return item
+
+
 @app.get("/admin/v1/agents")
 def list_agents(_admin: str = Depends(require_admin)) -> list[dict[str, Any]]:
     with connect() as connection:
         rows = connection.execute(
             "SELECT agent_id, name, description, owner_team, environment, enabled, auth_method, rate_limit_per_minute, poll_rate_limit_per_minute, created_at, updated_at, last_used_at FROM agents ORDER BY created_at DESC"
         ).fetchall()
-    return [dict(r) for r in rows]
+        return [serialize_agent_registry_row(connection, row) for row in rows]
 
 
 @app.get("/admin/v1/agents/{agent_id}")
@@ -2459,9 +3073,18 @@ def get_agent(agent_id: str, _admin: str = Depends(require_admin)) -> dict[str, 
             "SELECT agent_id, name, description, owner_team, environment, enabled, auth_method, rate_limit_per_minute, poll_rate_limit_per_minute, created_at, updated_at, last_used_at FROM agents WHERE agent_id = ?",
             (agent_id,),
         ).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    return dict(row)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        return serialize_agent_registry_row(connection, row)
+
+
+@app.get("/admin/v1/agents/{agent_id}/keys")
+def list_agent_keys(agent_id: str, _admin: str = Depends(require_admin)) -> list[dict[str, Any]]:
+    with connect() as connection:
+        row = connection.execute("SELECT enabled FROM agents WHERE agent_id = ?", (agent_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        return credential_lifecycle(connection, "agent", agent_id, bool(row["enabled"]))
 
 
 @app.patch("/admin/v1/agents/{agent_id}")

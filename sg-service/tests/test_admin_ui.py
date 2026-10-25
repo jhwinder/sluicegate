@@ -25,6 +25,7 @@ def setup_test_service(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(service, "DATABASE_PATH", database_path)
     monkeypatch.setattr(service, "SIGNING_KEY_PATH", signing_key_path)
     monkeypatch.setattr(service, "POLICY_PATH", policy_path)
+    monkeypatch.setattr(service, "ALLOW_FALLBACK_MINION", True)
 
     policy_content = "\n".join([
         "version: 1",
@@ -50,6 +51,8 @@ def test_admin_ui_endpoints(tmp_path: Path, monkeypatch) -> None:
         assert "SluiceGate Control Plane" in r_ui.text
         assert "Agent Registry" in r_ui.text
         assert "Minion Registry" in r_ui.text
+        assert "Generate Minion Configuration" in r_ui.text
+        assert "Download JSON" in r_ui.text
         assert "Policies" in r_ui.text
         assert "Save and Activate" in r_ui.text
 
@@ -145,3 +148,89 @@ def test_policy_admin_workflow_is_authenticated_validated_and_audited(tmp_path: 
         assert reload_event["action"] == "RELOAD"
         assert reload_event["outcome"] == "VALIDATION_FAILED"
         assert reload_event["policy_hash"] is None
+
+
+def test_audit_history_is_filtered_authenticated_append_only_and_persistent(tmp_path: Path, monkeypatch) -> None:
+    import json
+    import sqlite3
+
+    import pytest
+
+    service = setup_test_service(tmp_path, monkeypatch)
+    monkeypatch.setenv("SG_BOOTSTRAP_ADMIN_KEY", "audit-admin-secret")
+
+    with TestClient(service.app) as client:
+        admin_key = client.post(
+            "/admin/v1/credentials/admin/admin",
+            headers={"Authorization": "Bearer audit-admin-secret"},
+        ).json()["api_key"]
+        admin_headers = {"Authorization": f"Bearer {admin_key}"}
+        agent = client.post("/admin/v1/agents", json={"name": "Audit agent"}, headers=admin_headers).json()
+        agent_headers = {"Authorization": f"Bearer {agent['api_key']}"}
+
+        denied = client.get("/admin/v1/audit-events")
+        assert denied.status_code == 401
+
+        submission = client.post(
+            "/api/v1/actions",
+            json={"capability": "demo.action", "target": {"id": "AUDIT-TARGET"}, "parameters": {"safe": True}},
+            headers=agent_headers,
+        )
+        assert submission.status_code == 202
+        request_id = submission.json()["request_id"]
+
+        history = client.get("/admin/v1/audit-events", params={"request_id": request_id}, headers=admin_headers)
+        assert history.status_code == 200
+        events = history.json()["events"]
+        assert [event["event_type"] for event in events] == [
+            "mission.issued", "routing.selected", "policy.decision", "request.received",
+        ]
+        assert all(event["request_id"] == request_id and event["agent_id"] == agent["agent_id"] for event in events)
+        issued = next(event for event in events if event["event_type"] == "mission.issued")
+        assert issued["detail"]["signed_envelope"]["signature"]
+        assert "api_key" not in json.dumps(events).lower()
+
+        filtered = client.get(
+            "/admin/v1/audit-events",
+            params={"agent_id": agent["agent_id"], "event_type": "policy.decision", "status_filter": "ALLOW"},
+            headers=admin_headers,
+        )
+        assert len(filtered.json()["events"]) == 1
+
+        mission_id = issued["mission_id"]
+        minion_id = issued["minion_id"]
+        time_filtered = client.get(
+            "/admin/v1/audit-events",
+            params={"mission_id": mission_id, "minion_id": minion_id, "status_filter": "QUEUED", "since": 0, "until": 4_000_000_000},
+            headers=admin_headers,
+        )
+        assert len(time_filtered.json()["events"]) == 1
+        page_one = client.get("/admin/v1/audit-events", params={"request_id": request_id, "limit": 2}, headers=admin_headers).json()
+        assert len(page_one["events"]) == 2 and page_one["next_before_id"] is not None
+        page_two = client.get(
+            "/admin/v1/audit-events",
+            params={"request_id": request_id, "limit": 2, "before_id": page_one["next_before_id"]},
+            headers=admin_headers,
+        ).json()
+        assert len(page_two["events"]) == 2
+        assert client.get("/admin/v1/audit-events", params={"since": 10, "until": 1}, headers=admin_headers).status_code == 422
+
+        admin_mutation = client.get("/admin/v1/audit-events", params={"event_type": "admin.mutation"}, headers=admin_headers)
+        assert any(event["actor_id"].endswith(":KEY-BOOTSTRAP-ADMIN") for event in admin_mutation.json()["events"])
+        assert any(event["detail"]["path"] == "/admin/v1/agents" for event in admin_mutation.json()["events"])
+
+        with service.connect() as connection:
+            audit_id = events[0]["audit_id"]
+            with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+                connection.execute("UPDATE audit_events SET status = 'CHANGED' WHERE audit_id = ?", (audit_id,))
+            with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+                connection.execute("DELETE FROM audit_events WHERE audit_id = ?", (audit_id,))
+
+        service.initialize()
+        after_restart = client.get("/admin/v1/audit-events", params={"request_id": request_id}, headers=admin_headers)
+        assert after_restart.status_code == 200
+        assert len(after_restart.json()["events"]) == 4
+        admin_after_restart = client.get(
+            "/admin/v1/audit-events", params={"event_type": "admin.mutation"}, headers=admin_headers
+        ).json()["events"]
+        assert any(event["detail"]["path"] == "/admin/v1/agents" for event in admin_after_restart)

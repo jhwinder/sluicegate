@@ -44,7 +44,7 @@ $MinionPrivateKeyPath    = $config.MinionPrivateKeyPath
 $CatalogPath             = $config.CatalogPath
 $NessusMappingPath       = $config.NessusMappingPath
 $NonceStorePath          = if ($config.NonceStorePath) { $config.NonceStorePath } else { Join-Path $PSScriptRoot "nonces.txt" }
-$PollIntervalSeconds     = if ($config.PollIntervalSeconds) { [int]$config.PollIntervalSeconds } else { 3600 }
+$PollIntervalSeconds     = if ($config.PollIntervalSeconds) { [int]$config.PollIntervalSeconds } else { 60 }
 $MissionDiaryDirectory   = if ($config.MissionDiaryDirectory) { $config.MissionDiaryDirectory } else { Join-Path $env:ProgramData "SluiceGate\Minion\MissionDiary" }
 $DryRun                  = if ($config.DryRun) { [bool]$config.DryRun } else { $false }
 $TrustedCertificatePath  = $config.TrustedServerCertificatePath
@@ -345,6 +345,8 @@ function Run-MissionPass {
             -MissionId $missionId `
             -ApiKey $ApiKey `
             -ClaimToken $claimToken `
+            -ClaimGeneration $script:CurrentClaimGeneration `
+            -PrivateKeyPath $MinionPrivateKeyPath `
             -Status "MISSION_REJECTED" `
             -Detail @{ reason = "RESUME_DIARY_MISMATCH"; message = "No local Mission Diary matches this Mission and signed envelope." }
         if ($rejectionSubmission.status -in @("RECORDED", "ALREADY_RECORDED")) {
@@ -370,6 +372,8 @@ function Run-MissionPass {
             -MissionId $missionId `
             -ApiKey $ApiKey `
             -ClaimToken $claimToken `
+            -ClaimGeneration $script:CurrentClaimGeneration `
+            -PrivateKeyPath $MinionPrivateKeyPath `
             -Status "MISSION_REJECTED" `
             -Detail @{ reason = $validation.Reason; message = $validation.Message; worker_process_id = $PID; worker_process_started_at = $workerStartedAt }
         $diary.status = "REJECTED"
@@ -408,11 +412,6 @@ function Run-MissionPass {
         }
     }
 
-    # Record nonce
-    if (-not $resumeEvidenceValid) {
-        Add-MinionNonce -Nonce $envelope.nonce -NonceStorePath $NonceStorePath
-    }
-
     # 4. Acknowledge only fresh claims; resumed work keeps its current state.
     if (-not $continuingMission -and (-not $claimResponse.resume -or $claimResponse.resume_status -eq "CLAIMED")) {
         $null = Send-MinionStatus `
@@ -421,6 +420,8 @@ function Run-MissionPass {
             -MissionId $missionId `
             -ApiKey $ApiKey `
             -ClaimToken $claimToken `
+            -ClaimGeneration $script:CurrentClaimGeneration `
+            -PrivateKeyPath $MinionPrivateKeyPath `
             -Status "MISSION_ACKNOWLEDGED" `
             -Detail @{ worker_process_id = $PID; worker_process_started_at = $workerStartedAt; process_detail = @{ diary_path = $script:CurrentDiaryPath; attempt = $script:CurrentAttempt; claim_generation = $script:CurrentClaimGeneration; resumed = [bool]$claimResponse.resume } }
     }
@@ -432,6 +433,8 @@ function Run-MissionPass {
         -MissionId $missionId `
         -ApiKey $ApiKey `
         -ClaimToken $claimToken `
+        -ClaimGeneration $script:CurrentClaimGeneration `
+        -PrivateKeyPath $MinionPrivateKeyPath `
         -Status "MISSION_IN_PROGRESS" `
         -Detail @{ worker_process_id = $PID; worker_process_started_at = $workerStartedAt; process_detail = @{ diary_path = $script:CurrentDiaryPath; phase = "STARTING" } }
     $diary.status = "IN_PROGRESS"
@@ -446,6 +449,8 @@ function Run-MissionPass {
         MissionId = $missionId
         ApiKey = $ApiKey
         ClaimToken = $claimToken
+        ClaimGeneration = $script:CurrentClaimGeneration
+        PrivateKeyPath = $MinionPrivateKeyPath
         WorkerProcessId = $PID
         WorkerStartedAt = $workerStartedAt
     }
@@ -457,6 +462,8 @@ function Run-MissionPass {
             -MissionId $Context.MissionId `
             -ApiKey $Context.ApiKey `
             -ClaimToken $Context.ClaimToken `
+            -ClaimGeneration $Context.ClaimGeneration `
+            -PrivateKeyPath $Context.PrivateKeyPath `
             -Status $Status `
             -Detail (@{
                 worker_process_id = $Context.WorkerProcessId
@@ -497,6 +504,8 @@ function Run-MissionPass {
             -MissionId $missionId `
             -ApiKey $ApiKey `
             -ClaimToken $claimToken `
+            -ClaimGeneration $script:CurrentClaimGeneration `
+            -PrivateKeyPath $MinionPrivateKeyPath `
             -Status $terminalStatus `
             -Detail @{ worker_process_id = $PID; worker_process_started_at = $workerStartedAt; process_detail = $outcome.Result }
         $script:ActiveMission = @{
@@ -518,6 +527,7 @@ function Run-MissionPass {
         -MissionId $missionId `
         -ApiKey $ApiKey `
         -ClaimToken $claimToken `
+        -ClaimGeneration $script:CurrentClaimGeneration `
         -PrivateKeyPath $MinionPrivateKeyPath `
         -Status $terminalStatus `
         -Result ($outcome.Result -as [hashtable])

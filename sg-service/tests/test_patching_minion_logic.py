@@ -18,6 +18,15 @@ from patching_minion import (
 )
 
 
+def test_sample_catalog_and_nessus_mapping_files_are_parseable() -> None:
+    samples = MINION_PATHING_DIR / "samples"
+    catalog = load_patch_catalog(samples / "sample-patch-catalog.csv")
+    mappings = load_nessus_mapping(samples / "sample-nessus-mapping.csv")
+
+    assert catalog == []
+    assert mappings == [{"plugin_id": "214542", "dns_name": "replace_with_exact_dns_name_from_nessus_export"}]
+
+
 def test_load_patch_catalog_valid_and_approved_only(tmp_path: Path) -> None:
     catalog_file = tmp_path / "catalog.csv"
     catalog_content = (

@@ -46,17 +46,47 @@ def headers() -> dict[str, str]:
 
 
 def canonical_json(payload: dict[str, Any]) -> bytes:
-    return json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    # Matches the protocol's canonical JSON for the strings, integers and booleans this worker sends.
+    return json.dumps(payload, separators=(",", ":"), sort_keys=True, ensure_ascii=True).encode("utf-8")
+
+
+def load_signing_key() -> ed25519.Ed25519PrivateKey:
+    private_key = serialization.load_pem_private_key(MINION_PRIVATE_KEY_PATH.read_bytes(), password=None)
+    if not isinstance(private_key, ed25519.Ed25519PrivateKey):
+        raise RuntimeError("Demo Minion signing key must be Ed25519")
+    return private_key
+
+
+def signed_status(mission: dict[str, Any], status: str, detail: dict[str, Any]) -> dict[str, Any]:
+    identifier = event_id()
+    occurred_at = int(time.time())
+    signed_payload = {
+        "event_id": identifier,
+        "mission_id": mission["mission_id"],
+        "minion_id": MINION_ID,
+        "claim_generation": mission["claim_generation"],
+        "status": status,
+        "detail": detail,
+        "occurred_at": occurred_at,
+    }
+    return {
+        "event_id": identifier,
+        "claim_token": mission["claim_token"],
+        "claim_generation": mission["claim_generation"],
+        "status": status,
+        "detail": detail,
+        "occurred_at": occurred_at,
+        "signature": load_signing_key().sign(canonical_json(signed_payload)).hex(),
+    }
 
 
 def handle_mission(client: httpx.Client, mission: dict[str, Any]) -> None:
     mission_id = mission["mission_id"]
-    claim_token = mission["claim_token"]
     for state in ("MISSION_ACKNOWLEDGED", "MISSION_IN_PROGRESS"):
         response = client.post(
             f"/internal/v1/minions/{MINION_ID}/missions/{mission_id}/status",
             headers=headers(),
-            json={"event_id": event_id(), "claim_token": claim_token, "status": state, "detail": {"mode": "safe-demo-noop"}},
+            json=signed_status(mission, state, {"mode": "safe-demo-noop"}),
         )
         response.raise_for_status()
 
@@ -65,22 +95,26 @@ def handle_mission(client: httpx.Client, mission: dict[str, Any]) -> None:
         "executed": False,
         "message": "Safe demo Minion completed a no-op Mission.",
     }
+    identifier = event_id()
     signed_payload = {
-        "event_id": event_id(),
-        "claim_token": claim_token,
+        "event_id": identifier,
         "mission_id": mission_id,
         "minion_id": MINION_ID,
+        "claim_generation": mission["claim_generation"],
         "status": "MISSION_COMPLETE_SUCCEEDED",
         "result": result,
     }
-    private_key = serialization.load_pem_private_key(MINION_PRIVATE_KEY_PATH.read_bytes(), password=None)
-    if not isinstance(private_key, ed25519.Ed25519PrivateKey):
-        raise RuntimeError("Demo Minion signing key must be Ed25519")
-    signature = private_key.sign(canonical_json(signed_payload)).hex()
     response = client.post(
         f"/internal/v1/minions/{MINION_ID}/missions/{mission_id}/result",
         headers=headers(),
-        json={**signed_payload, "signature": signature},
+        json={
+            "event_id": identifier,
+            "claim_token": mission["claim_token"],
+            "claim_generation": mission["claim_generation"],
+            "status": signed_payload["status"],
+            "result": result,
+            "signature": load_signing_key().sign(canonical_json(signed_payload)).hex(),
+        },
     )
     response.raise_for_status()
 

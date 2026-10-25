@@ -1,0 +1,1838 @@
+{
+  "description": "Mission envelope fixtures; the JSON Schema validator and the PowerShell validator must agree on `valid`.",
+  "fixtures": [
+    {
+      "name": "valid patch Mission",
+      "valid": true,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "valid patch Mission with a maintenance window",
+      "valid": true,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": {
+            "start_utc": "2999-01-01T00:00:00Z",
+            "end_utc": "3000-01-01T00:00:00+00:00"
+          }
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "valid patch Mission with window decision and approval evidence",
+      "valid": true,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": "PAUSE"
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "approval_evidence": {
+          "approved": true,
+          "approver": "admin"
+        }
+      }
+    },
+    {
+      "name": "valid generic Mission",
+      "valid": true,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "demo.action",
+        "target": {
+          "account_id": "ACC-1"
+        },
+        "parameters": {
+          "amount": 5
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "valid generic Mission with empty target",
+      "valid": true,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "demo.action",
+        "target": {},
+        "parameters": {
+          "amount": 5
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "valid Mission with no obligations",
+      "valid": true,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "missing nonce",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "nonce shorter than 16",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "aaaaaaaaaaaaaaa",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "unsupported protocol version",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "2.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "numeric protocol version",
+      "valid": false,
+      "envelope": {
+        "protocol_version": 1,
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "unknown top-level field",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "extra": "x"
+      }
+    },
+    {
+      "name": "uppercase signature",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+    },
+    {
+      "name": "short signature",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "missing execution",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "zero attempts",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 0,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "execution value is text",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": "30",
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "unknown execution field",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120,
+          "extra": 1
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "issued_at is text",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": "1800000000",
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "negative expires_at",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": -1,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "unknown policy decision",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "MAYBE",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "missing obligations",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "obligation without data",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "x"
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "obligation with an extra member",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "x",
+            "data": {},
+            "more": 1
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "target is not an object",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "demo.action",
+        "target": "ACC-1",
+        "parameters": {
+          "amount": 5
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "patch target without servers",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {},
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "patch target with no servers",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": []
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "patch target with an extra member",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "a"
+          ],
+          "more": 1
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "patch source not allowed",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "ftp"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "allow_reboot is text",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": "false",
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "constraints without allow_reboot",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "outside_window_decision": null
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "unknown outside-window decision",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": "NEVER"
+          },
+          "maintenance_window": null
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "window without end",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": {
+            "start_utc": "2999-01-01T00:00:00Z"
+          }
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "window with a malformed date",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": {
+            "start_utc": "tomorrow",
+            "end_utc": "3000-01-01T00:00:00Z"
+          }
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "patch parameters with an extra member",
+      "valid": false,
+      "envelope": {
+        "protocol_version": "1.0",
+        "request_id": "REQ-1",
+        "mission_id": "MISSION-1",
+        "minion_id": "PATCH-01",
+        "capability": "windows.patch.reconcile",
+        "target": {
+          "servers": [
+            "server03.example.gov"
+          ]
+        },
+        "parameters": {
+          "patch_sources": [
+            "wsus",
+            "nessus_catalog"
+          ],
+          "patch_constraints": {
+            "allowed_patch_types": [
+              "SECURITY"
+            ],
+            "allow_reboot": false,
+            "outside_window_decision": null
+          },
+          "maintenance_window": null,
+          "extra": 1
+        },
+        "execution": {
+          "max_attempts": 3,
+          "retry_interval_seconds": 30,
+          "attempt_timeout_seconds": 300,
+          "overall_timeout_seconds": 900,
+          "heartbeat_interval_seconds": 30,
+          "claim_lease_seconds": 120
+        },
+        "issued_at": 1800000000,
+        "expires_at": 1800086400,
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "requested_by": "agent-one",
+        "policy_hash": "0123abcd",
+        "policy_decision": "ALLOW",
+        "obligations": [
+          {
+            "type": "allowed_patch_targets",
+            "data": {
+              "servers": [
+                "SERVER03.example.gov"
+              ]
+            }
+          }
+        ],
+        "signing_key_id": "sg-service-ed25519-v1",
+        "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    }
+  ]
+}

@@ -26,6 +26,7 @@ def setup_test_service(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(service, "DATABASE_PATH", database_path)
     monkeypatch.setattr(service, "SIGNING_KEY_PATH", signing_key_path)
     monkeypatch.setattr(service, "POLICY_PATH", policy_path)
+    monkeypatch.setattr(service, "ALLOW_FALLBACK_MINION", True)
     monkeypatch.setenv("SG_BOOTSTRAP_ADMIN_KEY", "test-admin-secret")
 
     policy_content = "\n".join([
@@ -83,6 +84,11 @@ def test_agent_registration_crud_and_rotation(tmp_path: Path, monkeypatch) -> No
         get_resp = client.get(f"/admin/v1/agents/{agent_id}", headers=admin_headers)
         assert get_resp.status_code == 200
         assert get_resp.json()["owner_team"] == "Infrastructure"
+        active_keys = client.get(f"/admin/v1/agents/{agent_id}/keys", headers=admin_headers).json()
+        assert active_keys[0]["key_id"] == agent_data["key_id"]
+        assert active_keys[0]["status"] == "ACTIVE"
+        assert active_keys[0]["fingerprint"].startswith("SHA256:")
+        assert "secret_hash" not in active_keys[0] and "api_key" not in active_keys[0]
 
         # 3. Agent can submit requests
         agent_headers = {"Authorization": f"Bearer {agent_key}"}
@@ -120,6 +126,11 @@ def test_agent_registration_crud_and_rotation(tmp_path: Path, monkeypatch) -> No
         rotate_resp = client.post(f"/admin/v1/agents/{agent_id}/rotate-key", headers=admin_headers)
         assert rotate_resp.status_code == 200
         new_key = rotate_resp.json()["api_key"]
+        key_lifecycle = client.get(f"/admin/v1/agents/{agent_id}/keys", headers=admin_headers).json()
+        assert {key["key_id"]: key["status"] for key in key_lifecycle} == {
+            agent_data["key_id"]: "REVOKED",
+            rotate_resp.json()["key_id"]: "ACTIVE",
+        }
 
         # Old key now fails -> 401
         assert client.post(

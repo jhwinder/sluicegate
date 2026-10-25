@@ -55,6 +55,7 @@ while ($true) {
                 $missionId = $claimResponse.mission_id
                 $envelope  = $claimResponse.envelope
                 $claimToken = $claimResponse.claim_token
+                $claimGeneration = [int]$claimResponse.claim_generation
                 Write-Host "Claimed Mission: $missionId (Capability: $($envelope.capability))"
 
                 # 3. Validate Task Envelope
@@ -73,13 +74,12 @@ while ($true) {
                         -MissionId $missionId `
                         -ApiKey $ApiKey `
                         -ClaimToken $claimToken `
+                        -ClaimGeneration $claimGeneration `
+                        -PrivateKeyPath $MinionPrivateKeyPath `
                         -Status "MISSION_REJECTED" `
                         -Detail @{ reason = $validation.Reason; message = $validation.Message }
                     continue
                 }
-
-                # Record consumed nonce
-                Add-MinionNonce -Nonce $envelope.nonce -NonceStorePath $NonceStorePath
 
                 # 4. Acknowledge Mission
                 $null = Send-MinionStatus `
@@ -88,6 +88,8 @@ while ($true) {
                     -MissionId $missionId `
                     -ApiKey $ApiKey `
                     -ClaimToken $claimToken `
+                    -ClaimGeneration $claimGeneration `
+                    -PrivateKeyPath $MinionPrivateKeyPath `
                     -Status "MISSION_ACKNOWLEDGED"
 
                 # 5. Report Execution Started
@@ -97,6 +99,8 @@ while ($true) {
                     -MissionId $missionId `
                     -ApiKey $ApiKey `
                     -ClaimToken $claimToken `
+                    -ClaimGeneration $claimGeneration `
+                    -PrivateKeyPath $MinionPrivateKeyPath `
                     -Status "MISSION_IN_PROGRESS"
 
                 # 6. Execute capability handler
@@ -134,6 +138,7 @@ while ($true) {
                     -MissionId $missionId `
                     -ApiKey $ApiKey `
                     -ClaimToken $claimToken `
+                    -ClaimGeneration $claimGeneration `
                     -PrivateKeyPath $MinionPrivateKeyPath `
                     -Status $terminalStatus `
                     -Result ($executionResult -as [hashtable])

@@ -253,45 +253,121 @@ namespace SluiceGate
 '@
 
 
+function ConvertTo-CanonicalStringLiteral {
+    param([string]$Value)
+
+    # ASCII-only output with lowercase \u escapes, identical to Python's json.dumps(ensure_ascii=True).
+    $builder = [System.Text.StringBuilder]::new()
+    [void]$builder.Append('"')
+    foreach ($character in $Value.ToCharArray()) {
+        $code = [int]$character
+        switch ($code) {
+            34 { [void]$builder.Append('\"') }
+            92 { [void]$builder.Append('\\') }
+            8 { [void]$builder.Append('\b') }
+            9 { [void]$builder.Append('\t') }
+            10 { [void]$builder.Append('\n') }
+            12 { [void]$builder.Append('\f') }
+            13 { [void]$builder.Append('\r') }
+            default {
+                if ($code -lt 32 -or $code -gt 126) {
+                    [void]$builder.Append('\u').Append($code.ToString('x4', [System.Globalization.CultureInfo]::InvariantCulture))
+                }
+                else {
+                    [void]$builder.Append($character)
+                }
+            }
+        }
+    }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function ConvertTo-CanonicalNumber {
+    param([object]$Value)
+
+    $invariant = [System.Globalization.CultureInfo]::InvariantCulture
+    if ($Value -is [double] -or $Value -is [single]) {
+        $number = [double]$Value
+        if ([double]::IsNaN($number) -or [double]::IsInfinity($number)) {
+            throw "NaN and infinity cannot be signed."
+        }
+    }
+    elseif ($Value -is [decimal]) {
+        $number = [double]$Value
+    }
+    else {
+        return ([System.Convert]::ToString($Value, $invariant))
+    }
+
+    if ($number -eq [math]::Floor($number) -and [math]::Abs($number) -lt 9007199254740992) {
+        return ([int64]$number).ToString($invariant)
+    }
+
+    # Shortest digits that round-trip, written positionally so no exponent form has to match Python.
+    $text = $null
+    for ($precision = 1; $precision -le 17; $precision++) {
+        $text = $number.ToString("G$precision", $invariant)
+        if ([double]::Parse($text, $invariant) -eq $number) { break }
+    }
+    $match = [regex]::Match($text, '^(-?)(\d)(?:\.(\d+))?E([+-]\d+)$')
+    if (-not $match.Success) { return $text }
+
+    $digits = $match.Groups[2].Value + $match.Groups[3].Value
+    $position = 1 + [int]$match.Groups[4].Value
+    if ($position -le 0) { $body = '0.' + ('0' * (-$position)) + $digits }
+    elseif ($position -ge $digits.Length) { $body = $digits + ('0' * ($position - $digits.Length)) }
+    else { $body = $digits.Insert($position, '.') }
+    return $match.Groups[1].Value + $body
+}
+
+function ConvertTo-CanonicalValue {
+    param([object]$Value)
+
+    if ($null -eq $Value) { return 'null' }
+    if ($Value -is [bool]) { return $(if ($Value) { 'true' } else { 'false' }) }
+    if ($Value -is [string]) { return (ConvertTo-CanonicalStringLiteral -Value $Value) }
+    if ($Value -is [char]) { return (ConvertTo-CanonicalStringLiteral -Value ([string]$Value)) }
+    if ($Value -is [datetime] -or $Value -is [datetimeoffset]) {
+        throw "A date value cannot be canonicalized; keep timestamps as strings or Unix seconds."
+    }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $keys = [string[]]@($Value.Keys | ForEach-Object { [string]$_ })
+        [System.Array]::Sort($keys, [System.StringComparer]::Ordinal)
+        $pairs = foreach ($key in $keys) {
+            (ConvertTo-CanonicalStringLiteral -Value $key) + ':' + (ConvertTo-CanonicalValue -Value $Value[$key])
+        }
+        return '{' + (@($pairs) -join ',') + '}'
+    }
+    if ($Value -is [System.Collections.IEnumerable]) {
+        $items = foreach ($item in $Value) { ConvertTo-CanonicalValue -Value $item }
+        return '[' + (@($items) -join ',') + ']'
+    }
+    if ($Value -is [pscustomobject]) {
+        $table = @{}
+        foreach ($property in $Value.PSObject.Properties) { $table[$property.Name] = $property.Value }
+        return (ConvertTo-CanonicalValue -Value $table)
+    }
+    if ($Value -is [System.ValueType] -and $Value.GetType().IsPrimitive -or $Value -is [decimal]) {
+        return (ConvertTo-CanonicalNumber -Value $Value)
+    }
+    throw "Cannot canonicalize a value of type $($Value.GetType().FullName)."
+}
+
 function ConvertTo-CanonicalJson {
+    <#
+    .SYNOPSIS
+        Canonical JSON used for every signed payload; byte-identical to sg_service.protocol.canonical_json.
+        Sorted keys (ordinal), no whitespace, ASCII-only strings, integral numbers written without a fraction.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
+        [AllowNull()]
         [object]$InputObject
     )
 
-    function Sort-ObjectKeys([object]$obj) {
-        if ($null -eq $obj) {
-            return $null
-        }
-        if ($obj -is [System.Collections.IDictionary]) {
-            $sorted = [ordered]@{}
-            foreach ($key in ($obj.Keys | Sort-Object)) {
-                $sorted[$key] = Sort-ObjectKeys $obj[$key]
-            }
-            return $sorted
-        }
-        if ($obj -is [System.Collections.IEnumerable] -and $obj -isnot [string]) {
-            $list = [System.Collections.Generic.List[object]]::new()
-            foreach ($item in $obj) {
-                $list.Add((Sort-ObjectKeys $item))
-            }
-            return $list
-        }
-        if ($obj -is [PSCustomObject]) {
-            $sorted = [ordered]@{}
-            foreach ($prop in ($obj.PSObject.Properties.Name | Sort-Object)) {
-                $sorted[$prop] = Sort-ObjectKeys $obj.$prop
-            }
-            return $sorted
-        }
-        return $obj
-    }
-
-    $sortedObject = Sort-ObjectKeys $InputObject
-    # Compress without whitespace
-    $json = ConvertTo-Json -InputObject $sortedObject -Compress -Depth 10
-    return $json
+    return (ConvertTo-CanonicalValue -Value $InputObject)
 }
 
 function Test-MinionSignature {
@@ -384,14 +460,22 @@ function Test-MinionNonce {
         return $true
     }
 
-    $seen = Get-Content -LiteralPath $NonceStorePath -ErrorAction SilentlyContinue
-    if ($seen -contains $Nonce) {
+    $seen = foreach ($line in [System.IO.File]::ReadAllLines($NonceStorePath)) { $line.Split("`t")[0] }
+    if ($seen -ccontains $Nonce) {
         return $false
     }
     return $true
 }
 
-function Add-MinionNonce {
+function Register-MinionNonce {
+    <#
+    .SYNOPSIS
+        Atomically records a Mission nonce. Returns $false when the nonce was already consumed (a replay).
+    .DESCRIPTION
+        The store holds one "<nonce><TAB><retain-until epoch seconds>" line per consumed nonce. A nonce is
+        pruned only after its retain-until time, so a still-valid Mission can never be replayed because older
+        entries were evicted. A lock file serializes concurrent workers around the check-and-add.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -400,7 +484,9 @@ function Add-MinionNonce {
         [Parameter(Mandatory = $true)]
         [string]$NonceStorePath,
 
-        [int]$MaxEntries = 10000
+        # Epoch seconds until which the nonce must be remembered (Mission expiry plus clock skew).
+        [Parameter(Mandatory = $true)]
+        [long]$RetainUntil
     )
 
     $parent = [System.IO.Path]::GetDirectoryName($NonceStorePath)
@@ -408,14 +494,210 @@ function Add-MinionNonce {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
     }
 
-    Add-Content -LiteralPath $NonceStorePath -Value $Nonce -Encoding UTF8
-
-    # Trim if exceeds max
-    $lines = Get-Content -LiteralPath $NonceStorePath -ErrorAction SilentlyContinue
-    if ($lines.Count -gt $MaxEntries) {
-        $trimmed = $lines | Select-Object -Last ($MaxEntries / 2)
-        Set-Content -LiteralPath $NonceStorePath -Value $trimmed -Encoding UTF8
+    $lock = $null
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    while ($null -eq $lock) {
+        try {
+            $lock = [System.IO.File]::Open("$NonceStorePath.lock", [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+        }
+        catch [System.IO.IOException] {
+            if ([DateTime]::UtcNow -gt $deadline) { throw "Timed out waiting for the nonce store lock." }
+            Start-Sleep -Milliseconds 50
+        }
     }
+
+    try {
+        $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        $kept = [System.Collections.Generic.List[string]]::new()
+        $pruned = $false
+        $replay = $false
+        if (Test-Path -LiteralPath $NonceStorePath) {
+            foreach ($line in [System.IO.File]::ReadAllLines($NonceStorePath)) {
+                if ([string]::IsNullOrWhiteSpace($line)) { continue }
+                $fields = $line.Split("`t")
+                # Entries from older versions have no expiry; keep them for a full Mission lifetime from now.
+                $retain = if ($fields.Count -ge 2) { [long]$fields[1] } else { $now + 90000 }
+                if ($retain -lt $now) { $pruned = $true; continue }
+                if ($fields[0] -ceq $Nonce) { $replay = $true }
+                $kept.Add("$($fields[0])`t$retain")
+            }
+        }
+        if ($replay) { return $false }
+
+        $kept.Add("$Nonce`t$RetainUntil")
+        $temporary = "$NonceStorePath.$([guid]::NewGuid().ToString('N')).tmp"
+        try {
+            [System.IO.File]::WriteAllLines($temporary, $kept.ToArray(), (New-Object System.Text.UTF8Encoding($false)))
+            Move-Item -LiteralPath $temporary -Destination $NonceStorePath -Force
+        }
+        finally {
+            if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
+        }
+        return $true
+    }
+    finally {
+        $lock.Dispose()
+    }
+}
+
+function Test-JsonObject {
+    param([object]$Value)
+    return ($Value -is [pscustomobject] -or $Value -is [System.Collections.IDictionary])
+}
+
+function Get-JsonMemberNames {
+    param([object]$Value)
+    if ($Value -is [System.Collections.IDictionary]) { return @($Value.Keys | ForEach-Object { [string]$_ }) }
+    return @($Value.PSObject.Properties.Name)
+}
+
+function Get-JsonMember {
+    param([object]$Value, [string]$Name)
+    if ($Value -is [System.Collections.IDictionary]) { $member = $Value[$Name] }
+    else {
+        # Assigned outside an if-expression: an expression result would unroll a one-element array.
+        $member = $null
+        $property = $Value.PSObject.Properties[$Name]
+        if ($property) { $member = $property.Value }
+    }
+    # The leading comma keeps a one-element array from being unrolled into a scalar.
+    if ($member -is [System.Collections.IEnumerable] -and $member -isnot [string] -and $member -isnot [System.Collections.IDictionary]) { return , $member }
+    return $member
+}
+
+function Test-JsonNumber {
+    param([object]$Value)
+    return ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal] -or $Value -is [single] -or $Value -is [int16] -or $Value -is [byte] -or $Value -is [uint32] -or $Value -is [uint64])
+}
+
+function Test-JsonInteger {
+    param([object]$Value, [long]$Minimum)
+    return ((Test-JsonNumber $Value) -and ([double]$Value -eq [math]::Floor([double]$Value)) -and ([double]$Value -ge $Minimum))
+}
+
+function Test-JsonArray {
+    param([object]$Value)
+    return ($null -ne $Value -and $Value -is [System.Collections.IEnumerable] -and $Value -isnot [string] -and -not (Test-JsonObject $Value))
+}
+
+function Test-JsonDateTimeText {
+    param([object]$Value)
+    # Windows PowerShell 7.4 turns ISO date strings into DateTime on parse; both forms are acceptable.
+    if ($Value -is [datetime]) { return $true }
+    return ($Value -is [string] -and $Value -cmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$')
+}
+
+function Test-NonEmptyText {
+    param([object]$Value, [int]$MinimumLength = 1)
+    return ($Value -is [string] -and $Value.Length -ge $MinimumLength)
+}
+
+function Get-MissionEnvelopeSchemaErrors {
+    <#
+    .SYNOPSIS
+        Hand-written mirror of minion-registry/protocol/mission-envelope.schema.json (Windows PowerShell 5.1 has
+        no JSON Schema validator). Shared fixtures keep it in step with the schema; see Test-Protocol.ps1.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][AllowNull()][object]$Envelope)
+
+    $errors = [System.Collections.Generic.List[string]]::new()
+
+    function Test-Members([object]$Object, [string]$Path, [string[]]$Required, [string[]]$Allowed) {
+        if (-not (Test-JsonObject $Object)) { $errors.Add("${Path}: must be an object"); return $false }
+        $names = Get-JsonMemberNames $Object
+        foreach ($name in $Required) { if ($names -cnotcontains $name) { $errors.Add("${Path}: missing required member '$name'") } }
+        foreach ($name in $names) { if ($Allowed -cnotcontains $name) { $errors.Add("${Path}: unknown member '$name'") } }
+        return $true
+    }
+
+    $required = @("protocol_version", "request_id", "mission_id", "minion_id", "capability", "target", "parameters", "execution", "issued_at", "expires_at", "nonce", "requested_by", "policy_hash", "policy_decision", "obligations", "signing_key_id", "signature")
+    if (-not (Test-Members $Envelope "<root>" $required ($required + "approval_evidence"))) { return $errors.ToArray() }
+    $names = Get-JsonMemberNames $Envelope
+    $value = { param($name) Get-JsonMember $Envelope $name }
+
+    if ($names -ccontains "protocol_version" -and ((& $value "protocol_version") -isnot [string] -or (& $value "protocol_version") -cne "1.0")) { $errors.Add("protocol_version: must be '1.0'") }
+    foreach ($name in "request_id", "mission_id", "minion_id", "capability", "requested_by", "policy_hash", "signing_key_id") {
+        if ($names -ccontains $name -and -not (Test-NonEmptyText (& $value $name))) { $errors.Add("${name}: must be a non-empty string") }
+    }
+    if ($names -ccontains "nonce" -and -not (Test-NonEmptyText (& $value "nonce") 16)) { $errors.Add("nonce: must be a string of at least 16 characters") }
+    foreach ($name in "issued_at", "expires_at") {
+        if ($names -ccontains $name -and -not ((Test-JsonNumber (& $value $name)) -and [double](& $value $name) -ge 0)) { $errors.Add("${name}: must be a non-negative number") }
+    }
+    if ($names -ccontains "policy_decision" -and (-not (Test-NonEmptyText (& $value "policy_decision")) -or @("ALLOW", "PAUSE", "BLOCK", "REJECTED") -cnotcontains (& $value "policy_decision"))) { $errors.Add("policy_decision: must be ALLOW, PAUSE, BLOCK or REJECTED") }
+    if ($names -ccontains "signature" -and ((& $value "signature") -isnot [string] -or (& $value "signature") -cnotmatch '^[0-9a-f]{128}$')) { $errors.Add("signature: must be 128 lowercase hex characters") }
+    foreach ($name in "target", "parameters", "approval_evidence") {
+        if ($names -ccontains $name -and -not (Test-JsonObject (& $value $name))) { $errors.Add("${name}: must be an object") }
+    }
+
+    if ($names -ccontains "execution") {
+        $executionNames = @("max_attempts", "retry_interval_seconds", "attempt_timeout_seconds", "overall_timeout_seconds", "heartbeat_interval_seconds", "claim_lease_seconds")
+        $execution = & $value "execution"
+        if (Test-Members $execution "execution" $executionNames $executionNames) {
+            foreach ($name in $executionNames) {
+                if ((Get-JsonMemberNames $execution) -ccontains $name -and -not (Test-JsonInteger (Get-JsonMember $execution $name) 1)) { $errors.Add("execution/${name}: must be an integer >= 1") }
+            }
+        }
+    }
+
+    if ($names -ccontains "obligations") {
+        $obligations = & $value "obligations"
+        if (-not (Test-JsonArray $obligations)) { $errors.Add("obligations: must be an array") }
+        else {
+            foreach ($item in $obligations) {
+                if (Test-Members $item "obligations/item" @("type", "data") @("type", "data")) {
+                    $itemNames = Get-JsonMemberNames $item
+                    if ($itemNames -ccontains "type" -and -not (Test-NonEmptyText (Get-JsonMember $item "type"))) { $errors.Add("obligations/item/type: must be a non-empty string") }
+                    if ($itemNames -ccontains "data" -and -not (Test-JsonObject (Get-JsonMember $item "data"))) { $errors.Add("obligations/item/data: must be an object") }
+                }
+            }
+        }
+    }
+
+    if ((& $value "capability") -ceq "windows.patch.reconcile") {
+        $target = & $value "target"
+        if (Test-JsonObject $target) {
+            if (Test-Members $target "target" @("servers") @("servers")) {
+                $servers = Get-JsonMember $target "servers"
+                if (-not (Test-JsonArray $servers) -or @($servers).Count -lt 1 -or @($servers | Where-Object { -not (Test-NonEmptyText $_) }).Count) { $errors.Add("target/servers: must be a non-empty array of non-empty strings") }
+            }
+        }
+        $parameters = & $value "parameters"
+        if (Test-JsonObject $parameters) {
+            if (Test-Members $parameters "parameters" @("patch_sources", "patch_constraints") @("patch_sources", "patch_constraints", "maintenance_window")) {
+                $parameterNames = Get-JsonMemberNames $parameters
+                if ($parameterNames -ccontains "patch_sources") {
+                    $sources = Get-JsonMember $parameters "patch_sources"
+                    if (-not (Test-JsonArray $sources) -or @($sources | Where-Object { $_ -isnot [string] -or @("wsus", "nessus_catalog") -cnotcontains $_ }).Count) { $errors.Add("parameters/patch_sources: must be an array of wsus or nessus_catalog") }
+                }
+                if ($parameterNames -ccontains "patch_constraints") {
+                    $constraints = Get-JsonMember $parameters "patch_constraints"
+                    $constraintNames = @("allowed_patch_types", "allow_reboot", "outside_window_decision")
+                    if (Test-Members $constraints "parameters/patch_constraints" @("allowed_patch_types", "allow_reboot") $constraintNames) {
+                        $present = Get-JsonMemberNames $constraints
+                        if ($present -ccontains "allowed_patch_types") {
+                            $types = Get-JsonMember $constraints "allowed_patch_types"
+                            if (-not (Test-JsonArray $types) -or @($types | Where-Object { $_ -isnot [string] }).Count) { $errors.Add("parameters/patch_constraints/allowed_patch_types: must be an array of strings") }
+                        }
+                        if ($present -ccontains "allow_reboot" -and (Get-JsonMember $constraints "allow_reboot") -isnot [bool]) { $errors.Add("parameters/patch_constraints/allow_reboot: must be a boolean") }
+                        if ($present -ccontains "outside_window_decision") {
+                            $decision = Get-JsonMember $constraints "outside_window_decision"
+                            if ($null -ne $decision -and ($decision -isnot [string] -or @("PAUSE", "BLOCK") -cnotcontains $decision)) { $errors.Add("parameters/patch_constraints/outside_window_decision: must be PAUSE, BLOCK or null") }
+                        }
+                    }
+                }
+                if ($parameterNames -ccontains "maintenance_window") {
+                    $window = Get-JsonMember $parameters "maintenance_window"
+                    if ($null -ne $window -and (Test-Members $window "parameters/maintenance_window" @("start_utc", "end_utc") @("start_utc", "end_utc"))) {
+                        foreach ($name in "start_utc", "end_utc") {
+                            if ((Get-JsonMemberNames $window) -ccontains $name -and -not (Test-JsonDateTimeText (Get-JsonMember $window $name))) { $errors.Add("parameters/maintenance_window/${name}: must be a date-time string") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return $errors.ToArray()
 }
 
 function Test-MissionEnvelope {
@@ -442,38 +724,38 @@ function Test-MissionEnvelope {
     $rejectionReason = $null
 
     # 1. Protocol version validation
-    if ($Envelope.protocol_version -ne "1.0") {
+    if ($Envelope.protocol_version -isnot [string] -or $Envelope.protocol_version -cne "1.0") {
         return @{ IsValid = $false; Reason = "UNSUPPORTED_PROTOCOL_VERSION"; Message = "Protocol version '$($Envelope.protocol_version)' is unsupported." }
     }
 
-    # 2. Intended Minion ID validation
-    if ($Envelope.minion_id -ne $ExpectedMinionId) {
+    # 2. Structure: every required field, with the right type, and nothing unknown
+    $schemaErrors = @(Get-MissionEnvelopeSchemaErrors -Envelope $Envelope)
+    if ($schemaErrors.Count -gt 0) {
+        return @{ IsValid = $false; Reason = "SCHEMA_INVALID"; Message = "Mission envelope does not match the protocol schema: $($schemaErrors[0])" }
+    }
+
+    # 3. Intended Minion ID validation
+    if ($Envelope.minion_id -cne $ExpectedMinionId) {
         return @{ IsValid = $false; Reason = "MINION_ID_MISMATCH"; Message = "Mission addressed to '$($Envelope.minion_id)', expected '$ExpectedMinionId'." }
     }
 
-    # 3. Capability validation
-    if ($SupportedCapabilities -notcontains $Envelope.capability) {
+    # 4. Capability validation
+    if ($SupportedCapabilities -cnotcontains $Envelope.capability) {
         return @{ IsValid = $false; Reason = "UNSUPPORTED_CAPABILITY"; Message = "Capability '$($Envelope.capability)' not supported by this Minion." }
     }
 
-    # 4. Expiration validation
+    # 5. Validity window
     $nowEpoch = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-    if ($Envelope.expires_at -and ($Envelope.expires_at -lt $nowEpoch)) {
+    $clockSkewSeconds = 300
+    if ([double]$Envelope.expires_at -lt $nowEpoch) {
         return @{ IsValid = $false; Reason = "MISSION_EXPIRED"; Message = "Mission expired at $($Envelope.expires_at), current time is $nowEpoch." }
     }
-
-    # 5. Nonce / replay validation
-    if (-not $AllowConsumedNonce -and -not (Test-MinionNonce -Nonce $Envelope.nonce -NonceStorePath $NonceStorePath)) {
-        return @{ IsValid = $false; Reason = "REPLAY_DETECTED"; Message = "Nonce '$($Envelope.nonce)' has already been consumed." }
+    if ([double]$Envelope.issued_at -gt $nowEpoch + $clockSkewSeconds -or [double]$Envelope.expires_at -le [double]$Envelope.issued_at) {
+        return @{ IsValid = $false; Reason = "INVALID_VALIDITY_WINDOW"; Message = "Mission issued_at/expires_at are not a plausible validity window." }
     }
 
     # 6. SluiceGate signature verification
     $signature = $Envelope.signature
-    if (-not $signature) {
-        return @{ IsValid = $false; Reason = "MISSING_SIGNATURE"; Message = "Mission envelope does not contain a signature." }
-    }
-
-    # Construct payload without signature for verification
     $payload = [ordered]@{}
     foreach ($prop in $Envelope.PSObject.Properties) {
         if ($prop.Name -ne "signature") {
@@ -485,6 +767,14 @@ function Test-MissionEnvelope {
 
     if (-not $sigValid) {
         return @{ IsValid = $false; Reason = "INVALID_SIGNATURE"; Message = "Cryptographic signature verification failed." }
+    }
+
+    # 7. Replay protection: consume the nonce atomically, only after the Mission is known to be authentic.
+    if (-not $AllowConsumedNonce) {
+        $retainUntil = [long][math]::Ceiling([double]$Envelope.expires_at) + $clockSkewSeconds
+        if (-not (Register-MinionNonce -Nonce $Envelope.nonce -NonceStorePath $NonceStorePath -RetainUntil $retainUntil)) {
+            return @{ IsValid = $false; Reason = "REPLAY_DETECTED"; Message = "Nonce '$($Envelope.nonce)' has already been consumed." }
+        }
     }
 
     return @{ IsValid = $true; Reason = $null; Message = "Mission envelope is valid." }
@@ -731,6 +1021,84 @@ function Invoke-MinionPostWithRetry {
     }
 }
 
+function New-MinionStatusBody {
+    <#
+    .SYNOPSIS
+        Builds the signed body of a status event. The body is the canonical text itself, so the service
+        parses exactly the values that were signed. Signature covers event_id, mission_id, minion_id,
+        claim_generation, status, detail and occurred_at.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$MinionId,
+        [Parameter(Mandatory = $true)][string]$MissionId,
+        [Parameter(Mandatory = $true)][string]$ClaimToken,
+        [Parameter(Mandatory = $true)][int]$ClaimGeneration,
+        [Parameter(Mandatory = $true)][string]$PrivateKeyPath,
+        [Parameter(Mandatory = $true)][string]$Status,
+        [hashtable]$Detail = @{},
+        [string]$EventId = ("evt-" + [System.Guid]::NewGuid().ToString("N")),
+        [long]$OccurredAt = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    )
+
+    $signedPayload = [ordered]@{
+        event_id         = $EventId
+        mission_id       = $MissionId
+        minion_id        = $MinionId
+        claim_generation = $ClaimGeneration
+        status           = $Status
+        detail           = $Detail
+        occurred_at      = $OccurredAt
+    }
+    $signature = New-MinionSignature -CanonicalJson (ConvertTo-CanonicalJson -InputObject $signedPayload) -PrivateKeyPath $PrivateKeyPath
+    return (ConvertTo-CanonicalJson -InputObject ([ordered]@{
+        event_id         = $EventId
+        claim_token      = $ClaimToken
+        claim_generation = $ClaimGeneration
+        status           = $Status
+        detail           = $Detail
+        occurred_at      = $OccurredAt
+        signature        = $signature
+    }))
+}
+
+function New-MinionResultBody {
+    <#
+    .SYNOPSIS
+        Builds the signed body of a terminal result. Signature covers event_id, mission_id, minion_id,
+        claim_generation, status and result.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$MinionId,
+        [Parameter(Mandatory = $true)][string]$MissionId,
+        [Parameter(Mandatory = $true)][string]$ClaimToken,
+        [Parameter(Mandatory = $true)][int]$ClaimGeneration,
+        [Parameter(Mandatory = $true)][string]$PrivateKeyPath,
+        [Parameter(Mandatory = $true)][string]$Status,
+        [Parameter(Mandatory = $true)][hashtable]$Result,
+        [string]$EventId = ("evt-" + [System.Guid]::NewGuid().ToString("N"))
+    )
+
+    $signedPayload = [ordered]@{
+        event_id         = $EventId
+        mission_id       = $MissionId
+        minion_id        = $MinionId
+        claim_generation = $ClaimGeneration
+        result           = $Result
+        status           = $Status
+    }
+    $signature = New-MinionSignature -CanonicalJson (ConvertTo-CanonicalJson -InputObject $signedPayload) -PrivateKeyPath $PrivateKeyPath
+    return (ConvertTo-CanonicalJson -InputObject ([ordered]@{
+        event_id         = $EventId
+        claim_token      = $ClaimToken
+        claim_generation = $ClaimGeneration
+        status           = $Status
+        result           = $Result
+        signature        = $signature
+    }))
+}
+
 function Send-MinionStatus {
     [CmdletBinding()]
     param(
@@ -750,6 +1118,12 @@ function Send-MinionStatus {
         [string]$ClaimToken,
 
         [Parameter(Mandatory = $true)]
+        [int]$ClaimGeneration,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PrivateKeyPath,
+
+        [Parameter(Mandatory = $true)]
         [string]$Status,
 
         [hashtable]$Detail = @{}
@@ -761,14 +1135,7 @@ function Send-MinionStatus {
         "Content-Type"  = "application/json"
     }
 
-    $eventId = "evt-" + [System.Guid]::NewGuid().ToString("N")
-    $body = @{
-        event_id    = $eventId
-        claim_token = $ClaimToken
-        status      = $Status
-        detail      = $Detail
-        occurred_at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-    } | ConvertTo-Json -Depth 6
+    $body = New-MinionStatusBody -MinionId $MinionId -MissionId $MissionId -ClaimToken $ClaimToken -ClaimGeneration $ClaimGeneration -PrivateKeyPath $PrivateKeyPath -Status $Status -Detail $Detail
 
     $response = Invoke-MinionPostWithRetry -Uri $url -Headers $headers -Body $body -TimeoutSec 15
     return $response
@@ -828,6 +1195,9 @@ function Send-MinionResult {
         [string]$ClaimToken,
 
         [Parameter(Mandatory = $true)]
+        [int]$ClaimGeneration,
+
+        [Parameter(Mandatory = $true)]
         [string]$PrivateKeyPath,
 
         [Parameter(Mandatory = $true)]
@@ -852,25 +1222,7 @@ function Send-MinionResult {
         "Content-Type"  = "application/json"
     }
 
-    $eventId = "evt-" + [System.Guid]::NewGuid().ToString("N")
-    $signedPayload = [ordered]@{
-        event_id   = $eventId
-        mission_id = $MissionId
-        minion_id  = $MinionId
-        result     = $Result
-        status     = $Status
-    }
-
-    $canonicalJson = ConvertTo-CanonicalJson -InputObject $signedPayload
-    $signature = New-MinionSignature -CanonicalJson $canonicalJson -PrivateKeyPath $PrivateKeyPath
-
-    $body = @{
-        event_id  = $eventId
-        claim_token = $ClaimToken
-        status    = $Status
-        result    = $Result
-        signature = $signature
-    } | ConvertTo-Json -Depth 10
+    $body = New-MinionResultBody -MinionId $MinionId -MissionId $MissionId -ClaimToken $ClaimToken -ClaimGeneration $ClaimGeneration -PrivateKeyPath $PrivateKeyPath -Status $Status -Result $Result
 
     $response = Invoke-MinionPostWithRetry -Uri $url -Headers $headers -Body $body -TimeoutSec 20
     return @{
@@ -884,7 +1236,8 @@ Export-ModuleMember -Function `
     Test-MinionSignature, `
     New-MinionSignature, `
     Test-MinionNonce, `
-    Add-MinionNonce, `
+    Register-MinionNonce, `
+    Get-MissionEnvelopeSchemaErrors, `
     Test-MissionEnvelope, `
     Set-MinionTransportSecurity, `
     Invoke-MinionHttp, `
@@ -893,5 +1246,7 @@ Export-ModuleMember -Function `
     Invoke-MinionCheckIn, `
     Get-MinionMissionClaim, `
     Send-MinionHeartbeat, `
+    New-MinionStatusBody, `
+    New-MinionResultBody, `
     Send-MinionStatus, `
     Send-MinionResult

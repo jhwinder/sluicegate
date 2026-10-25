@@ -14,7 +14,7 @@ Initial event names:
 - `MISSION_CANCELLED`
 - `MISSION_EXPIRED`
 
-Status updates identify the mission, event name, occurrence time, and bounded structured detail. The service validates Minion identity, Mission assignment, current claim token/lease, and allowed state transition before persistence. Duplicate submissions are idempotent. Mission status detail is operator-facing; the originating Agent receives only aggregate request status.
+Status updates identify the mission, event name, occurrence time, and bounded structured detail, and are signed by the Minion (see Signed Events below). The service validates Minion identity, Mission assignment, current claim token/lease, and allowed state transition before persistence. Duplicate submissions are idempotent. Mission status detail is operator-facing; the originating Agent receives only aggregate request status.
 
 Claiming a Mission returns a random claim token that fences later heartbeat, status, and result submissions. Mission Control stores only its hash. The active Minion renews the lease through `POST /internal/v1/minions/{minion_id}/missions/{mission_id}/heartbeat`; the heartbeat includes the worker process ID/start time and bounded target-process details. If the lease expires, Mission Control may reissue the same Mission to the same registered Minion identity with a new claim token and incremented claim generation. Requests carrying an old token are rejected.
 
@@ -24,13 +24,40 @@ The single-host pilot stores per-Mission attempt/generation state in a protected
 
 Minions reach Mission Control only over HTTPS and refuse a plain `http://` URL. A Minion validates the server certificate's host name and validity period and has no option to skip validation. By default it uses the operating system's trust store; `TrustedServerCertificatePath` (a PEM file) restricts trust to a provisioned self-signed certificate or private CA, optionally constrained by `TrustedServerCertificateSha256` fingerprints. `AllowInsecureHttp` permits `http://` only for a loopback development endpoint. Bearer API keys are sent only over these validated connections.
 
+## Signed Events and Canonical JSON
+
+Every status event and every result is signed with the Minion's Ed25519 key; Mission Control verifies the signature against the registered public key before it records anything. A signature covers:
+
+| Event | Signed fields |
+| --- | --- |
+| Status | `event_id`, `mission_id`, `minion_id`, `claim_generation`, `status`, `detail`, `occurred_at` |
+| Result | `event_id`, `mission_id`, `minion_id`, `claim_generation`, `status`, `result` |
+
+Binding `claim_generation` means an event signed for one claim cannot be replayed into a later one; Mission Control also rejects an event whose generation is not the current one. Heartbeats are the one exception: they carry no signature and rely on the authenticated connection and the claim token, because they only extend a lease.
+
+Signatures are computed over canonical JSON: object keys sorted by ordinal comparison, no whitespace, strings written ASCII-only with lowercase `\uXXXX` escapes (`<`, `>`, `&` and `'` are not escaped), integral numbers written without a fraction (`1.0` becomes `1`), and other numbers as the shortest round-trip digits in positional notation. `NaN`, infinity and date objects cannot be signed. The Python service and the PowerShell module implement this independently; shared vectors in [test-vectors/canonical-json.json](test-vectors/canonical-json.json) are checked by both. The PowerShell Minion sends the canonical text itself as the request body, so Mission Control parses exactly the values that were signed.
+
+## Schemas
+
+Mission Control checks messages against versioned JSON Schemas and returns `422` for a message that does not conform:
+
+- [mission-envelope.schema.json](mission-envelope.schema.json): the signed Mission, including generic (non-patch) capabilities. Mission Control also checks every Mission it issues before delivery.
+- [mission-status-event.schema.json](mission-status-event.schema.json): the body of a status event.
+- [mission-result.schema.json](mission-result.schema.json): the body of a result.
+
+Windows PowerShell 5.1 has no JSON Schema validator, so the Minion validates Missions with a hand-written mirror (`Get-MissionEnvelopeSchemaErrors`). [test-vectors/envelope-fixtures.json](test-vectors/envelope-fixtures.json) holds valid and invalid Missions that the schema and the mirror must classify identically.
+
+## Replay Protection
+
+A Minion accepts a Mission only if its protocol version, structure, addressee, capability and validity window are right, its signature verifies, and its nonce has not been used. The nonce is consumed atomically (under a lock) after the signature check, and it is remembered until five minutes after the Mission's `expires_at`; nothing unexpired is ever evicted. The Minion rejects a Mission issued more than five minutes in the future.
+
 ## Initial Pilot Timing Defaults
 
 The following values are initial configurable pilot defaults:
 
 | Setting | Default | Meaning |
 | --- | ---: | --- |
-| Idle claim poll interval | 3600 seconds | Wait between checks when no Mission is available. |
+| Idle claim poll interval | 60 seconds | Wait between checks when no Mission is available. Must stay well under the service's `SG_MINION_STALE_SECONDS` (300), or the Minion is not routable. |
 | Retry interval | 30 seconds | Wait before retrying an eligible failed attempt. |
 | Per-attempt timeout | 300 seconds | Maximum duration of one execution attempt. |
 | Overall timeout | 900 seconds | Maximum elapsed execution time across attempts. |

@@ -62,8 +62,10 @@ curl -fsS http://127.0.0.1:8443/health
 | `SG_SIGNING_KEY_PATH` | `/run/secrets/sg-signing-key.pem` | Path to Ed25519 private key PEM file for signing Missions. |
 | `SG_POLICY_PATH` | `/config/policy.yml` | Path to active YAML policy file evaluated by `sg_core`. |
 | `SG_BOOTSTRAP_ADMIN_KEY` | *(None)* | Initial one-time administrator bearer token. Once you create permanent keys, remove this. |
-| `SG_PATCH_MINION_ID` | `PATCH-01` | Default fallback Minion ID if dynamic routing is bypassed. |
-| `SG_DEV_BOOTSTRAP` | `false` | When `true`, automatically registers development agent & minion keys. |
+| `SG_PATCH_MINION_ID` | `PATCH-01` | Minion ID used only when `SG_ALLOW_FALLBACK_MINION=true` and no registered Minion is eligible. |
+| `SG_ALLOW_FALLBACK_MINION` | `false` | Development only. Routes to `SG_PATCH_MINION_ID` when no eligible Minion exists; the routing record and a warning log mark it as a fallback. |
+| `SG_MINION_STALE_SECONDS` | `300` | A Minion with no check-in or claim within this window (or never) is not routable. `0` disables the check. |
+| `SG_DEV_BOOTSTRAP` | `false` | When `true`, automatically registers development agent & minion keys (the development Minion's scope is `*`). |
 | `SG_MINION_MAX_ATTEMPTS` | `3` | Maximum signed execution attempts per Mission. |
 | `SG_MINION_RETRY_INTERVAL_SECONDS` | `30` | Signed delay before an eligible retry. |
 | `SG_MINION_ATTEMPT_TIMEOUT_SECONDS` | `300` | Signed per-attempt execution deadline. |
@@ -96,12 +98,10 @@ The service includes a self-contained web console served directly at:
 ### UI Tabs & Functions
 
 #### 1. Missions & Audit Tab
-- **View All Transactions**: Displays an append-only ledger of every request submitted to SluiceGate.
-- **Inspect Detailed Trace**: Click **Inspect** on any row to view the full cryptographic trace:
-  - Original Request ID and Mission ID
-  - Selected Minion
-  - SluiceGate Policy Decision (`ALLOW`, `PAUSE`, `BLOCK`) and policy provenance hash
-  - Status updates and timestamps
+- **View Transactions**: Shows the current Mission summary. The Audit Events table shows correlated request receipt, policy decision, routing, signed Mission envelope, claim/recovery, status/result, signature-verification, approval and administrative-mutation events.
+- **Filter and inspect**: Search by request/transaction ID, Mission, Agent, Minion, status, event type, and occurred-at time. Inspect an event to view its structured evidence, including the signed payload where relevant.
+- **API**: `GET /admin/v1/audit-events` accepts `request_id` (or `transaction_id`), `mission_id`, `agent_id`, `minion_id`, `status_filter`, `event_type`, `since`, `until`, `limit` (1-500), and `before_id`. It requires an Admin bearer token.
+- **Storage limits**: Audit rows are retained without automatic expiry. SQLite triggers prevent ordinary application updates/deletes but do not make the database tamper-proof against a host or database administrator. Back up the WSL database and signing-key environment securely; use an independent immutable log store when stronger tamper evidence is required.
 
 #### 2. Pending Approvals Tab
 - **Human-in-the-Loop Gate**: Shows all actions currently held in `WAITING_FOR_APPROVAL` (`PAUSE` policy decision).
@@ -119,8 +119,11 @@ The service includes a self-contained web console served directly at:
 
 #### 4. Minion Registry Tab
 - **Register New Minion**: Click **+ Register New Minion**, specify the Minion ID (e.g., `PATCH-01`), friendly name, supported capabilities (e.g., `windows.patch.reconcile`), and paste the Minion's Ed25519 public key PEM.
-- **Copy Minion Key**: Copy the issued Minion Mission Control API key and configure it in `minion.config.json`.
-- **Health & Heartbeat**: Displays `Last Contact` timestamp updated whenever the Minion checks in.
+- **Copy Minion Key**: Copy the issued Minion Mission Control API key once, then store it in the Minion's ACL-protected key file with `Set-MinionApiKey.ps1`. Generated JSON contains `ApiKeyPath`, never the key itself.
+- **Generate Configuration**: Use **Config** to download a runtime-shaped `minion.config.json` with the registered Minion ID, editable Mission Control URL and deployment paths, certificate trust, polling interval, and safe `DryRun: true` default.
+- **Package Approval**: Record the approved version and SHA-256 for the deployed Minion package.
+- **Health & Heartbeat**: Displays `Last Contact`, computed health/staleness, active Mission count, and recent Mission details.
+- **Key Lifecycle**: Inspect key fingerprints and active/disabled/revoked states; rotate or revoke keys without exposing stored credential material.
 
 #### 5. Notification Profiles Tab
 - **Create Notification Profile**: Route lifecycle events (such as `PAUSE_CREATED`, `REQUEST_APPROVED`, `REQUEST_REJECTED`, `MISSION_COMPLETE_FAILED`) to a chosen adapter and recipient list. Email profiles require valid recipient addresses.

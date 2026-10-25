@@ -53,7 +53,7 @@ def test_installer_helpers_and_api_key_loading(tmp_path: Path) -> None:
     assert plain["DryRun"] is True
     assert "ApiKey" not in plain and plain["ApiKeyPath"].endswith("minion-api-key.txt")
     assert "TrustedServerCertificatePath" not in plain and "TrustedServerCertificateSha256" not in plain
-    assert plain["PollIntervalSeconds"] == 3600  # template values the installer does not override are kept
+    assert plain["PollIntervalSeconds"] == 60  # template values the installer does not override are kept
 
     trusted = results["config_with_certificate"]["value"]
     assert trusted["TrustedServerCertificatePath"].endswith("sg-server-cert.pem")

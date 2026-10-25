@@ -1,0 +1,95 @@
+{
+  "description": "Shared canonical JSON vectors; Python and PowerShell must produce `canonical` from `input`.",
+  "canonical": [
+    {
+      "name": "nested objects and arrays sort by key",
+      "input": "{\"b\":1,\"a\":{\"d\":[3,2,1],\"c\":null}}",
+      "canonical": "{\"a\":{\"c\":null,\"d\":[3,2,1]},\"b\":1}"
+    },
+    {
+      "name": "keys sort ordinally, not by culture",
+      "input": "{\"a\":1,\"B\":2,\"_\":3,\"Z\":4,\"a_b\":5,\"ab\":6}",
+      "canonical": "{\"B\":2,\"Z\":4,\"_\":3,\"a\":1,\"a_b\":5,\"ab\":6}"
+    },
+    {
+      "name": "empty containers",
+      "input": "{\"a\":[],\"b\":{},\"c\":[[]],\"d\":[{}]}",
+      "canonical": "{\"a\":[],\"b\":{},\"c\":[[]],\"d\":[{}]}"
+    },
+    {
+      "name": "literals",
+      "input": "[true,false,null]",
+      "canonical": "[true,false,null]"
+    },
+    {
+      "name": "short escapes",
+      "input": "\"q\\\" b\\\\ s/ t\\t n\\n r\\r bs\\b ff\\f\"",
+      "canonical": "\"q\\\" b\\\\ s/ t\\t n\\n r\\r bs\\b ff\\f\""
+    },
+    {
+      "name": "control characters and DEL",
+      "input": "\"\\u0001\\u001f\\u007f\"",
+      "canonical": "\"\\u0001\\u001f\\u007f\""
+    },
+    {
+      "name": "html characters are not escaped",
+      "input": "\"<a href='x'>&</a>\"",
+      "canonical": "\"<a href='x'>&</a>\""
+    },
+    {
+      "name": "non-ASCII is escaped in lowercase hex",
+      "input": "\"é 日本 😀\"",
+      "canonical": "\"\\u00e9 \\u65e5\\u672c \\ud83d\\ude00\""
+    },
+    {
+      "name": "integers",
+      "input": "[0,-0,7,-7,1700000000,9007199254740993]",
+      "canonical": "[0,0,7,-7,1700000000,9007199254740993]"
+    },
+    {
+      "name": "integral numbers lose the fraction",
+      "input": "[1.0,100.0,1e2,-3.0]",
+      "canonical": "[1,100,100,-3]"
+    },
+    {
+      "name": "fractions use shortest round-trip digits",
+      "input": "[1.5,0.1,100.25,1700000000.125,0.30000000000000004]",
+      "canonical": "[1.5,0.1,100.25,1700000000.125,0.30000000000000004]"
+    },
+    {
+      "name": "exponents are written positionally",
+      "input": "[0.00001,1.2345678901234566e-7,1.2345678901234568e20]",
+      "canonical": "[0.00001,0.00000012345678901234566,123456789012345680000]"
+    },
+    {
+      "name": "timestamp-like strings stay strings",
+      "input": "{\"start_utc\":\"2999-01-01T00:00:00Z\"}",
+      "canonical": "{\"start_utc\":\"2999-01-01T00:00:00Z\"}",
+      "requires_string_dates": true
+    }
+  ],
+  "signature": {
+    "note": "Test-only Ed25519 key; never used outside tests.",
+    "private_key_pem": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIKcCoXKVXdSRwVKgVdOKNdoOwIn/rFAy1hNnE+qJ3bl8\n-----END PRIVATE KEY-----\n",
+    "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA1528O+pQelnLhogXcanWE1Cw9NVJ8cb9rYggmkaWSZw=\n-----END PUBLIC KEY-----\n",
+    "payload": {
+      "event_id": "evt-vector",
+      "mission_id": "MISSION-VECTOR",
+      "minion_id": "PATCH-01",
+      "claim_generation": 2,
+      "status": "MISSION_COMPLETE_FAILED",
+      "result": {
+        "retryable": true,
+        "error": "Zugriff verweigert: é 日本 😀 <x>",
+        "targets": [
+          {
+            "server": "SERVER-01",
+            "seconds": 1.25
+          }
+        ]
+      }
+    },
+    "canonical": "{\"claim_generation\":2,\"event_id\":\"evt-vector\",\"minion_id\":\"PATCH-01\",\"mission_id\":\"MISSION-VECTOR\",\"result\":{\"error\":\"Zugriff verweigert: \\u00e9 \\u65e5\\u672c \\ud83d\\ude00 <x>\",\"retryable\":true,\"targets\":[{\"seconds\":1.25,\"server\":\"SERVER-01\"}]},\"status\":\"MISSION_COMPLETE_FAILED\"}",
+    "signature_hex": "dcff0ef91a037014695cf07d3cf01d57f572f94b3066cad9b0592075a6aba533f5f7df362fadcdcedbbe559a185f06338cd0f8e2333a59506d6d3cf8d56b4801"
+  }
+}

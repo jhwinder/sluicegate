@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sluicegate.example/schemas/mission-status-event-1.0.json",
+  "title": "SluiceGate Mission Status Event",
+  "description": "Body of POST /internal/v1/minions/{minion_id}/missions/{mission_id}/status. The signature covers event_id, mission_id, minion_id, claim_generation, status, detail and occurred_at.",
+  "type": "object",
+  "required": ["event_id", "claim_token", "claim_generation", "status", "detail", "occurred_at", "signature"],
+  "properties": {
+    "event_id": {"type": "string", "minLength": 1, "maxLength": 160},
+    "claim_token": {"type": "string", "minLength": 32, "maxLength": 128},
+    "claim_generation": {"type": "integer", "minimum": 1},
+    "status": {"enum": ["MISSION_ACKNOWLEDGED", "MISSION_IN_PROGRESS", "MISSION_WAITING_FOR_REBOOT", "MISSION_REJECTED", "MISSION_CANCELLED", "MISSION_EXPIRED"]},
+    "detail": {"type": "object"},
+    "occurred_at": {"type": "number", "minimum": 0},
+    "signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+  },
+  "additionalProperties": false
+}

@@ -31,6 +31,7 @@ def test_service_pause_and_approval_workflow(tmp_path: Path, monkeypatch) -> Non
     monkeypatch.setattr(service, "DATABASE_PATH", database_path)
     monkeypatch.setattr(service, "SIGNING_KEY_PATH", signing_key_path)
     monkeypatch.setattr(service, "POLICY_PATH", policy_path)
+    monkeypatch.setattr(service, "ALLOW_FALLBACK_MINION", True)
     monkeypatch.setenv("SG_BOOTSTRAP_ADMIN_KEY", "test-admin-secret")
 
     # Policy with approval requirement rule:
@@ -136,7 +137,7 @@ def test_service_pause_and_approval_workflow(tmp_path: Path, monkeypatch) -> Non
         claimed_mission = claim_after.json()
         assert claimed_mission is not None
         assert claimed_mission["envelope"]["policy_decision"] == "ALLOW"
-        assert claimed_mission["envelope"]["approval_evidence"]["approver"] == "sec-lead"
+        assert claimed_mission["envelope"]["approval_evidence"]["approver"] == "admin"
 
 
 def test_service_rejection_workflow(tmp_path: Path, monkeypatch) -> None:
@@ -158,6 +159,7 @@ def test_service_rejection_workflow(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(service, "DATABASE_PATH", database_path)
     monkeypatch.setattr(service, "SIGNING_KEY_PATH", signing_key_path)
     monkeypatch.setattr(service, "POLICY_PATH", policy_path)
+    monkeypatch.setattr(service, "ALLOW_FALLBACK_MINION", True)
     monkeypatch.setenv("SG_BOOTSTRAP_ADMIN_KEY", "test-admin-secret")
 
     policy_content = "\n".join([
