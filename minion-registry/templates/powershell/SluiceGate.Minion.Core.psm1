@@ -672,7 +672,7 @@ function Get-MissionEnvelopeSchemaErrors {
                 }
                 if ($parameterNames -ccontains "patch_constraints") {
                     $constraints = Get-JsonMember $parameters "patch_constraints"
-                    $constraintNames = @("allowed_patch_types", "allow_reboot", "outside_window_decision")
+                    $constraintNames = @("allowed_patch_types", "allow_reboot", "outside_window", "window_override")
                     if (Test-Members $constraints "parameters/patch_constraints" @("allowed_patch_types", "allow_reboot") $constraintNames) {
                         $present = Get-JsonMemberNames $constraints
                         if ($present -ccontains "allowed_patch_types") {
@@ -680,17 +680,35 @@ function Get-MissionEnvelopeSchemaErrors {
                             if (-not (Test-JsonArray $types) -or @($types | Where-Object { $_ -isnot [string] }).Count) { $errors.Add("parameters/patch_constraints/allowed_patch_types: must be an array of strings") }
                         }
                         if ($present -ccontains "allow_reboot" -and (Get-JsonMember $constraints "allow_reboot") -isnot [bool]) { $errors.Add("parameters/patch_constraints/allow_reboot: must be a boolean") }
-                        if ($present -ccontains "outside_window_decision") {
-                            $decision = Get-JsonMember $constraints "outside_window_decision"
-                            if ($null -ne $decision -and ($decision -isnot [string] -or @("PAUSE", "BLOCK") -cnotcontains $decision)) { $errors.Add("parameters/patch_constraints/outside_window_decision: must be PAUSE, BLOCK or null") }
+                        if ($present -ccontains "outside_window") {
+                            $outside = Get-JsonMember $constraints "outside_window"
+                            if ($null -ne $outside -and ($outside -isnot [string] -or @("WAIT", "BLOCK") -cnotcontains $outside)) { $errors.Add("parameters/patch_constraints/outside_window: must be WAIT, BLOCK or null") }
+                        }
+                        if ($present -ccontains "window_override") {
+                            $override = Get-JsonMember $constraints "window_override"
+                            if (Test-Members $override "parameters/patch_constraints/window_override" @("approved_by", "approved_at") @("approved_by", "approved_at")) {
+                                $overrideNames = Get-JsonMemberNames $override
+                                if ($overrideNames -ccontains "approved_by" -and -not (Test-NonEmptyText (Get-JsonMember $override "approved_by"))) { $errors.Add("parameters/patch_constraints/window_override/approved_by: must be a non-empty string") }
+                                if ($overrideNames -ccontains "approved_at" -and -not ((Test-JsonNumber (Get-JsonMember $override "approved_at")) -and [double](Get-JsonMember $override "approved_at") -ge 0)) { $errors.Add("parameters/patch_constraints/window_override/approved_at: must be a non-negative number") }
+                            }
                         }
                     }
                 }
                 if ($parameterNames -ccontains "maintenance_window") {
                     $window = Get-JsonMember $parameters "maintenance_window"
-                    if ($null -ne $window -and (Test-Members $window "parameters/maintenance_window" @("start_utc", "end_utc") @("start_utc", "end_utc"))) {
-                        foreach ($name in "start_utc", "end_utc") {
-                            if ((Get-JsonMemberNames $window) -ccontains $name -and -not (Test-JsonDateTimeText (Get-JsonMember $window $name))) { $errors.Add("parameters/maintenance_window/${name}: must be a date-time string") }
+                    if ($null -ne $window -and (Test-Members $window "parameters/maintenance_window" @("timezone", "days", "start", "end") @("timezone", "days", "start", "end"))) {
+                        $windowNames = Get-JsonMemberNames $window
+                        if ($windowNames -ccontains "timezone" -and -not (Test-NonEmptyText (Get-JsonMember $window "timezone"))) { $errors.Add("parameters/maintenance_window/timezone: must be a non-empty string") }
+                        if ($windowNames -ccontains "days") {
+                            $days = Get-JsonMember $window "days"
+                            $validDays = @("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
+                            if (-not (Test-JsonArray $days) -or @($days).Count -lt 1 -or @($days | Where-Object { $_ -isnot [string] -or $validDays -cnotcontains $_ }).Count -or @($days | Select-Object -Unique).Count -ne @($days).Count) { $errors.Add("parameters/maintenance_window/days: must be a non-empty array of unique MON..SUN values") }
+                        }
+                        foreach ($name in "start", "end") {
+                            if ($windowNames -ccontains $name) {
+                                $time = Get-JsonMember $window $name
+                                if ($time -isnot [string] -or $time -cnotmatch '^([01]\d|2[0-3]):[0-5]\d$') { $errors.Add("parameters/maintenance_window/${name}: must be an HH:MM time") }
+                            }
                         }
                     }
                 }

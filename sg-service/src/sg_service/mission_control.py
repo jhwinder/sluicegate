@@ -22,6 +22,7 @@ from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator, Generator
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 from cryptography.exceptions import InvalidSignature
@@ -35,7 +36,7 @@ from sg_poledit.validate import validate_policy_dict
 
 from sg_service import notifications
 from sg_service.hardening import HardeningMiddleware
-from sg_service.protocol import canonical_json, schema_errors
+from sg_service.protocol import canonical_json, schema_errors, supported_time_zones
 
 DATABASE_PATH = Path(os.environ.get("SG_DATABASE_PATH", "/data/sg-service.sqlite3"))
 SIGNING_KEY_PATH = Path(os.environ.get("SG_SIGNING_KEY_PATH", "/run/secrets/sg-signing-key.pem"))
@@ -968,7 +969,8 @@ def resolve_patch_policy(
 
     required_constraint_fields = {"patch_sources", "allowed_patch_types", "allow_reboot", "maintenance_window"}
     maintenance_window = constraints.get("maintenance_window") if isinstance(constraints, dict) else None
-    valid_window = is_valid_maintenance_window(maintenance_window)
+    outside_window = constraints.get("outside_window", "WAIT") if isinstance(constraints, dict) else None
+    wait_max_hours = constraints.get("wait_max_hours", DEFAULT_WAIT_MAX_HOURS) if isinstance(constraints, dict) else None
     if (
         decision not in {"ALLOW", "PAUSE"}
         or not normalized_allowed
@@ -979,37 +981,57 @@ def resolve_patch_policy(
         or not set(constraints["patch_sources"]).issubset({"wsus", "nessus_catalog"})
         or not isinstance(constraints.get("allowed_patch_types"), list)
         or not isinstance(constraints.get("allow_reboot"), bool)
-        or not valid_window
-        or (
-            maintenance_window is not None
-            and constraints.get("outside_window_decision") not in {"PAUSE", "BLOCK"}
-        )
+        or not is_valid_maintenance_window(maintenance_window)
+        or outside_window not in {"WAIT", "BLOCK"}
+        or isinstance(wait_max_hours, bool)
+        or not isinstance(wait_max_hours, int)
+        or not 1 <= wait_max_hours <= MAX_WAIT_MAX_HOURS
     ):
         return "BLOCK", [], {}
 
-    return decision, authorized_servers, constraints
+    return decision, authorized_servers, {**constraints, "outside_window": outside_window, "wait_max_hours": wait_max_hours}
 
 
-def parse_utc_timestamp(value: Any) -> datetime | None:
-    if not isinstance(value, str):
+WINDOW_DAYS = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
+WINDOW_TIME_PATTERN = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+DEFAULT_WAIT_MAX_HOURS = 168
+MAX_WAIT_MAX_HOURS = 8760
+
+
+def parse_window_time(value: Any) -> int | None:
+    """Return seconds after local midnight for an HH:MM string."""
+    match = WINDOW_TIME_PATTERN.match(value) if isinstance(value, str) else None
+    return (int(match.group(1)) * 60 + int(match.group(2))) * 60 if match else None
+
+
+def window_zone(name: Any) -> ZoneInfo | None:
+    if not isinstance(name, str) or not name or name != name.strip():
+        return None
+    if name not in supported_time_zones():
         return None
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError, OSError):
         return None
-    if parsed.tzinfo is None or parsed.utcoffset().total_seconds() != 0:
-        return None
-    return parsed.astimezone(timezone.utc)
 
 
 def is_valid_maintenance_window(window: Any) -> bool:
+    """A recurring weekly window: {timezone, days, start, end}. end <= start crosses midnight; days name the start day."""
     if window is None:
         return True
-    if not isinstance(window, dict) or set(window) != {"start_utc", "end_utc"}:
+    if not isinstance(window, dict) or set(window) != {"timezone", "days", "start", "end"}:
         return False
-    start = parse_utc_timestamp(window.get("start_utc"))
-    end = parse_utc_timestamp(window.get("end_utc"))
-    return start is not None and end is not None and end > start
+    days = window["days"]
+    if (
+        not isinstance(days, list)
+        or not days
+        or len(set(days)) != len(days)
+        or any(not isinstance(day, str) or day not in WINDOW_DAYS for day in days)
+    ):
+        return False
+    start = parse_window_time(window["start"])
+    end = parse_window_time(window["end"])
+    return window_zone(window["timezone"]) is not None and start is not None and end is not None and start != end
 
 
 def is_maintenance_window_open(window: Any, *, now: datetime | None = None) -> bool:
@@ -1017,10 +1039,42 @@ def is_maintenance_window_open(window: Any, *, now: datetime | None = None) -> b
         return True
     if not is_valid_maintenance_window(window):
         return False
-    current = now or datetime.now(timezone.utc)
-    start = parse_utc_timestamp(window["start_utc"])
-    end = parse_utc_timestamp(window["end_utc"])
-    return start <= current.astimezone(timezone.utc) < end
+    local = (now or datetime.now(timezone.utc)).astimezone(window_zone(window["timezone"]))
+    seconds = local.hour * 3600 + local.minute * 60 + local.second
+    start = parse_window_time(window["start"])
+    end = parse_window_time(window["end"])
+    today = WINDOW_DAYS[local.weekday()]
+    yesterday = WINDOW_DAYS[(local.weekday() - 1) % 7]
+    if start < end:
+        return today in window["days"] and start <= seconds < end
+    return (today in window["days"] and seconds >= start) or (yesterday in window["days"] and seconds < end)
+
+
+def patch_mission_parameters(constraints: dict[str, Any], window_override: dict[str, Any] | None = None) -> dict[str, Any]:
+    patch_constraints: dict[str, Any] = {
+        "allowed_patch_types": constraints.get("allowed_patch_types", []),
+        "allow_reboot": constraints.get("allow_reboot", False),
+        "outside_window": constraints.get("outside_window") if constraints.get("maintenance_window") is not None else None,
+    }
+    if window_override is not None:
+        patch_constraints["window_override"] = window_override
+    return {
+        "patch_sources": constraints.get("patch_sources", []),
+        "patch_constraints": patch_constraints,
+        "maintenance_window": constraints.get("maintenance_window"),
+    }
+
+
+def envelope_window_override_active(envelope: dict[str, Any]) -> bool:
+    constraints = envelope.get("parameters", {}).get("patch_constraints", {})
+    return isinstance(constraints, dict) and constraints.get("window_override") is not None
+
+
+def envelope_waits_for_window(envelope: dict[str, Any], *, now: datetime | None = None) -> bool:
+    parameters = envelope.get("parameters", {})
+    if envelope.get("capability") != "windows.patch.reconcile" or envelope_window_override_active(envelope):
+        return False
+    return not is_maintenance_window_open(parameters.get("maintenance_window"), now=now)
 
 
 def decide_patch_policy(
@@ -1028,6 +1082,7 @@ def decide_patch_policy(
     requested_servers: list[str],
     context: dict[str, Any] | None = None,
 ) -> tuple[str, list[str], dict[str, Any], list[Any], str]:
+    """An approved request is exempt from the outside-window BLOCK: approval means run now."""
     if policy_engine is None:
         raise HTTPException(status_code=503, detail="Policy engine is not initialized")
     policy_request = GateRequest(
@@ -1049,8 +1104,13 @@ def decide_patch_policy(
         decision,
         obligations,
     )
-    if decision == "ALLOW" and not is_maintenance_window_open(constraints.get("maintenance_window")):
-        decision = constraints.get("outside_window_decision", "BLOCK")
+    if (
+        decision == "ALLOW"
+        and constraints.get("outside_window") == "BLOCK"
+        and "approval" not in (context or {})
+        and not is_maintenance_window_open(constraints.get("maintenance_window"))
+    ):
+        decision = "BLOCK"
     return decision, authorized_servers, constraints, obligations, policy_hash
 
 
@@ -1284,18 +1344,14 @@ def create_patch_request(request: PatchRequest, principal: str = Depends(require
         "minion_id": assigned_minion_id,
         "capability": "windows.patch.reconcile",
         "target": {"servers": authorized_servers},
-        "parameters": {
-            "patch_sources": patch_constraints.get("patch_sources", []),
-            "patch_constraints": {
-                "allowed_patch_types": patch_constraints.get("allowed_patch_types", []),
-                "allow_reboot": patch_constraints.get("allow_reboot", False),
-                "outside_window_decision": patch_constraints.get("outside_window_decision"),
-            },
-            "maintenance_window": patch_constraints.get("maintenance_window"),
-        },
+        "parameters": patch_mission_parameters(patch_constraints),
         "execution": mission_execution_settings(),
         "issued_at": issued_at,
-        "expires_at": issued_at + 86400,
+        "expires_at": issued_at + (
+            int(patch_constraints["wait_max_hours"]) * 3600
+            if patch_constraints.get("maintenance_window") is not None and decision == "ALLOW"
+            else 86400
+        ),
         "nonce": secrets.token_urlsafe(24),
         "requested_by": principal,
         "policy_hash": policy_hash,
@@ -1504,7 +1560,6 @@ def mission_heartbeat(
 def claim_mission(minion_id: str, principal: str = Depends(require_minion)) -> dict[str, Any] | None:
     if minion_id != principal:
         raise HTTPException(status_code=403, detail="Minion identity not authorized")
-    outside_window_notifications: list[tuple[str, str]] = []
     claimed_mission: dict[str, Any] | None = None
     retry_deadlines: list[float] = []
     with transaction() as connection:
@@ -1585,32 +1640,28 @@ def claim_mission(minion_id: str, principal: str = Depends(require_minion)) -> d
                 record_audit_event("mission.expired", "SERVICE", "sg-service", request_id=row["request_id"], mission_id=row["mission_id"], minion_id=minion_id, status="MISSION_EXPIRED", detail={"reason": "MAX_ATTEMPTS_EXHAUSTED", "attempts": int(row["attempt_count"])}, connection=connection)
                 continue
 
-            window = envelope.get("parameters", {}).get("maintenance_window")
-            if not is_maintenance_window_open(window, now=datetime.fromtimestamp(now, timezone.utc)):
-                outside_decision = envelope.get("parameters", {}).get("patch_constraints", {}).get("outside_window_decision")
-                if outside_decision not in {"PAUSE", "BLOCK"}:
-                    outside_decision = "BLOCK"
-                next_status = "WAITING_FOR_APPROVAL" if outside_decision == "PAUSE" else "CLOSED"
-                envelope["policy_decision"] = outside_decision
-                sign_envelope(envelope, deliverable=False)
-                connection.execute(
-                    "UPDATE missions SET envelope = ?, status = ?, updated_at = ? WHERE mission_id = ? AND status = 'QUEUED'",
-                    (json.dumps(envelope), next_status, now, row["mission_id"]),
-                )
-                connection.execute(
-                    "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    (
-                        f"EVT-WINDOW-{uuid.uuid4().hex}",
-                        row["mission_id"],
-                        next_status,
-                        json.dumps({"reason": "OUTSIDE_MAINTENANCE_WINDOW", "decision": outside_decision}),
-                        now,
-                        now,
-                    ),
-                )
-                record_audit_event("policy.window_blocked", "SERVICE", "sg-service", request_id=row["request_id"], mission_id=row["mission_id"], minion_id=minion_id, status=next_status, detail={"reason": "OUTSIDE_MAINTENANCE_WINDOW", "decision": outside_decision, "policy_hash": envelope.get("policy_hash")}, connection=connection)
-                if outside_decision == "PAUSE":
-                    outside_window_notifications.append((row["request_id"], row["mission_id"]))
+            if is_new_attempt and envelope_waits_for_window(envelope, now=datetime.fromtimestamp(now, timezone.utc)):
+                if now >= float(envelope.get("expires_at", 0)):
+                    connection.execute(
+                        "UPDATE missions SET status = 'MISSION_EXPIRED', updated_at = ? WHERE mission_id = ? AND status = 'QUEUED'",
+                        (now, row["mission_id"]),
+                    )
+                    connection.execute(
+                        "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
+                        (f"EVT-WAIT-EXPIRED-{uuid.uuid4().hex}", row["mission_id"], "MISSION_EXPIRED", json.dumps({"reason": "WAIT_FOR_WINDOW_EXPIRED"}), now, now),
+                    )
+                    record_audit_event("mission.expired", "SERVICE", "sg-service", request_id=row["request_id"], mission_id=row["mission_id"], minion_id=minion_id, status="MISSION_EXPIRED", detail={"reason": "WAIT_FOR_WINDOW_EXPIRED"}, connection=connection)
+                    continue
+                already_waiting = connection.execute(
+                    "SELECT 1 FROM mission_events WHERE mission_id = ? AND status = 'QUEUED' AND detail LIKE '%WAITING_FOR_WINDOW%' LIMIT 1",
+                    (row["mission_id"],),
+                ).fetchone()
+                if already_waiting is None:
+                    connection.execute(
+                        "INSERT INTO mission_events (event_id, mission_id, status, detail, occurred_at, received_at) VALUES (?, ?, ?, ?, ?, ?)",
+                        (f"EVT-WINDOW-{uuid.uuid4().hex}", row["mission_id"], "QUEUED", json.dumps({"reason": "WAITING_FOR_WINDOW"}), now, now),
+                    )
+                    record_audit_event("mission.waiting_for_window", "SERVICE", "sg-service", request_id=row["request_id"], mission_id=row["mission_id"], minion_id=minion_id, status="QUEUED", detail={"reason": "WAITING_FOR_WINDOW", "policy_hash": envelope.get("policy_hash")}, connection=connection)
                 continue
 
             connection.execute(
@@ -1657,13 +1708,6 @@ def claim_mission(minion_id: str, principal: str = Depends(require_minion)) -> d
         if claimed_mission is None and retry_deadlines:
             claimed_mission = {"retry_after_seconds": max(1, int(min(retry_deadlines) - now + 0.999))}
 
-    for request_id, mission_id in outside_window_notifications:
-        dispatch_notifications(
-            "PAUSE_CREATED",
-            request_id,
-            "Patch reconciliation is outside its approved maintenance window",
-            {"mission_id": mission_id, "reason": "OUTSIDE_MAINTENANCE_WINDOW"},
-        )
     return claimed_mission
 
 
@@ -1925,10 +1969,12 @@ def mission_result(
 def request_status(request_id: str, principal: str = Depends(require_agent)) -> dict[str, str]:
     check_agent_rate_limit(principal, "poll")
     with connect() as connection:
-        row = connection.execute("SELECT status FROM missions WHERE request_id = ? AND agent_id = ?", (request_id, principal)).fetchone()
+        row = connection.execute("SELECT status, envelope FROM missions WHERE request_id = ? AND agent_id = ?", (request_id, principal)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Request not found")
     state = row["status"]
+    if state == "QUEUED" and envelope_waits_for_window(json.loads(row["envelope"])):
+        return {"request_id": request_id, "status": "WAITING", "retry": "false"}
     external = "SUCCEEDED" if state == "MISSION_COMPLETE_SUCCEEDED" else "CLOSED" if state in {"CLOSED", "BLOCKED", "MISSION_COMPLETE_PARTIAL", "MISSION_COMPLETE_FAILED", "MISSION_REJECTED", "MISSION_CANCELLED", "MISSION_EXPIRED"} else "PENDING"
     return {"request_id": request_id, "status": external, "retry": "false"}
 
@@ -2084,15 +2130,12 @@ def approve_request(
             target_obj = {"servers": authorized_servers}
             envelope = json.loads(row["envelope"])
             envelope["target"] = target_obj
-            envelope["parameters"] = {
-                "patch_sources": patch_constraints.get("patch_sources", []),
-                "patch_constraints": {
-                    "allowed_patch_types": patch_constraints.get("allowed_patch_types", []),
-                    "allow_reboot": patch_constraints.get("allow_reboot", False),
-                    "outside_window_decision": patch_constraints.get("outside_window_decision"),
-                },
-                "maintenance_window": patch_constraints.get("maintenance_window"),
-            }
+            window_override = (
+                {"approved_by": approver_name, "approved_at": now}
+                if new_decision == "ALLOW" and not is_maintenance_window_open(patch_constraints.get("maintenance_window"))
+                else None
+            )
+            envelope["parameters"] = patch_mission_parameters(patch_constraints, window_override)
 
             if not authorized_servers:
                 new_decision = "BLOCK"

@@ -194,12 +194,17 @@ obligations:
     allowed_patch_types: [SECURITY]
     allow_reboot: false
     maintenance_window:
-      start_utc: "2026-10-16T00:00:00Z"
-      end_utc: "2026-10-16T04:00:00Z"
-    outside_window_decision: PAUSE
+      timezone: America/New_York   # IANA zone
+      days: [SAT, SUN]             # day the window starts
+      start: "01:00"               # local HH:MM
+      end: "05:00"                 # end < start crosses midnight
+    outside_window: WAIT           # WAIT (default) or BLOCK
+    wait_max_hours: 168            # optional; default 168, max 8760
 ```
 
-Use `outside_window_decision: PAUSE` to require administrator approval while the interval is closed; approval does not bypass the interval. `BLOCK` is also supported. The service and Minion check the signed interval before claiming or executing work.
+The window recurs weekly. With `outside_window: WAIT` (the default), an `ALLOW` request outside the window stays queued, the Agent sees status `WAITING`, and the Mission is claimed when the window opens; it expires after `wait_max_hours`. `BLOCK` rejects requests made outside the window. WAIT is a scheduling setting on `ALLOW`, not a decision.
+
+A `PAUSE` approval means "run now". If the window is closed when the administrator approves, the Mission carries a signed `window_override` (approver and time) and the Minion skips the window check; if the window is open at approval time, no override is added. The override never applies to requests that were not approved. `timezone` must be an IANA name listed in `minion-registry/protocol/windows-timezones.json`; the service rejects others. The Minion translates it to a Windows time zone id from that built-in map (Windows PowerShell 5.1 cannot resolve IANA ids), so no extra library is needed; add a zone to both the JSON file and `PatchingEngine.psm1` (a test enforces they match). A zone the host cannot resolve fails closed.
 
 The catalog's `install_command` must start with a bare executable name, such as `msiexec.exe`, followed by its arguments. `%PATCHPATH%` is replaced with the verified staged package path. The executable is launched directly without `cmd.exe`; the policy's `ALLOW` obligation is the authorization for the executable name.
 

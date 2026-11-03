@@ -21,9 +21,11 @@ rules:
         allowed_patch_types: [SECURITY]
         allow_reboot: true
         maintenance_window:
-          start_utc: "2026-10-16T00:00:00Z"
-          end_utc: "2026-10-16T04:00:00Z"
-        outside_window_decision: PAUSE
+          timezone: America/New_York
+          days: [SAT]
+          start: "01:00"
+          end: "05:00"
+        outside_window: WAIT
       - type: allowed_patch_executables
         executables: [msiexec.exe]
     decision: PAUSE
@@ -60,9 +62,11 @@ rules:
         allowed_patch_types: [SECURITY]
         allow_reboot: true
         maintenance_window:
-          start_utc: "2026-10-16T00:00:00Z"
-          end_utc: "2026-10-16T04:00:00Z"
-        outside_window_decision: PAUSE
+          timezone: America/New_York
+          days: [SAT]
+          start: "01:00"
+          end: "05:00"
+        outside_window: WAIT
       - type: allowed_patch_executables
         executables: [msiexec.exe]
     decision: ALLOW

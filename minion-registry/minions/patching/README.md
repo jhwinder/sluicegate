@@ -42,7 +42,7 @@ WUA update-classification IDs map to the shared policy vocabulary:
 
 The Minion installs only mapped WUA types listed in the signed Mission's `allowed_patch_types`; unmapped or conflicting metadata is `UNKNOWN` and is never installed. Updates requiring reboot are skipped when the signed Mission disallows reboot.
 
-Maintenance intervals use explicit UTC `start_utc` and `end_utc` timestamps. The policy also selects `outside_window_decision: PAUSE` or `BLOCK`. Approval never bypasses the interval; Mission Control withholds claims until it is open, and the Minion rechecks the signed interval before scanning/installing updates and before launching a catalog installer.
+Maintenance windows are recurring weekly windows (`timezone`, `days`, `start`, `end`). Policy sets `outside_window: WAIT|BLOCK`; with WAIT, Mission Control withholds the claim until the window opens. A PAUSE approval given while the window is closed adds a signed `window_override`, which makes the Minion skip the window. Otherwise the Minion rechecks the window before scanning/installing and before launching a catalog installer, failing closed on an unresolvable timezone.
 
 ## Configuration
 

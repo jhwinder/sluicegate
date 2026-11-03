@@ -72,9 +72,19 @@ Assert-Equal (Get-WuaRebootBehavior $securityUpdate) 0 "Expected no-reboot metad
 Assert-Equal (Get-WuaRebootBehavior $otherUpdate) 2 "Expected always-reboot metadata"
 Assert-Equal (Get-WuaRebootBehavior $unknownUpdate) $null "Expected unknown reboot metadata to fail closed"
 Assert-Equal (Test-MissionMaintenanceWindow $null) $true "Expected no interval to be unrestricted by time"
-Assert-Equal (Test-MissionMaintenanceWindow ([pscustomobject]@{ start_utc = "2999-01-01T00:00:00Z"; end_utc = "3000-01-01T00:00:00Z" })) $false "Expected future interval to be closed"
-Assert-Equal (Test-MissionMaintenanceWindow ([pscustomobject]@{ start_utc = "invalid"; end_utc = "3000-01-01T00:00:00Z" })) $false "Expected invalid interval to fail closed"
-Assert-Equal (Test-MissionMaintenanceWindow ([pscustomobject]@{ start_utc = "2999-01-01T00:00:00-07:00"; end_utc = "3000-01-01T00:00:00Z" })) $false "Expected non-UTC interval to fail closed"
+$satNight = [pscustomobject]@{ timezone = "UTC"; days = @("SAT"); start = "01:00"; end = "05:00" }
+$overnight = [pscustomobject]@{ timezone = "UTC"; days = @("FRI"); start = "22:00"; end = "04:00" }
+Assert-Equal (Test-MissionMaintenanceWindow $satNight -At ([DateTimeOffset]::Parse("2026-11-07T02:00:00Z"))) $true "Expected Saturday 02:00 to be inside the window"
+Assert-Equal (Test-MissionMaintenanceWindow $satNight -At ([DateTimeOffset]::Parse("2026-11-07T05:00:00Z"))) $false "Expected the end time to be exclusive"
+Assert-Equal (Test-MissionMaintenanceWindow $satNight -At ([DateTimeOffset]::Parse("2026-11-08T02:00:00Z"))) $false "Expected Sunday to be outside a Saturday window"
+Assert-Equal (Test-MissionMaintenanceWindow $overnight -At ([DateTimeOffset]::Parse("2026-11-06T23:00:00Z"))) $true "Expected Friday night to be inside the overnight window"
+Assert-Equal (Test-MissionMaintenanceWindow $overnight -At ([DateTimeOffset]::Parse("2026-11-07T03:00:00Z"))) $true "Expected Saturday early morning to belong to the Friday window"
+Assert-Equal (Test-MissionMaintenanceWindow $overnight -At ([DateTimeOffset]::Parse("2026-11-07T23:00:00Z"))) $false "Expected Saturday night to be outside a Friday window"
+$state = Get-MissionMaintenanceWindowState $overnight -At ([DateTimeOffset]::Parse("2026-11-06T23:00:00Z"))
+Assert-Equal $state.EndUtc.ToString("o") "2026-11-07T04:00:00.0000000+00:00" "Expected the overnight window to close at 04:00 the next day"
+Assert-Equal (Test-MissionMaintenanceWindow ([pscustomobject]@{ timezone = "Not/AZone"; days = @("SAT"); start = "01:00"; end = "05:00" })) $false "Expected an unknown timezone to fail closed"
+Assert-Equal (Test-MissionMaintenanceWindow ([pscustomobject]@{ timezone = "UTC"; days = @("SAT"); start = "1am"; end = "05:00" })) $false "Expected a malformed time to fail closed"
+Assert-Equal (Test-MissionMaintenanceWindow ([pscustomobject]@{ timezone = "UTC"; days = @("SATURDAY"); start = "01:00"; end = "05:00" })) $false "Expected an unknown day to fail closed"
 
 $missionDiaryPath = Join-Path ([System.IO.Path]::GetTempPath()) "sluice-mission-diary-$([guid]::NewGuid().ToString('N')).json"
 $targetDiaryPath = Join-Path ([System.IO.Path]::GetTempPath()) "sluice-target-diary-$([guid]::NewGuid().ToString('N')).json"

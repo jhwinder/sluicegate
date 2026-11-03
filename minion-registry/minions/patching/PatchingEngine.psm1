@@ -101,35 +101,183 @@ function Get-WuaRebootBehavior {
     return $value
 }
 
+# IANA -> Windows time zone ids. Windows PowerShell 5.1 (.NET Framework) resolves only
+# Windows ids from the registry, so policy IANA names are translated here. Must match
+# protocol/windows-timezones.json (enforced by sg-service tests).
+$script:IanaToWindowsTimeZone = @{
+    'UTC' = 'UTC'
+    'Etc/UTC' = 'UTC'
+    'Etc/GMT' = 'UTC'
+    'America/New_York' = 'Eastern Standard Time'
+    'America/Detroit' = 'Eastern Standard Time'
+    'America/Toronto' = 'Eastern Standard Time'
+    'America/Chicago' = 'Central Standard Time'
+    'America/Winnipeg' = 'Central Standard Time'
+    'America/Denver' = 'Mountain Standard Time'
+    'America/Edmonton' = 'Mountain Standard Time'
+    'America/Phoenix' = 'US Mountain Standard Time'
+    'America/Los_Angeles' = 'Pacific Standard Time'
+    'America/Vancouver' = 'Pacific Standard Time'
+    'America/Anchorage' = 'Alaskan Standard Time'
+    'Pacific/Honolulu' = 'Hawaiian Standard Time'
+    'America/Halifax' = 'Atlantic Standard Time'
+    'America/Puerto_Rico' = 'SA Western Standard Time'
+    'America/St_Johns' = 'Newfoundland Standard Time'
+    'America/Mexico_City' = 'Central Standard Time (Mexico)'
+    'America/Sao_Paulo' = 'E. South America Standard Time'
+    'America/Argentina/Buenos_Aires' = 'Argentina Standard Time'
+    'Europe/London' = 'GMT Standard Time'
+    'Europe/Dublin' = 'GMT Standard Time'
+    'Europe/Lisbon' = 'GMT Standard Time'
+    'Europe/Paris' = 'Romance Standard Time'
+    'Europe/Madrid' = 'Romance Standard Time'
+    'Europe/Berlin' = 'W. Europe Standard Time'
+    'Europe/Amsterdam' = 'W. Europe Standard Time'
+    'Europe/Rome' = 'W. Europe Standard Time'
+    'Europe/Zurich' = 'W. Europe Standard Time'
+    'Europe/Stockholm' = 'W. Europe Standard Time'
+    'Europe/Warsaw' = 'Central European Standard Time'
+    'Europe/Prague' = 'Central Europe Standard Time'
+    'Europe/Athens' = 'GTB Standard Time'
+    'Europe/Helsinki' = 'FLE Standard Time'
+    'Europe/Kyiv' = 'FLE Standard Time'
+    'Europe/Istanbul' = 'Turkey Standard Time'
+    'Europe/Moscow' = 'Russian Standard Time'
+    'Africa/Cairo' = 'Egypt Standard Time'
+    'Africa/Johannesburg' = 'South Africa Standard Time'
+    'Africa/Lagos' = 'W. Central Africa Standard Time'
+    'Africa/Nairobi' = 'E. Africa Standard Time'
+    'Asia/Jerusalem' = 'Israel Standard Time'
+    'Asia/Riyadh' = 'Arab Standard Time'
+    'Asia/Dubai' = 'Arabian Standard Time'
+    'Asia/Karachi' = 'Pakistan Standard Time'
+    'Asia/Kolkata' = 'India Standard Time'
+    'Asia/Dhaka' = 'Bangladesh Standard Time'
+    'Asia/Bangkok' = 'SE Asia Standard Time'
+    'Asia/Jakarta' = 'SE Asia Standard Time'
+    'Asia/Shanghai' = 'China Standard Time'
+    'Asia/Hong_Kong' = 'China Standard Time'
+    'Asia/Singapore' = 'Singapore Standard Time'
+    'Asia/Taipei' = 'Taipei Standard Time'
+    'Asia/Seoul' = 'Korea Standard Time'
+    'Asia/Tokyo' = 'Tokyo Standard Time'
+    'Australia/Perth' = 'W. Australia Standard Time'
+    'Australia/Adelaide' = 'Cen. Australia Standard Time'
+    'Australia/Brisbane' = 'E. Australia Standard Time'
+    'Australia/Sydney' = 'AUS Eastern Standard Time'
+    'Australia/Melbourne' = 'AUS Eastern Standard Time'
+    'Pacific/Auckland' = 'New Zealand Standard Time'
+    'Pacific/Guam' = 'West Pacific Standard Time'
+}
+
+function Resolve-MissionTimeZone {
+    <#
+    .SYNOPSIS
+    Resolves a policy IANA time zone name to a TimeZoneInfo, or returns $null (fail closed).
+    #>
+    [CmdletBinding()]
+    param([object]$Name)
+
+    if ($Name -isnot [string] -or [string]::IsNullOrWhiteSpace($Name) -or $Name -ne $Name.Trim()) {
+        return $null
+    }
+    if (-not $script:IanaToWindowsTimeZone.ContainsKey($Name)) {
+        return $null
+    }
+    try {
+        return [TimeZoneInfo]::FindSystemTimeZoneById($script:IanaToWindowsTimeZone[$Name])
+    }
+    catch {
+        # PowerShell 7 on non-Windows hosts uses IANA ids natively.
+        try { return [TimeZoneInfo]::FindSystemTimeZoneById($Name) } catch { return $null }
+    }
+}
+
+function Get-MissionMaintenanceWindowState {
+    <#
+    .SYNOPSIS
+    Evaluates the signed recurring weekly window (timezone, days, start, end).
+    .DESCRIPTION
+    Returns Open and, when a window bounds the run, EndUtc (the instant it closes).
+    A null window is unrestricted; an invalid window or unknown timezone fails closed.
+    An end time at or before the start time crosses midnight, and days name the start day.
+    #>
+    [CmdletBinding()]
+    param(
+        [object]$Window,
+        [DateTimeOffset]$At = [DateTimeOffset]::UtcNow
+    )
+
+    $closed = [pscustomobject]@{ Open = $false; EndUtc = $null }
+    if ($null -eq $Window) {
+        return [pscustomobject]@{ Open = $true; EndUtc = $null }
+    }
+
+    $dayNames = @("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
+    $days = @($Window.days)
+    if ($days.Count -lt 1 -or @($days | Where-Object { $_ -isnot [string] -or $dayNames -cnotcontains $_ }).Count) {
+        return $closed
+    }
+    $secondsOf = {
+        param([object]$Text)
+        if ($Text -isnot [string]) { return $null }
+        $match = [regex]::Match($Text, '^([01]\d|2[0-3]):([0-5]\d)$')
+        if (-not $match.Success) { return $null }
+        return ([int]$match.Groups[1].Value * 60 + [int]$match.Groups[2].Value) * 60
+    }
+    $startSeconds = & $secondsOf $Window.start
+    $endSeconds = & $secondsOf $Window.end
+    if ($null -eq $startSeconds -or $null -eq $endSeconds -or $startSeconds -eq $endSeconds) {
+        return $closed
+    }
+
+    $zone = Resolve-MissionTimeZone -Name $Window.timezone
+    if ($null -eq $zone) {
+        return $closed
+    }
+    $local = [TimeZoneInfo]::ConvertTime($At, $zone)
+    $seconds = [int]$local.TimeOfDay.TotalSeconds
+    $todayIndex = (([int]$local.DayOfWeek + 6) % 7)
+    $today = $dayNames[$todayIndex]
+    $yesterday = $dayNames[($todayIndex + 6) % 7]
+
+    $remaining = $null
+    if ($startSeconds -lt $endSeconds) {
+        if ($days -ccontains $today -and $seconds -ge $startSeconds -and $seconds -lt $endSeconds) { $remaining = $endSeconds - $seconds }
+    }
+    elseif ($days -ccontains $today -and $seconds -ge $startSeconds) {
+        $remaining = 86400 - $seconds + $endSeconds
+    }
+    elseif ($days -ccontains $yesterday -and $seconds -lt $endSeconds) {
+        $remaining = $endSeconds - $seconds
+    }
+    if ($null -eq $remaining) {
+        return $closed
+    }
+    return [pscustomobject]@{ Open = $true; EndUtc = $At.ToUniversalTime().AddSeconds($remaining) }
+}
+
 function Test-MissionMaintenanceWindow {
     [CmdletBinding()]
     param(
-        [object]$Window
+        [object]$Window,
+        [DateTimeOffset]$At = [DateTimeOffset]::UtcNow
     )
 
-    if ($null -eq $Window) {
-        return $true
-    }
+    return (Get-MissionMaintenanceWindowState -Window $Window -At $At).Open
+}
 
-    if ([string]$Window.start_utc -notmatch '(Z|\+00:00)$' -or [string]$Window.end_utc -notmatch '(Z|\+00:00)$') {
-        return $false
-    }
+function Get-MissionMaintenanceWindowEndUtc {
+    <#
+    .SYNOPSIS
+    Returns the current window's closing instant as an ISO string for remote checks, or $null when unrestricted.
+    #>
+    [CmdletBinding()]
+    param([object]$Window)
 
-    $styles = [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal
-    $start = [DateTimeOffset]::MinValue
-    $end = [DateTimeOffset]::MinValue
-    if (-not [DateTimeOffset]::TryParse([string]$Window.start_utc, [System.Globalization.CultureInfo]::InvariantCulture, $styles, [ref]$start)) {
-        return $false
-    }
-    if (-not [DateTimeOffset]::TryParse([string]$Window.end_utc, [System.Globalization.CultureInfo]::InvariantCulture, $styles, [ref]$end)) {
-        return $false
-    }
-    if ($end -le $start) {
-        return $false
-    }
-
-    $now = [DateTimeOffset]::UtcNow
-    return ($now -ge $start.ToUniversalTime() -and $now -lt $end.ToUniversalTime())
+    $state = Get-MissionMaintenanceWindowState -Window $Window
+    if ($null -eq $state.EndUtc) { return $null }
+    return $state.EndUtc.ToString("o")
 }
 
 function Set-MissionDiaryTarget {
@@ -541,7 +689,7 @@ function Invoke-TargetPatchInstall {
             $TimeoutSeconds,
             $expectedSha,
             $localStagedPath,
-            $MaintenanceWindow,
+            (Get-MissionMaintenanceWindowEndUtc -Window $MaintenanceWindow),
             $MissionId,
             $Attempt,
             $ClaimGeneration,
@@ -549,7 +697,7 @@ function Invoke-TargetPatchInstall {
             $patchId,
             $TargetServer
         ) -ScriptBlock {
-            param($Executable, $Arguments, $Timeout, $ExpectedHash, $StagedPath, $Window, $OperationMissionId, $OperationAttempt, $OperationGeneration, $PluginId, $PatchId, $TargetServerName)
+            param($Executable, $Arguments, $Timeout, $ExpectedHash, $StagedPath, $WindowEndUtc, $OperationMissionId, $OperationAttempt, $OperationGeneration, $PluginId, $PatchId, $TargetServerName)
 
             $safeMissionId = [regex]::Replace([string]$OperationMissionId, '[^A-Za-z0-9_-]', '_')
 
@@ -693,11 +841,8 @@ function Invoke-TargetPatchInstall {
                 }
                 Write-TargetOperationDiary -Path $diaryPath -Entry $entry
 
-                if ($null -ne $Window) {
-                    $windowStart = [DateTimeOffset]::Parse([string]$Window.start_utc).ToUniversalTime()
-                    $windowEnd = [DateTimeOffset]::Parse([string]$Window.end_utc).ToUniversalTime()
-                    $now = [DateTimeOffset]::UtcNow
-                    if ($now -lt $windowStart -or $now -ge $windowEnd) {
+                if ($null -ne $WindowEndUtc) {
+                    if ([DateTimeOffset]::UtcNow -ge [DateTimeOffset]::Parse([string]$WindowEndUtc).ToUniversalTime()) {
                         $entry.status = "NOT_STARTED"
                         $entry.completed_at = [DateTimeOffset]::UtcNow.ToString("o")
                         $entry.stderr = "Maintenance window is not active."
@@ -950,13 +1095,10 @@ function Invoke-TargetWsusUpdate {
     try {
         # Remote execution to trigger Windows Update Agent scan and installation
         $wsusScript = {
-            param($Window, $MissionAllowsReboot, $MissionAllowedPatchTypes, $ClassificationMap)
+            param($WindowEndUtc, $MissionAllowsReboot, $MissionAllowedPatchTypes, $ClassificationMap)
 
-            if ($null -ne $Window) {
-                $windowStart = [DateTimeOffset]::Parse([string]$Window.start_utc).ToUniversalTime()
-                $windowEnd = [DateTimeOffset]::Parse([string]$Window.end_utc).ToUniversalTime()
-                $now = [DateTimeOffset]::UtcNow
-                if ($now -lt $windowStart -or $now -ge $windowEnd) {
+            if ($null -ne $WindowEndUtc) {
+                if ([DateTimeOffset]::UtcNow -ge [DateTimeOffset]::Parse([string]$WindowEndUtc).ToUniversalTime()) {
                     return @{ Success = $false; RebootRequired = $false; Applied = @(); Error = "Maintenance window is not active." }
                 }
             }
@@ -1021,9 +1163,8 @@ function Invoke-TargetWsusUpdate {
                     }
                 }
                 if ($updatesToInstall.Count -gt 0) {
-                    if ($null -ne $Window) {
-                        $now = [DateTimeOffset]::UtcNow
-                        if ($now -lt $windowStart -or $now -ge $windowEnd) {
+                    if ($null -ne $WindowEndUtc) {
+                        if ([DateTimeOffset]::UtcNow -ge [DateTimeOffset]::Parse([string]$WindowEndUtc).ToUniversalTime()) {
                             return @{ Success = $false; RebootRequired = $false; Applied = @(); Error = "Maintenance window closed before installation." }
                         }
                     }
@@ -1051,7 +1192,7 @@ function Invoke-TargetWsusUpdate {
         }
 
         $normalizedAllowedTypes = @($AllowedPatchTypes | ForEach-Object { ([string]$_).Trim().ToUpperInvariant() })
-        $res = Invoke-Command -ComputerName $TargetServer -ArgumentList @($MaintenanceWindow, $AllowReboot, $normalizedAllowedTypes, $WuaClassificationPatchTypes) -ScriptBlock $wsusScript -ErrorAction Stop
+        $res = Invoke-Command -ComputerName $TargetServer -ArgumentList @((Get-MissionMaintenanceWindowEndUtc -Window $MaintenanceWindow), $AllowReboot, $normalizedAllowedTypes, $WuaClassificationPatchTypes) -ScriptBlock $wsusScript -ErrorAction Stop
         if ($res) {
             $result.updates_applied = @($res.Applied)
             $result.reboot_required = [bool]$res.RebootRequired
@@ -1110,6 +1251,10 @@ function Invoke-PatchReconcile {
     $allowedTypes     = if ($patchConstraints.allowed_patch_types) { @($patchConstraints.allowed_patch_types) } else { @("SECURITY") }
     $allowReboot      = if ($patchConstraints.allow_reboot) { [bool]$patchConstraints.allow_reboot } else { $false }
     $maintenanceWindow = $parameters.maintenance_window
+    if ($null -ne $patchConstraints -and $patchConstraints.PSObject.Properties.Name -contains "window_override" -and $null -ne $patchConstraints.window_override) {
+        # An administrator approved running outside the window; the signed override replaces the window restriction.
+        $maintenanceWindow = $null
+    }
     $allowedExecutables = @(Get-AllowedPatchExecutables -Obligations @($Envelope.obligations))
 
     if (-not (Test-MissionMaintenanceWindow -Window $maintenanceWindow)) {
@@ -1295,6 +1440,7 @@ Export-ModuleMember -Function `
     Test-WuaSecurityUpdate, `
     Test-WuaPatchTypeAllowed, `
     Get-WuaRebootBehavior, `
+    Get-MissionMaintenanceWindowState, `
     Test-MissionMaintenanceWindow, `
     Set-MissionDiaryTarget, `
     Wait-TargetOperationDiary, `

@@ -25,6 +25,13 @@ def protocol_dir() -> Path:
 
 
 @lru_cache(maxsize=None)
+def supported_time_zones() -> frozenset[str]:
+    """IANA zones the Minion can resolve on Windows PowerShell 5.1 (IANA -> Windows id map)."""
+    path = protocol_dir() / "windows-timezones.json"
+    return frozenset(json.loads(path.read_text(encoding="utf-8")))
+
+
+@lru_cache(maxsize=None)
 def _validator(name: str) -> Draft202012Validator:
     schema = json.loads((protocol_dir() / SCHEMA_FILES[name]).read_text(encoding="utf-8"))
     Draft202012Validator.check_schema(schema)
