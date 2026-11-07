@@ -1,0 +1,67 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  application:
+    name: Application tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.11.24"
+          python-version: "3.11"
+          enable-cache: false
+
+      - name: Verify PowerShell is available
+        run: pwsh -NoProfile -Command 'Get-Host'
+
+      - name: Run application and PowerShell interoperability tests
+        run: uv run --locked --package sg-service --group dev pytest -q -rs sg-service/tests --junitxml=test-results.xml
+
+      - name: Build Python distributions
+        if: runner.os == 'Linux'
+        run: |
+          uv build --package sg-core
+          uv build --package sg-service
+
+      - name: Upload pytest results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pytest-results-${{ matrix.os }}
+          path: test-results.xml
+          if-no-files-found: warn
+
+  windows-minion:
+    name: Windows Minion tests (windows-2022)
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Run patch policy tests
+        shell: pwsh
+        run: ./minion-registry/minions/patching/tests/Test-PatchPolicy.ps1
+
+      - name: Build Windows service host
+        run: dotnet build deployment/windows/MinionHost/SluiceGate.Minion.Service.csproj --configuration Release
+
+      - name: Test Windows service host
+        run: dotnet test deployment/windows/MinionHost.Tests/MinionHost.Tests.csproj --configuration Release
