@@ -1,0 +1,21 @@
+services:
+  sg-service:
+    image: sluicegate-e2e:${SG_E2E_IMAGE_TAG}
+    ports: !override
+      - "127.0.0.1::8443"
+    volumes:
+      - ${SG_E2E_SECRETS_DIR}/sg-signing-key.pem:/run/secrets/sg-signing-key.pem:ro
+      - ${SG_E2E_SECRETS_DIR}/demo-minion-public.pem:/run/secrets/demo-minion-public.pem:ro
+      - ../sg-service/policies:/config:ro
+
+  demo-minion:
+    volumes:
+      - ${SG_E2E_SECRETS_DIR}/demo-minion-key.pem:/run/secrets/demo-minion-key.pem:ro
+
+  backend:
+    ports: !override
+      - "127.0.0.1::8000"
+
+  frontend:
+    ports: !override
+      - "127.0.0.1::80"

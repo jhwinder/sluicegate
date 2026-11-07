@@ -3,6 +3,7 @@ name: Tests
 on:
   push:
   pull_request:
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -65,3 +66,20 @@ jobs:
 
       - name: Test Windows service host
         run: dotnet test deployment/windows/MinionHost.Tests/MinionHost.Tests.csproj --configuration Release
+
+  demo-e2e:
+    name: Demo browser and Minion end-to-end
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+      - name: Install browser test dependencies
+        working-directory: sluice-demo/tests/e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Run isolated Compose end-to-end tests
+        run: bash sluice-demo/tests/e2e/run.sh
