@@ -107,9 +107,11 @@ Approvals can be performed directly in the UI.
 
 - Stripe execution is stubbed (no real charges)
 - The service stores missions and audit events in the Compose database volume.
-  The demo Audit Trail shows the policy decision or mission status recorded by
-  each event, with a dash where no such value was recorded. For a selected
-  request, its latest decision and status are shown separately above the table;
+  The demo Audit Trail shows each event's policy decision, or a dash if none
+  was recorded. The Mission status column shows the event's status and any
+  available details; for non-mission events, this may be an event outcome
+  rather than a mission status. For a selected request, its latest decision
+  and status are shown separately above the table;
   use **Refresh Audit** to update that snapshot. Event times use the browser's
   local time zone.
 - Policies can be edited live and reloaded

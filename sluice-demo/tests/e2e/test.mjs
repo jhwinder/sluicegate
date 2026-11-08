@@ -118,7 +118,7 @@ try {
     assert.ok(events.some((event) => event.event_type === "policy.decision"));
     await page.evaluate(() => refreshAudit());
     const headers = await page.locator("#auditTable th").allTextContents();
-    assert.deepEqual(headers, ["Time (local)", "Event", "Request", "Actor", "Policy decision", "Mission status", "Summary"]);
+    assert.deepEqual(headers, ["Time (local)", "Event", "Request", "Actor", "Policy decision", "Mission status"]);
     assert.match(await page.locator("#auditTable").innerText(), new RegExp(`Latest request snapshot at refresh: decision / outcome: ${decision}; mission status: ${status}`));
     const first = events[0];
     const cells = page.locator("#auditTable tbody tr").first().locator("td");
@@ -131,12 +131,11 @@ try {
     assert.equal(await cells.nth(1).innerText(), first.event_type);
     assert.equal(await cells.nth(3).innerText(), `${first.actor_type} / ${first.actor_id}`);
     assert.equal(await cells.nth(4).innerText(), first.event_decision || "—");
-    assert.equal(await cells.nth(5).innerText(), first.event_mission_status || "—");
-    assert.ok((await cells.nth(6).innerText()).includes(first.status || "—"));
+    assert.equal(await cells.nth(5).innerText(), first.summary);
     for (const [index, event] of events.entries()) {
       const row = page.locator("#auditTable tbody tr").nth(index).locator("td");
       assert.equal(await row.nth(4).innerText(), event.event_decision || "—");
-      assert.equal(await row.nth(5).innerText(), event.event_mission_status || "—");
+      assert.equal(await row.nth(5).innerText(), event.summary);
     }
     return events;
   }

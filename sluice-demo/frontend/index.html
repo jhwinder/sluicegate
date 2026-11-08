@@ -83,7 +83,7 @@
 
   <div class="card">
     <h3>Audit Trail</h3>
-    <p>Each row shows the policy decision or mission status recorded by that event. A dash means the event did not record one.</p>
+    <p>Policy decision shows the decision recorded by an event, or a dash if none was recorded. Mission status shows the event's status and any available details; for non-mission events, this may be an event outcome rather than a mission status.</p>
     <div class="row" style="margin-bottom:12px; align-items:center;">
       <button onclick="refreshAudit()">Refresh Audit</button>
 
@@ -308,7 +308,6 @@
         <td class="mono">${e.request_id ? escapeHtml(e.request_id.slice(0, 8)) + "…" : "—"}</td>
         <td>${escapeHtml(e.actor_type)}${e.actor_id ? " / " + escapeHtml(e.actor_id) : ""}</td>
         <td>${escapeHtml(e.event_decision || "—")}</td>
-        <td>${escapeHtml(e.event_mission_status || "—")}</td>
         <td>${escapeHtml(e.summary)}</td>
       </tr>
     `).join("");
@@ -325,7 +324,6 @@
             <th>Actor</th>
             <th>Policy decision</th>
             <th>Mission status</th>
-            <th>Summary</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
