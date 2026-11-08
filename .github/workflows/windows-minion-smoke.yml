@@ -1,0 +1,42 @@
+name: Windows patching Minion smoke test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-dry-run:
+    name: Live Windows worker dry-run
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.11.24"
+          python-version: "3.11"
+          enable-cache: false
+
+      - name: Verify prerequisites
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-Command pwsh, openssl
+          openssl version
+          if ($LASTEXITCODE -ne 0) { throw 'OpenSSL is unavailable' }
+
+      - name: Verify repository release fingerprints
+        run: uv run --locked --package sg-service --group dev python minion-registry/release_manifest.py
+
+      - name: Run live signed patch missions in dry-run mode
+        run: uv run --locked --package sg-service --group dev pytest -v -rs deployment/windows/tests/test_live_patching_minion.py --junitxml=windows-minion-smoke-results.xml
+
+      - name: Upload smoke test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-minion-smoke-results
+          path: windows-minion-smoke-results.xml
+          if-no-files-found: warn
