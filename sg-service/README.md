@@ -99,7 +99,8 @@ The service includes a self-contained web console served directly at:
 
 #### Policies
 - **Create New** opens a guided patching-policy builder seeded with a default BLOCK decision. Add exact, ordered target-server lists and patching constraints, then generate a draft; a policy with no rules blocks all requests. Approval outside a maintenance window permits immediate execution.
-- **Load YAML / Download YAML** exchange drafts with local files. The wizard only creates new policies; use the YAML editor to preserve and edit imported policies or features it does not represent.
+- **Edit Policy** opens a wizard-generated policy from the YAML editor for visual editing. Policies with other rules, comments, or formatting cannot be represented without loss and must be edited as YAML; they remain unchanged.
+- **Load YAML / Download YAML** exchange drafts with local files.
 - **Validate / Save and Activate** validate and explicitly activate the draft. Reload from Service replaces the editor with the saved policy; unsaved drafts are protected by a confirmation. Saves back up the previous file and reject concurrent changes.
 
 #### 1. Missions & Audit Tab

@@ -202,6 +202,7 @@
         <h2>Active Policy</h2>
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
           <button class="secondary" onclick="openPolicyWizard()">Create New</button>
+          <button class="secondary" onclick="openPolicyWizard(true)">Edit Policy</button>
           <button class="secondary" onclick="loadPolicyEditor()">Reload from Service</button>
         </div>
       </div>
@@ -226,12 +227,12 @@
 
   <dialog id="policyWizard" aria-labelledby="policyWizardTitle" class="modal" style="max-width:780px; max-height:90vh; overflow-y:auto;">
     <h2 id="policyWizardTitle">Create patching policy</h2>
-    <p>New policies block unmatched requests. Add rules in order, or generate a policy with no rules to block everything. Generated YAML is a draft and does not change the active policy.</p>
+    <p>Policies created here block unmatched requests. Add or edit rules in order, or generate a policy with no rules to block everything. Generated YAML is a draft and does not change the active policy.</p>
     <p>Each rule matches the exact ordered server list supplied in a patch request. Other targets or combinations are blocked. The first matching rule wins.</p>
     <ol id="wizardRuleList"></ol>
     <form id="wizardRuleForm" onsubmit="addWizardRule(event)">
       <fieldset>
-        <legend>Add a patching rule</legend>
+        <legend id="wizardRuleLegend">Add a patching rule</legend>
         <div class="form-group">
           <label for="wizardTargets">Target server names (comma-separated, exact request order)</label>
           <input id="wizardTargets" required placeholder="server1.example.com, server2.example.com" />
@@ -273,7 +274,7 @@
           <div class="form-group"><label for="wizardOutside">Outside window</label><select id="wizardOutside"><option value="WAIT">Wait</option><option value="BLOCK">Block</option></select></div>
         </div>
         <p id="wizardError" role="alert" style="color:var(--danger);"></p>
-        <button type="submit" class="secondary">Add rule</button>
+        <button id="wizardRuleSubmit" type="submit" class="secondary">Add rule</button>
       </fieldset>
     </form>
     <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px;">
@@ -1517,6 +1518,8 @@
     let activePolicyContent = "";
     let policyLoadGeneration = 0;
     let wizardRules = [];
+    let wizardEditIndex = null;
+    let wizardSource = null;
 
     function confirmPolicyReplacement() {
       const current = document.getElementById("policyEditor").value;
@@ -1529,19 +1532,73 @@
       document.getElementById("policyFeedback").textContent = message;
     }
 
-    async function openPolicyWizard() {
+    function parseWizardPolicy(policy) {
+      const unsupported = () => { throw new Error("This policy cannot be represented safely by the visual editor. Use the YAML editor; no changes were made."); };
+      if (!policy || policy.version !== 1 || policy.default?.decision !== "BLOCK" || !Array.isArray(policy.rules)) unsupported();
+      const result = [];
+      for (let i = 0; i < policy.rules.length;) {
+        const first = policy.rules[i];
+        if (!first || !Array.isArray(first.when) || !Array.isArray(first.obligations)) unsupported();
+        const approved = first.when.some(condition => condition.path === "context.approval.approved" && condition.eq === true);
+        const actual = approved ? policy.rules[i + 1] : first;
+        if (!actual || !Array.isArray(actual.when) || !Array.isArray(actual.obligations)) unsupported();
+        const targets = actual.when.find(condition => condition.path === "target.servers")?.eq;
+        const targetObligation = actual.obligations.find(item => item.type === "allowed_patch_targets");
+        const constraints = actual.obligations.find(item => item.type === "patch_constraints");
+        const executables = actual.obligations.find(item => item.type === "allowed_patch_executables")?.executables || [];
+        if (!Array.isArray(targets) || !targets.length || !targets.every(target => typeof target === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(target)) ||
+            JSON.stringify(targetObligation?.servers) !== JSON.stringify(targets) ||
+            !constraints || !Array.isArray(constraints.patch_sources) || !constraints.patch_sources.length ||
+            !constraints.patch_sources.every(value => ["wsus", "nessus_catalog"].includes(value)) ||
+            !Array.isArray(constraints.allowed_patch_types) || !constraints.allowed_patch_types.length ||
+            !constraints.allowed_patch_types.every(value => ["SECURITY", "BUGFIX", "FEATURE", "SERVICE_PACK", "DRIVER", "OTHER"].includes(value)) ||
+            typeof constraints.allow_reboot !== "boolean" || !Array.isArray(executables) ||
+            !executables.every(value => typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(value)) ||
+            (constraints.patch_sources.includes("nessus_catalog") && !executables.length)) unsupported();
+        const window = constraints.maintenance_window;
+        if (window !== null && (!window || typeof window.timezone !== "string" || !Array.isArray(window.days) ||
+            !window.days.length || !window.days.every(day => ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"].includes(day)) ||
+            typeof window.start !== "string" || typeof window.end !== "string" ||
+            !/^\d{2}:\d{2}$/.test(window.start) || !/^\d{2}:\d{2}$/.test(window.end) || window.start === window.end ||
+            !["WAIT", "BLOCK"].includes(constraints.outside_window))) unsupported();
+        result.push({ targets, sources: constraints.patch_sources, types: constraints.allowed_patch_types,
+          executables, reboot: constraints.allow_reboot, approval: approved, window,
+          outside: window ? constraints.outside_window : "WAIT" });
+        i += approved ? 2 : 1;
+      }
+      return result;
+    }
+
+    async function openPolicyWizard(edit = false) {
       const dialog = document.getElementById("policyWizard");
       const select = document.getElementById("wizardZone");
       try {
+        const content = document.getElementById("policyEditor").value;
+        let rules = [];
+        if (edit) {
+          const parsed = await fetch("/admin/v1/policy/visual", {
+            method: "POST", headers: getAuthHeaders(), body: JSON.stringify({ content })
+          });
+          if (!parsed.ok) throw new Error("Policy is invalid or cannot be parsed; use the YAML editor.");
+          rules = parseWizardPolicy(await parsed.json());
+          if (wizardPolicyYaml(rules) !== content) throw new Error("This policy contains unsupported rules, comments, or formatting. Use the YAML editor; no changes were made.");
+        }
         const response = await fetch("/admin/v1/policy/time-zones", { headers: getAuthHeaders() });
         if (!response.ok) throw new Error(await response.text());
         const zones = await response.json();
+        if (rules.some(rule => rule.window && !zones.includes(rule.window.timezone))) throw new Error("The policy uses an unsupported time zone; use the YAML editor.");
         select.replaceChildren(...zones.map(zone => new Option(zone, zone)));
         select.value = "UTC";
         document.getElementById("wizardRuleForm").reset();
         select.value = "UTC";
         toggleWizardWindow();
-        wizardRules = [];
+        if (edit && document.getElementById("policyEditor").value !== content) throw new Error("The draft changed while opening; try again.");
+        wizardRules = rules;
+        wizardEditIndex = null;
+        wizardSource = edit ? content : null;
+        document.getElementById("wizardRuleLegend").textContent = "Add a patching rule";
+        document.getElementById("wizardRuleSubmit").textContent = "Add rule";
+        document.getElementById("policyWizardTitle").textContent = edit ? "Edit patching policy" : "Create patching policy";
         renderWizardRules();
         document.getElementById("wizardError").textContent = "";
         dialog.showModal();
@@ -1560,15 +1617,53 @@
       wizardRules.forEach((rule, index) => {
         const item = document.createElement("li");
         item.append(document.createTextNode(`${rule.targets.join(", ")} — ${rule.approval ? "approval required" : "allow"} `));
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.className = "secondary";
+        edit.textContent = "Edit";
+        edit.setAttribute("aria-label", `Edit rule ${index + 1}`);
+        edit.onclick = () => editWizardRule(index);
+        item.append(edit);
         const remove = document.createElement("button");
         remove.type = "button";
         remove.className = "secondary";
         remove.textContent = "Remove";
         remove.setAttribute("aria-label", `Remove rule ${index + 1}`);
-        remove.onclick = () => { wizardRules.splice(index, 1); renderWizardRules(); };
+        remove.onclick = () => {
+          if (wizardEditIndex !== null) {
+            document.getElementById("wizardError").textContent = "Finish editing the current rule before removing a rule.";
+            return;
+          }
+          wizardRules.splice(index, 1); renderWizardRules();
+        };
         item.append(remove);
         list.append(item);
       });
+    }
+
+    function editWizardRule(index) {
+      if (wizardEditIndex !== null || document.getElementById("wizardTargets").value.trim()) {
+        document.getElementById("wizardError").textContent = "Finish the current rule before editing another.";
+        return;
+      }
+      const rule = wizardRules[index];
+      wizardEditIndex = index;
+      document.getElementById("wizardTargets").value = rule.targets.join(", ");
+      document.getElementById("wizardExecutables").value = rule.executables.join(", ");
+      for (const [name, selected] of [["wizardSource", rule.sources], ["wizardType", rule.types], ["wizardDay", rule.window?.days || []]]) {
+        document.querySelectorAll(`input[name="${name}"]`).forEach(input => { input.checked = selected.includes(input.value); });
+      }
+      document.getElementById("wizardReboot").checked = rule.reboot;
+      document.getElementById("wizardApproval").checked = rule.approval;
+      document.getElementById("wizardWindowEnabled").checked = !!rule.window;
+      document.getElementById("wizardZone").value = rule.window?.timezone || "UTC";
+      document.getElementById("wizardStart").value = rule.window?.start || "01:00";
+      document.getElementById("wizardEnd").value = rule.window?.end || "05:00";
+      document.getElementById("wizardOutside").value = rule.outside;
+      document.getElementById("wizardRuleLegend").textContent = `Edit rule ${index + 1}`;
+      document.getElementById("wizardRuleSubmit").textContent = "Update rule";
+      document.getElementById("wizardError").textContent = "";
+      toggleWizardWindow();
     }
 
     function addWizardRule(event) {
@@ -1592,7 +1687,7 @@
         error.textContent = "Each target may appear only once in a rule.";
         return;
       }
-      if (wizardRules.some(rule => JSON.stringify(rule.targets) === JSON.stringify(targets))) {
+      if (wizardRules.some((rule, index) => index !== wizardEditIndex && JSON.stringify(rule.targets) === JSON.stringify(targets))) {
         error.textContent = "A rule already matches this exact server list.";
         return;
       }
@@ -1608,30 +1703,44 @@
         error.textContent = "Choose a supported time zone, at least one day, and different start and end times in HH:MM format.";
         return;
       }
-      wizardRules.push({
+      const rule = {
         targets, sources, types, executables,
         reboot: document.getElementById("wizardReboot").checked,
         approval: document.getElementById("wizardApproval").checked,
         window: windowEnabled ? { timezone: zone, days, start, end } : null,
         outside: document.getElementById("wizardOutside").value,
-      });
+      };
+      if (wizardEditIndex === null) wizardRules.push(rule);
+      else wizardRules[wizardEditIndex] = rule;
+      wizardEditIndex = null;
+      document.getElementById("wizardRuleLegend").textContent = "Add a patching rule";
+      document.getElementById("wizardRuleSubmit").textContent = "Add rule";
       error.textContent = "";
       renderWizardRules();
       document.getElementById("wizardTargets").value = "";
     }
 
     function generateWizardPolicy() {
-      if (document.getElementById("wizardTargets").value.trim()) {
+      if (wizardEditIndex !== null || document.getElementById("wizardTargets").value.trim()) {
         document.getElementById("wizardError").textContent = "Add the entered rule or clear its target names before generating.";
         return;
       }
-      if (!confirmPolicyReplacement()) return;
+      if (wizardSource !== null && document.getElementById("policyEditor").value !== wizardSource) {
+        document.getElementById("wizardError").textContent = "The policy draft changed while the wizard was open. Close it and reopen Edit Policy.";
+        return;
+      }
+      if (wizardSource === null && !confirmPolicyReplacement()) return;
+      setPolicyDraft(wizardPolicyYaml(wizardRules), "Draft generated. Validate and review it before activation.");
+      document.getElementById("policyWizard").close();
+    }
+
+    function wizardPolicyYaml(rules) {
       const lines = ["version: 1", "default:", "  decision: BLOCK"];
-      if (!wizardRules.length) {
+      if (!rules.length) {
         lines.push("rules: []");
       } else {
         lines.push("rules:");
-        wizardRules.forEach((rule, index) => {
+        rules.forEach((rule, index) => {
           const emitRule = (decision, approvalCondition) => {
             lines.push(`  - name: ${JSON.stringify(`patch-${index + 1}-${decision.toLowerCase()}`)}`,
               "    when:",
@@ -1653,8 +1762,7 @@
           emitRule(rule.approval ? "PAUSE" : "ALLOW", rule.approval ? false : null);
         });
       }
-      setPolicyDraft(lines.join("\n") + "\n", "Draft generated. Validate and review it before activation.");
-      document.getElementById("policyWizard").close();
+      return lines.join("\n") + "\n";
     }
 
     async function loadPolicyFile(input) {

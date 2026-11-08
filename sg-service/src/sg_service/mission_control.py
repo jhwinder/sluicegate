@@ -2261,6 +2261,14 @@ def validate_policy(request: PolicyContentRequest, _admin: str = Depends(require
     return {"is_valid": is_valid, "issues": issues}
 
 
+@app.post("/admin/v1/policy/visual")
+def visual_policy(request: PolicyContentRequest, _admin: str = Depends(require_admin)) -> dict[str, Any]:
+    policy, issues, is_valid = validate_policy_content(request.content)
+    if not is_valid or policy is None:
+        raise HTTPException(status_code=422, detail={"message": "Policy validation failed", "issues": issues})
+    return policy
+
+
 @app.get("/admin/v1/policy/time-zones")
 def policy_time_zones(_admin: str = Depends(require_admin)) -> list[str]:
     return sorted(supported_time_zones())

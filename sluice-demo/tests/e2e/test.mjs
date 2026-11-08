@@ -265,6 +265,9 @@ try {
   await policyPage.waitForFunction(() => document.getElementById("policyHashInfo").textContent.startsWith("File SHA-256:"));
   const activePolicy = await json(`${service}/admin/v1/policy`, { headers: adminHeaders });
   const editor = policyPage.locator("#policyEditor");
+  await policyPage.getByRole("button", { name: "Edit Policy", exact: true }).click();
+  await policyPage.waitForFunction(() => document.getElementById("policyFeedback").textContent.includes("Could not open policy wizard"));
+  assert.equal(await editor.inputValue(), activePolicy.content);
   await editor.fill("# unsaved\n" + activePolicy.content);
   acceptConfirmation = false;
   await policyPage.getByRole("button", { name: "Reload from Service" }).click();
@@ -306,6 +309,31 @@ try {
   await wizard.getByRole("button", { name: "Generate YAML" }).click();
   const generated = await editor.inputValue();
   assert.match(generated, /default:\n  decision: BLOCK/);
+  await policyPage.getByRole("button", { name: "Edit Policy", exact: true }).click();
+  assert.equal(await wizard.locator("#wizardRuleList li").count(), 2);
+  await wizard.getByRole("button", { name: "Edit rule 1" }).click();
+  assert.equal(await wizard.locator("#wizardTargets").inputValue(), "patch-test.example.gov");
+  assert.equal(await wizard.locator("#wizardApproval").isChecked(), true);
+  assert.equal(await wizard.locator("#wizardZone").inputValue(), "America/New_York");
+  await wizard.locator("#wizardReboot").check();
+  await wizard.getByRole("button", { name: "Update rule" }).click();
+  await wizard.getByRole("button", { name: "Generate YAML" }).click();
+  const edited = await editor.inputValue();
+  assert.notEqual(edited, generated);
+  assert.match(edited, /allow_reboot: true/);
+  assert.equal((await json(`${service}/admin/v1/policy`, { headers: adminHeaders })).content, blank);
+  await policyPage.getByRole("button", { name: "Edit Policy", exact: true }).click();
+  await wizard.getByRole("button", { name: "Edit rule 1" }).click();
+  assert.equal(await wizard.locator("#wizardReboot").isChecked(), true);
+  await wizard.locator("#wizardReboot").uncheck();
+  await wizard.getByRole("button", { name: "Update rule" }).click();
+  await wizard.getByRole("button", { name: "Generate YAML" }).click();
+  assert.equal(await editor.inputValue(), generated);
+  await editor.fill("# preserve comment\n" + generated);
+  await policyPage.getByRole("button", { name: "Edit Policy", exact: true }).click();
+  await policyPage.waitForFunction(() => document.getElementById("policyFeedback").textContent.includes("unsupported rules, comments, or formatting"));
+  assert.equal(await editor.inputValue(), "# preserve comment\n" + generated);
+  await editor.fill(generated);
   const validation = await json(`${service}/admin/v1/policy/validate`, {
     method: "POST", headers: { ...adminHeaders, "Content-Type": "application/json" },
     body: JSON.stringify({ content: generated }),

@@ -23,6 +23,12 @@ Here are the minor items we need to fix.  When complete, change `PENDING` to `CO
 - Preserve imported or manually edited policy content that the wizard cannot represent; do not silently discard unsupported rules or settings.
 - Reuse the existing authenticated policy endpoints and shared validation, and evaluate reusable concepts from the older visual editor without exposing its unauthenticated service.
 
+2.5 `COMPLETE` Add **Edit Policy** to visually edit an existing policy draft.
+
+- Open supported wizard-generated patching policies from the YAML editor, edit their rules, and generate updated YAML as a draft. Validation and explicit **Save and Activate** remain separate.
+- Reject policies that cannot round-trip exactly, including unsupported rules, comments, or formatting, and leave the original YAML unchanged. Continue to support manual editing for those policies.
+- Use authenticated service-side validation and prevent overwriting a draft that changes while the visual editor is open.
+
 3. DEFERRED
 3.1 Change the patching registry from CSV to SQL
 3.2 Implement intelligent multi-Minion load balancing

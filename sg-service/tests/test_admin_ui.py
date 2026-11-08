@@ -71,6 +71,9 @@ def test_policy_admin_workflow_is_authenticated_validated_and_audited(tmp_path: 
 
         headers = {"Authorization": "Bearer policy-admin-secret"}
         assert client.get("/admin/v1/policy/time-zones").status_code == 401
+        assert client.post("/admin/v1/policy/visual", json={"content": valid_policy}).status_code == 401
+        assert client.post("/admin/v1/policy/visual", json={"content": valid_policy}, headers=headers).json()["default"]["decision"] == "BLOCK"
+        assert client.post("/admin/v1/policy/visual", json={"content": "default: INVALID"}, headers=headers).status_code == 422
         zones = client.get("/admin/v1/policy/time-zones", headers=headers)
         assert zones.status_code == 200
         assert zones.json() == sorted(service.supported_time_zones())
