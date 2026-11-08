@@ -40,8 +40,9 @@ $runtimeFiles = @(
     @{ Source = "minion-registry/protocol/mission-envelope.schema.json"; Target = "protocol" }
 )
 $configTemplate = Join-Path $RepositoryRoot "minion-registry/minions/patching/minion.config.example.json"
+$releaseManifestPath = Join-Path $RepositoryRoot "minion-registry/minions/patching/minion-release.json"
 $certificateScript = Join-Path $RepositoryRoot "deployment/tls/new-selfsigned-certificate.sh"
-foreach ($path in @($configTemplate, $certificateScript) + ($runtimeFiles | ForEach-Object { Join-Path $RepositoryRoot $_.Source })) {
+foreach ($path in @($configTemplate, $certificateScript, $releaseManifestPath) + ($runtimeFiles | ForEach-Object { Join-Path $RepositoryRoot $_.Source })) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required file not found: $path"
     }
@@ -54,24 +55,33 @@ $runtimeDirectory = Join-Path $OutputDirectory "Minion/runtime"
 New-Item -ItemType Directory -Path $runtimeDirectory -Force | Out-Null
 
 Copy-Item -LiteralPath $MinionExecutable -Destination (Join-Path $OutputDirectory "Minion/SluiceGate.Minion.Service.exe") -Force
-$minionArtifact = "Minion/SluiceGate.Minion.Service.exe"
-$manifest = [ordered]@{
-    schema_version = 1
-    type_id = "windows-patching-$([guid]::NewGuid().ToString('N'))"
-    name = "Windows Patching Minion"
-    version = $Version
-    runtime_type = "powershell"
-    artifact = $minionArtifact
-    package_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $OutputDirectory $minionArtifact)).Hash.ToLowerInvariant()
-    capabilities = @("windows.patch.reconcile", "windows.patch.discover", "windows.patch.status")
-    requires_target_scope = $true
-}
-$manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $OutputDirectory "minion-release.json") -Encoding UTF8
 foreach ($file in $runtimeFiles) {
     $destination = if ($file.Target) { Join-Path $runtimeDirectory $file.Target } else { $runtimeDirectory }
     New-Item -ItemType Directory -Path $destination -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $RepositoryRoot $file.Source) -Destination $destination -Force
 }
+$manifest = Get-Content -LiteralPath $releaseManifestPath -Raw | ConvertFrom-Json
+if ($manifest.schema_version -ne 2 -or $manifest.version -ne $Version) {
+    throw "Release manifest version does not match bundle version $Version."
+}
+$fingerprintLines = [System.Text.StringBuilder]::new()
+foreach ($file in $manifest.release_files) {
+    if ($file -notmatch '^[A-Za-z0-9._/-]+$' -or ($file -split '/' | Where-Object { $_ -in @('', '.', '..') })) {
+        throw "Invalid release file path: $file"
+    }
+    $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path (Join-Path $OutputDirectory "Minion") $file)).Hash.ToLowerInvariant()
+    [void]$fingerprintLines.Append("$file`0$digest`n")
+}
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $fingerprint = ([BitConverter]::ToString($sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($fingerprintLines.ToString())))).Replace("-", "").ToLowerInvariant()
+}
+finally { $sha256.Dispose() }
+if ($fingerprint -ne $manifest.package_sha256) {
+    throw "Bundle files do not match the repository release manifest. Create and review a new release manifest."
+}
+Copy-Item -LiteralPath $releaseManifestPath -Destination (Join-Path $OutputDirectory "minion-release.json")
+Copy-Item -LiteralPath $releaseManifestPath -Destination (Join-Path $runtimeDirectory "minion-release.json")
 @{ version = $Version; builtAtUtc = [DateTime]::UtcNow.ToString("o"); serviceImage = $ServiceImage } |
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runtimeDirectory "version.json") -Encoding UTF8
 

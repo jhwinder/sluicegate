@@ -93,3 +93,5 @@ POST /internal/v1/minions/{minion_id}/missions/{mission_id}/heartbeat
 POST /internal/v1/minions/{minion_id}/missions/{mission_id}/status
 POST /internal/v1/minions/{minion_id}/missions/{mission_id}/result
 ```
+
+A check-in may include `{"version":"1.0.0","fingerprint":"<64 lowercase hex characters>"}`. Omitting the body clears the previous report. Mission Control compares it with the assigned schema 2 release and requires a match for routing and claims. This authenticated self-report detects accidental drift; it does not independently attest to the running software.

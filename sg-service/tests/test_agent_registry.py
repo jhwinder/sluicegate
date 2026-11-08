@@ -5,6 +5,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi.testclient import TestClient
+from minion_helpers import create_routable_test_minion
 
 
 def setup_test_service(tmp_path: Path, monkeypatch):
@@ -60,6 +61,7 @@ def test_agent_registration_crud_and_rotation(tmp_path: Path, monkeypatch) -> No
             headers={"Authorization": "Bearer test-admin-secret"},
         ).json()["api_key"]
         admin_headers = {"Authorization": f"Bearer {admin_key}"}
+        create_routable_test_minion(client, admin_headers)
 
         # 1. Register agent
         reg_resp = client.post(
@@ -157,6 +159,7 @@ def test_agent_rate_limiting_and_deduplication(tmp_path: Path, monkeypatch) -> N
             headers={"Authorization": "Bearer test-admin-secret"},
         ).json()["api_key"]
         admin_headers = {"Authorization": f"Bearer {admin_key}"}
+        create_routable_test_minion(client, admin_headers)
 
         # Register agent with submit rate limit = 2
         agent_data = client.post(

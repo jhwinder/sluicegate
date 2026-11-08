@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { generateKeyPairSync } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { chromium } from "playwright";
 
@@ -71,7 +72,7 @@ await waitFor("service and backend readiness", async () => {
 await waitFor("demo Minion check-in", async () => {
   const minions = await json(`${service}/admin/v1/minions`, { headers: adminHeaders });
   return minions.some((minion) =>
-    minion.minion_id === "DEMO-STUB-01" && minion.health_status === "HEALTHY",
+    minion.minion_id === "DEMO-STUB-01" && minion.health_status === "HEALTHY" && minion.release_status === "MATCH",
   );
 });
 
@@ -205,10 +206,10 @@ try {
   await adminPage.locator('button[onclick="saveAdminToken()"]').click();
   await adminPage.locator('.nav-tab[onclick="switchTab(\'minions\')"]').click();
   const manifest = {
-    schema_version: 1, type_id: "E2E-PATCHER", name: "E2E Patcher", version: "2.0",
+    schema_version: 2, type_id: "E2E-PATCHER", family: "e2e-patcher", name: "E2E Patcher", version: "2.0",
     runtime_type: "powershell", artifact: "patcher.zip", package_sha256: "a".repeat(64),
     capabilities: ["windows.patch.reconcile", "windows.patch.status"], requires_target_scope: true,
-    instance_fields: [{ id: "owner", label: "Owner team", required: true }],
+    instance_fields: [{ id: "owner", label: "Owner team", required: true }], release_files: ["worker.py"],
   };
   await adminPage.locator("#minionManifestFile").setInputFiles({
     name: "patcher.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(manifest)),
@@ -227,8 +228,19 @@ try {
   await adminPage.locator("#registerMinionModal").getByRole("button", { name: "Save" }).click();
   const instanceRow = adminPage.locator("#minionsTableBody tr").filter({ hasText: "E2E-INSTANCE" });
   await instanceRow.waitFor();
-  assert.ok(await typeRow.getByRole("button", { name: "Delete" }).isDisabled());
-  assert.ok(await typeRow.getByRole("button", { name: "Disable" }).isDisabled());
+  assert.match(await instanceRow.innerText(), /NOT REPORTED/);
+  const nextRelease = { ...manifest, type_id: "E2E-NEW-PATCHER", version: "3.0", package_sha256: "b".repeat(64) };
+  await adminPage.locator("#minionManifestFile").setInputFiles({
+    name: "patcher-3.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(nextRelease)),
+  });
+  const nextTypeRow = adminPage.locator("#minionTypesTableBody tr").filter({ hasText: nextRelease.type_id });
+  await nextTypeRow.waitFor();
+  await instanceRow.getByRole("button", { name: "Assign Release" }).click();
+  await adminPage.locator("#assignMinionRelease").selectOption(nextRelease.type_id);
+  await adminPage.locator("#assignMinionReleaseModal").getByRole("button", { name: "Assign", exact: true }).click();
+  await instanceRow.getByText("Assigned: 3.0").waitFor();
+  assert.ok(await nextTypeRow.getByRole("button", { name: "Delete" }).isDisabled());
+  assert.ok(await nextTypeRow.getByRole("button", { name: "Disable" }).isDisabled());
   await instanceRow.getByRole("button", { name: "Edit" }).click();
   assert.equal(await adminPage.locator('#deployMinionFields input[data-field-id="owner"]').inputValue(), "Operations");
   await adminPage.locator("#newMinionTargets").fill("updated.example.gov");
@@ -246,6 +258,8 @@ try {
   await typeRow.getByRole("button", { name: "Enable" }).waitFor();
   await typeRow.getByRole("button", { name: "Delete" }).click();
   await typeRow.waitFor({ state: "detached" });
+  await nextTypeRow.getByRole("button", { name: "Delete" }).click();
+  await nextTypeRow.waitFor({ state: "detached" });
   console.log("MINIONS: manifest import and type/deployment lifecycle verified");
   await adminPage.locator('.nav-tab[onclick="switchTab(\'missions\')"]').click();
   await adminPage.locator("#auditRequestId").fill(allowed);
@@ -486,6 +500,26 @@ try {
   assert.equal((await json(`${service}/admin/v1/policy`, { headers: adminHeaders })).content, blank);
   await policyPage.close();
   console.log("POLICY: wizard, file round-trip, draft safety, and patch decisions verified");
+
+  const container = process.env.SG_E2E_MINION_CONTAINER;
+  assert.ok(container, "Missing isolated demo Minion container ID");
+  function minionPython(code) {
+    execFileSync("docker", ["exec", container, "python", "-c", code], { stdio: "pipe" });
+  }
+  try {
+    minionPython("from pathlib import Path; p=Path('/app/worker.py'); Path('/tmp/worker-backup').write_bytes(p.read_bytes()); p.write_bytes(p.read_bytes()+b'\\n# drift\\n')");
+    await waitFor("release drift to clear the report", async () => {
+      const minions = await json(`${service}/admin/v1/minions`, { headers: adminHeaders });
+      return minions.find((minion) => minion.minion_id === "DEMO-STUB-01")?.release_status === "NOT REPORTED";
+    });
+  } finally {
+    minionPython("from pathlib import Path; Path('/app/worker.py').write_bytes(Path('/tmp/worker-backup').read_bytes())");
+  }
+  await waitFor("restored running release to match", async () => {
+    const minions = await json(`${service}/admin/v1/minions`, { headers: adminHeaders });
+    return minions.find((minion) => minion.minion_id === "DEMO-STUB-01")?.release_status === "MATCH";
+  });
+  console.log("RELEASE: running Minion detects modified files and recovers after restoration");
 } finally {
   await browser.close();
 }

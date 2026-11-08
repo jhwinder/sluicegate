@@ -38,9 +38,18 @@ Here are the minor items we need to fix.  When complete, change `PENDING` to `CO
 - Allow administrators to add, modify, delete, and enable or disable deployed instances.
 - When deploying a Minion, require the administrator to select an enabled registered type. Populate type-defined values, such as name, version, runtime, and hash, as read-only.
 - Let administrators enable desired capabilities by selecting checkboxes from those supported by the chosen type. Collect instance-specific required information, such as target scope for a patching Minion, through editable fields.
-- Import type/version metadata from a local JSON release manifest; the official online catalog is unavailable for now. The Windows bundle builder generates a manifest for its Minion service executable.
+- Import type/version metadata from a local JSON release manifest; the official online catalog is unavailable for now. The Windows bundle builder verifies and copies the repository's Minion release manifest.
 - Associate each new instance with its selected type. Registration records metadata and does not install software or verify the deployed artifact.
 - Block deletion of deployed instances with unfinished missions; revoke their credentials when deletion succeeds.
+
+2.7 `COMPLETE` Minion release management and deployment consistency.
+
+- Keep a release manifest alongside each Minion's source in the repository so a Git pull makes the latest available release and its metadata accessible without building the Windows deployment bundle.
+- Define a reproducible fingerprint covering the Minion's relevant runtime files and shared dependencies, rather than only the Windows service executable. Verify the fingerprint and keep the manifest in sync when those files change.
+- Distinguish the **available release** in the registry, the **assigned release** for each deployed instance, and the **reported release** from the running Minion. Keep registered releases immutable; register a new version rather than silently changing an existing one.
+- Have deployed Minions report their version and fingerprint on check-in. Display **MATCH**, **MISMATCH**, or **NOT REPORTED** against the assigned release, and prevent routing new missions to instances that do not match.
+- Provide an explicit, safe update workflow: make the release available, deploy its files, assign the approved release, and confirm a matching check-in. A Git pull alone must not silently update a running deployment.
+- Document that self-reported fingerprints detect accidental drift but do not independently attest to software trust; stronger controls such as signed releases and deployment-side verification remain separate.
 
 3. DEFERRED
 3.1 Change the patching registry from CSV to SQL
@@ -49,3 +58,4 @@ Here are the minor items we need to fix.  When complete, change `PENDING` to `CO
 3.4 Console RBAC model (see P2.2 under Minion_Feature_Plan.md)
 3.5 Add health check features (see P2.3 under Minion_Feature_Plan.md)
 3.6 Support URI-based patch package sources (see P2.4 Minion_Feature_Plan.md)
+3.7 Separate demo minion from test minion

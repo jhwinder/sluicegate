@@ -97,6 +97,7 @@ def test_minion_registration_router_and_checkin(tmp_path: Path, monkeypatch) -> 
         check_resp = client.post(
             "/internal/v1/minions/DYNAMIC-PATCHER-01/check-in",
             headers=minion_headers,
+            json={"version": minion_info["version"], "fingerprint": minion_info["package_sha256"]},
         )
         assert check_resp.status_code == 200
         assert check_resp.json()["status"] == "CONNECTED"
@@ -174,8 +175,10 @@ def _routing_fixture(service, client, scope_targets, capabilities=("windows.patc
             "public_key": minion_pub_pem,
         },
     ).json()
-    if check_in:
-        client.post("/internal/v1/minions/ROUTE-01/check-in", headers={"Authorization": f"Bearer {minion['api_key']}"})
+    client.post("/internal/v1/minions/ROUTE-01/check-in", headers={"Authorization": f"Bearer {minion['api_key']}"}, json={"version": minion["version"], "fingerprint": minion["package_sha256"]})
+    if not check_in:
+        with service.transaction() as connection:
+            connection.execute("UPDATE minions SET last_contact_at = NULL WHERE minion_id = 'ROUTE-01'")
     agent = client.post("/admin/v1/agents", json={"name": "Route agent"}, headers=admin_headers).json()
     return {"Authorization": f"Bearer {agent['api_key']}"}
 
@@ -225,7 +228,7 @@ def test_capability_mismatch_is_not_routable(tmp_path: Path, monkeypatch) -> Non
 
 def test_fallback_requires_explicit_flag_and_is_recorded(tmp_path: Path, monkeypatch) -> None:
     service = setup_test_service(tmp_path, monkeypatch)
-    monkeypatch.setattr(service, "PATCH_MINION_ID", "FALLBACK-01")
+    monkeypatch.setattr(service, "PATCH_MINION_ID", "ROUTE-01")
     with TestClient(service.app) as client:
         agent = _routing_fixture(service, client, ["other-*"])
         assert _patch(client, agent, "SERVER_DYN_01.example.gov").status_code == 503
@@ -235,7 +238,7 @@ def test_fallback_requires_explicit_flag_and_is_recorded(tmp_path: Path, monkeyp
         with service.connect() as connection:
             row = connection.execute("SELECT minion_id, routing FROM missions").fetchone()
         routing = service.json.loads(row["routing"])
-        assert row["minion_id"] == "FALLBACK-01"
+        assert row["minion_id"] == "ROUTE-01"
         assert routing["fallback"] is True and routing["reason"] == "development fallback"
 
 

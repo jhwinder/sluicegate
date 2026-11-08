@@ -39,7 +39,23 @@ The installer creates and manages these. Nothing here needs hand-editing before 
 
 Existing `service.env`, policy, signing key, certificate, and Minion configuration are never overwritten on upgrade, so edits made in the Admin Console and issued keys survive.
 
-The bundle builder also creates `minion-release.json` for import into the Minion Registry. It identifies the service executable and its SHA-256; it does not hash the whole bundle or attest to running software. Verify the executable and all other bundle files against an independently trusted release before registration.
+The repository includes `minion-registry/minions/patching/minion-release.json` for import into the Minion Registry. The bundle builder verifies the executable, worker scripts, shared module and mission schema against this manifest and copies it into the bundle. This is not a hash of the whole bundle or independent attestation of running software; verify files against an independently trusted release.
+
+### Updating an installed Minion from the repository
+
+A Git pull only updates the checkout, not the installed service. On an approved maintenance window, finish all Missions for the instance, disable it in the console to prevent new routing, and stop `SluiceGateMinion`. Back up the installed program files and use a verified checkout of the intended release. From the repository root in an elevated PowerShell session, copy the files without replacing configuration or keys in ProgramData:
+
+```powershell
+$install = 'C:\Program Files\SluiceGate\Minion'
+Stop-Service SluiceGateMinion
+Copy-Item 'deployment\windows\Minion\SluiceGate.Minion.Service.exe' $install -Force
+Copy-Item 'minion-registry\minions\patching\PatchingMinion.ps1','minion-registry\minions\patching\PatchingCatalog.psm1','minion-registry\minions\patching\PatchingEngine.psm1' "$install\runtime" -Force
+Copy-Item 'minion-registry\templates\powershell\SluiceGate.Minion.Core.psm1' "$install\runtime" -Force
+Copy-Item 'minion-registry\protocol\mission-envelope.schema.json' "$install\runtime\protocol" -Force
+Copy-Item 'minion-registry\minions\patching\minion-release.json' "$install\runtime" -Force
+```
+
+Import that release manifest in the console, assign it to the deployed instance, then enable the instance and start the service. Confirm **MATCH** and healthy contact before submitting work. Assignment is blocked while Missions are unfinished. If files are changed while the process runs, it stops reporting a matching release until restarted. Check the Application event log if the service fails. Self-reports detect accidental drift, not a compromised worker.
 
 ## Package contents
 
@@ -71,9 +87,9 @@ Done by a maintainer on any machine with Docker; the output is one folder to cop
      dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=None -o /out
    ```
 
-   With a local .NET 10 SDK on Windows: `dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=None -o ..\Minion` from `MinionHost`.
+   With a local .NET 10 SDK on Windows: `dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=None -o ..\Minion` from `MinionHost`. Signing changes the executable bytes: sign the approved executable before computing a new release manifest, and pass that exact executable to the bundle builder.
 2. **Service image.** From the repository root: `docker build -f sg-service/Dockerfile -t sluicegate/sg-service:1.0.0 .` Use a release tag, not `latest`.
-3. **Bundle.** From `deployment/windows` on Windows PowerShell. `-Version` is recorded in `Minion/runtime/version.json`; the output directory must be empty:
+3. **Bundle.** From `deployment/windows` on Windows PowerShell. `-Version` must match the repository manifest and is recorded in `Minion/runtime/version.json`; the output directory must be empty:
 
    ```powershell
    .\Build-DeploymentBundle.ps1 -MinionExecutable .\Minion\SluiceGate.Minion.Service.exe `

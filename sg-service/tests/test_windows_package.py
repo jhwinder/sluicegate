@@ -102,12 +102,16 @@ def test_bundle_contains_everything_the_installer_requires(tmp_path: Path) -> No
         assert (bundle / name).is_file(), name
 
     version = json.loads((bundle / "Minion/runtime/version.json").read_text(encoding="utf-8-sig"))
-    assert version["version"] == "9.9.9" and version["serviceImage"] == "sluicegate/sg-service:9.9.9"
+    assert version["version"] == "1.0.0" and version["serviceImage"] == "sluicegate/sg-service:9.9.9"
 
     release = json.loads((bundle / "minion-release.json").read_text(encoding="utf-8-sig"))
-    assert release["schema_version"] == 1 and release["version"] == "9.9.9"
+    assert release["schema_version"] == 2 and release["version"] == "1.0.0"
     assert release["artifact"] == "Minion/SluiceGate.Minion.Service.exe"
-    assert release["package_sha256"] == hashlib.sha256((bundle / release["artifact"]).read_bytes()).hexdigest()
+    lines = "".join(f"{name}\0{hashlib.sha256((bundle / 'Minion' / name).read_bytes()).hexdigest()}\n" for name in release["release_files"])
+    assert release["package_sha256"] == hashlib.sha256(lines.encode()).hexdigest()
+    assert results["report"] == {"version": release["version"], "fingerprint": release["package_sha256"]}
+    assert results["changed"]["fingerprint"] != release["package_sha256"]
+    assert results["missing"] != "no error"
     assert release["capabilities"] == ["windows.patch.reconcile", "windows.patch.discover", "windows.patch.status"]
     assert release["requires_target_scope"] is True
     from sg_service.mission_control import MinionTypeManifest

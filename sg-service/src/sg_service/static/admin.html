@@ -423,7 +423,7 @@
             <th>Runtime / Environment</th>
             <th>Capabilities</th>
             <th>Target Scope</th>
-            <th>Package</th>
+            <th>Release / Report</th>
             <th>Health / Last Contact</th>
             <th>Work / Credential</th>
             <th>Actions</th>
@@ -585,6 +585,19 @@
       <div style="display:flex; justify-content:flex-end; gap:8px;">
         <button class="secondary" onclick="closeModal('registerMinionModal')">Cancel</button>
         <button onclick="submitRegisterMinion()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="assignMinionReleaseModal" class="modal-backdrop">
+    <div class="modal">
+      <h3>Assign Minion Release</h3>
+      <p>Deploy the new files and stop the Minion before changing its assigned release. Unfinished missions prevent reassignment. A fresh matching check-in is required before routing resumes.</p>
+      <label>Registered release</label>
+      <select id="assignMinionRelease"></select>
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px;">
+        <button class="secondary" onclick="closeModal('assignMinionReleaseModal')">Cancel</button>
+        <button onclick="submitMinionRelease()">Assign</button>
       </div>
     </div>
   </div>
@@ -1168,12 +1181,13 @@
             <td>${esc(m.runtime_type)} ${esc(m.version)}<br><small>${esc(m.environment)} · ${esc(m.transport_type)}</small></td>
             <td>${(m.capabilities || []).map(c => `<span class="badge badge-info">${esc(c)}</span>`).join(" ")}</td>
             <td>${(m.scope_metadata?.targets || []).map(esc).join(", ") || '—'}</td>
-            <td>${m.package_approved ? '<span class="badge badge-success">APPROVED</span>' : '<span class="badge badge-warning">UNAPPROVED</span>'}<br><small class="mono">${esc(m.package_sha256 || 'No hash')}</small></td>
+            <td>${statusBadge(m.release_status)}<br><small>Assigned: ${esc(m.version)}<br>Reported: ${esc(m.reported_version || '—')}<br><span class="mono">Assigned: ${esc(m.package_sha256 || '—')}<br>Reported: ${esc(m.reported_fingerprint || '—')}</span></small></td>
             <td>${statusBadge(m.health_status)}<br><small>${formatTs(m.last_contact_at)}</small></td>
             <td>${m.active_mission_count} active<br><small>${renderCredentialSummary(m.keys)}</small></td>
             <td style="display:flex; gap:6px;">
               <button class="secondary" onclick="viewMinionDetail(this.dataset.id)" data-id="${esc(m.minion_id)}">Inspect</button>
               <button class="secondary" onclick="openDeployMinion(this.dataset.id)" data-id="${esc(m.minion_id)}">Edit</button>
+              <button class="secondary" onclick="openAssignMinionRelease(this.dataset.id)" data-id="${esc(m.minion_id)}">Assign Release</button>
               ${m.runtime_type === "powershell" && m.capabilities.some(c => c.startsWith("windows.patch.")) ? `<button class="secondary" onclick="openMinionConfig(this.dataset.id)" data-id="${esc(m.minion_id)}">Config</button>` : ""}
               <button class="secondary" onclick="revokeMinionKey(this.dataset.id)" data-id="${esc(m.minion_id)}">Revoke Key</button>
               <button class="secondary" onclick="toggleMinion(this.dataset.id, ${!m.enabled})" data-id="${esc(m.minion_id)}">${m.enabled ? 'Disable' : 'Enable'}</button>
@@ -1270,6 +1284,35 @@
       if (!confirm(`Delete deployed Minion ${id} and revoke its credentials? Unfinished missions prevent deletion.`)) return;
       const res = await fetch(`/admin/v1/minions/${encodeURIComponent(id)}`, { method: "DELETE", headers: getAuthHeaders() });
       if (!res.ok) { alert("Failed to delete Minion: " + await res.text()); return; }
+      await loadMinions();
+    }
+
+    async function openAssignMinionRelease(id) {
+      try {
+        await loadMinionTypes();
+        const res = await fetch(`/admin/v1/minions/${encodeURIComponent(id)}`, { headers: getAuthHeaders() });
+        if (!res.ok) throw new Error(await res.text());
+        const minion = await res.json();
+        const current = minionTypes.find(t => t.type_id === minion.type_id);
+        const choices = minionTypes.filter(t => t.enabled && t.family && t.family === current?.family && t.type_id !== minion.type_id);
+        if (!choices.length) { alert("No other enabled releases in this Minion family. Import a release first."); return; }
+        document.getElementById("assignMinionRelease").innerHTML = choices.map(t =>
+          `<option value="${esc(t.type_id)}">${esc(t.name)} ${esc(t.version)} (${esc(t.type_id)})</option>`
+        ).join("");
+        document.getElementById("assignMinionReleaseModal").dataset.id = id;
+        openModal("assignMinionReleaseModal");
+      } catch (err) { alert("Unable to select release: " + err.message); }
+    }
+
+    async function submitMinionRelease() {
+      const id = document.getElementById("assignMinionReleaseModal").dataset.id;
+      const type_id = document.getElementById("assignMinionRelease").value;
+      if (!confirm(`Assign ${type_id} to ${id}? Routing will pause until a matching check-in.`)) return;
+      const res = await fetch(`/admin/v1/minions/${encodeURIComponent(id)}/release`, {
+        method: "POST", headers: getAuthHeaders(), body: JSON.stringify({ type_id })
+      });
+      if (!res.ok) { alert("Failed to assign release: " + await res.text()); return; }
+      closeModal("assignMinionReleaseModal");
       await loadMinions();
     }
 

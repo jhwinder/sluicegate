@@ -7,6 +7,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi.testclient import TestClient
+from minion_helpers import create_routable_test_minion
 
 CONCURRENCY = 8
 OPEN_STATUSES = ("QUEUED", "WAITING_FOR_APPROVAL", "CLAIMED", "MISSION_ACKNOWLEDGED", "MISSION_IN_PROGRESS", "MISSION_WAITING_FOR_REBOOT")
@@ -57,6 +58,9 @@ def setup_test_service(tmp_path: Path, monkeypatch):
 
 def make_agent(client, name: str) -> dict[str, str]:
     admin_key = client.post("/admin/v1/credentials/admin/admin", headers={"Authorization": "Bearer test-admin-secret"}).json()["api_key"]
+    admin_headers = {"Authorization": f"Bearer {admin_key}"}
+    if not client.get("/admin/v1/minions", headers=admin_headers).json():
+        create_routable_test_minion(client, admin_headers)
     agent = client.post("/admin/v1/agents", json={"name": name}, headers={"Authorization": f"Bearer {admin_key}"}).json()
     return {"Authorization": f"Bearer {agent['api_key']}"}
 

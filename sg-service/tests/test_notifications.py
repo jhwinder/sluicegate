@@ -12,6 +12,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi.testclient import TestClient
+from minion_helpers import create_routable_test_minion
 
 from sg_service import notifications
 
@@ -95,6 +96,7 @@ def test_notification_profiles_adapters_and_delivery_audit(tmp_path: Path, monke
             headers={"Authorization": "Bearer test-admin-secret"},
         ).json()["api_key"]
         admin_headers = {"Authorization": f"Bearer {admin_key}"}
+        create_routable_test_minion(client, admin_headers)
 
         # 1. Register Notification Adapter
         ad_resp = client.post(
@@ -194,6 +196,7 @@ def admin_headers(client: TestClient) -> dict[str, str]:
 
 
 def create_pause_request(client: TestClient, headers: dict[str, str]) -> str:
+    create_routable_test_minion(client, headers)
     agent = client.post("/admin/v1/agents", json={"name": "Mail Test Agent"}, headers=headers).json()
     response = client.post(
         "/api/v1/patch-requests",

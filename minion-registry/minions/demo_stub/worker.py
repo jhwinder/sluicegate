@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import ssl
 import time
@@ -20,6 +21,17 @@ MINION_PRIVATE_KEY_PATH = Path(os.environ.get("MINION_PRIVATE_KEY_PATH", "/run/s
 POLL_INTERVAL_SECONDS = float(os.environ.get("MINION_POLL_INTERVAL_SECONDS", "2"))
 ALLOW_INSECURE_HTTP = os.environ.get("MINION_ALLOW_INSECURE_HTTP", "").lower() == "true"
 TRUSTED_CERT_PATH = os.environ.get("MINION_TRUSTED_CERT_PATH", "").strip()
+RELEASE_MANIFEST_PATH = Path(__file__).resolve().parent / "minion-release.json"
+
+
+def release_report() -> dict[str, str]:
+    manifest = json.loads(RELEASE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    root = RELEASE_MANIFEST_PATH.parent
+    lines = []
+    for name in manifest["release_files"]:
+        digest = hashlib.sha256((root / name).read_bytes()).hexdigest()
+        lines.append(f"{name}\0{digest}\n")
+    return {"version": manifest["version"], "fingerprint": hashlib.sha256("".join(lines).encode("utf-8")).hexdigest()}
 
 
 def transport_verification(url: str = MISSION_CONTROL_URL, allow_insecure_http: bool = ALLOW_INSECURE_HTTP, trusted_cert_path: str = TRUSTED_CERT_PATH) -> ssl.SSLContext | bool:
@@ -124,10 +136,23 @@ def main() -> None:
         raise RuntimeError("MINION_API_KEY must be configured")
     if not MINION_PRIVATE_KEY_PATH.is_file():
         raise RuntimeError(f"Minion signing key is missing: {MINION_PRIVATE_KEY_PATH}")
+    try:
+        startup_release = release_report()
+    except (OSError, ValueError, KeyError) as exc:
+        print(f"Unable to calculate startup release fingerprint: {exc}", flush=True)
+        startup_release = None
     with httpx.Client(base_url=MISSION_CONTROL_URL, timeout=20, verify=transport_verification()) as client:
         while True:
             try:
-                check_in = client.post(f"/internal/v1/minions/{MINION_ID}/check-in", headers=headers())
+                try:
+                    current_release = release_report()
+                    report = current_release if current_release == startup_release else None
+                    if report is None:
+                        print("Release files changed since startup; restart the Minion after deployment", flush=True)
+                except (OSError, ValueError, KeyError) as exc:
+                    print(f"Unable to calculate release fingerprint: {exc}", flush=True)
+                    report = None
+                check_in = client.post(f"/internal/v1/minions/{MINION_ID}/check-in", headers=headers(), json=report)
                 check_in.raise_for_status()
                 claim = client.post(f"/internal/v1/minions/{MINION_ID}/missions/claim", headers=headers())
                 claim.raise_for_status()

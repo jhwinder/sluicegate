@@ -76,7 +76,7 @@ def mission(tmp_path: Path, monkeypatch):
             client, admin, {"minion_id": "PATCH-01", "name": "Patcher", "capabilities": ["windows.patch.reconcile", "demo.action"], "scope_metadata": {"targets": ["*"]}, "public_key": public_pem(minion_key)},
         ).json()
         minion = {"Authorization": f"Bearer {registered['api_key']}"}
-        client.post("/internal/v1/minions/PATCH-01/check-in", headers=minion)
+        client.post("/internal/v1/minions/PATCH-01/check-in", headers=minion, json={"version": registered["version"], "fingerprint": registered["package_sha256"]})
         agent = {"Authorization": "Bearer " + client.post("/admin/v1/agents", json={"name": "Agent"}, headers=admin).json()["api_key"]}
 
         def claim(body: dict | None = None, path: str = "/api/v1/patch-requests") -> dict:

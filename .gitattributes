@@ -1,0 +1,6 @@
+minion-registry/minions/patching/*.ps1 text eol=lf
+minion-registry/minions/patching/*.psm1 text eol=lf
+minion-registry/templates/powershell/SluiceGate.Minion.Core.psm1 text eol=lf
+minion-registry/protocol/mission-envelope.schema.json text eol=lf
+minion-registry/minions/demo_stub/worker.py text eol=lf
+minion-registry/minions/demo_stub/requirements.txt text eol=lf

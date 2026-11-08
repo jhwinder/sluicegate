@@ -263,6 +263,31 @@ $capabilityHandler = {
     }
 }
 
+function Get-ReleaseReport {
+        $releaseRoot = Split-Path -Parent $PSScriptRoot
+        $release = Get-Content -LiteralPath (Join-Path $PSScriptRoot "minion-release.json") -Raw | ConvertFrom-Json
+        if ($release.schema_version -ne 2 -or -not $release.release_files -or -not $release.version) {
+            throw "Invalid Minion release manifest"
+        }
+        $lines = [System.Text.StringBuilder]::new()
+        foreach ($file in $release.release_files) {
+            if ($file -notmatch '^[A-Za-z0-9._/-]+$' -or ($file -split '/' | Where-Object { $_ -in @('', '.', '..') })) {
+                throw "Invalid release file path: $file"
+            }
+            $digest = (Get-FileHash -LiteralPath (Join-Path $releaseRoot $file) -Algorithm SHA256).Hash.ToLowerInvariant()
+            [void]$lines.Append("$file`0$digest`n")
+        }
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($lines.ToString())
+        $hash = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $fingerprint = ([BitConverter]::ToString($hash.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
+        }
+        finally {
+            $hash.Dispose()
+        }
+        return @{ version = [string]$release.version; fingerprint = $fingerprint }
+}
+
 function Run-MissionPass {
     if ($script:ActiveMission -and $script:ActiveHeartbeatJob -and $script:ActiveHeartbeatJob.State -ne "Running") {
         Remove-Job $script:ActiveHeartbeatJob -Force -ErrorAction SilentlyContinue
@@ -271,7 +296,20 @@ function Run-MissionPass {
     }
 
     # 1. Check in with Minion Mission Control
-    $checkIn = Invoke-MinionCheckIn -MissionControlUrl $MissionControlUrl -MinionId $MinionId -ApiKey $ApiKey
+    $releaseReport = $null
+    try {
+        $currentRelease = Get-ReleaseReport
+        if ($script:StartupRelease -and $currentRelease.version -eq $script:StartupRelease.version -and $currentRelease.fingerprint -eq $script:StartupRelease.fingerprint) {
+            $releaseReport = $currentRelease
+        }
+        else {
+            Write-Warning "Release files changed or were unavailable at startup; restart the Minion after deployment."
+        }
+    }
+    catch {
+        Write-Warning "Unable to calculate Minion release fingerprint: $_"
+    }
+    $checkIn = Invoke-MinionCheckIn -MissionControlUrl $MissionControlUrl -MinionId $MinionId -ApiKey $ApiKey -ReleaseReport $releaseReport
     if ($null -eq $checkIn) {
         Write-Warning "Check-in failed with Minion Mission Control. Retrying next cycle..."
         return
@@ -541,6 +579,15 @@ function Run-MissionPass {
     if ($script:ActiveHeartbeatJob) { Stop-Job $script:ActiveHeartbeatJob -ErrorAction SilentlyContinue; Remove-Job $script:ActiveHeartbeatJob -Force -ErrorAction SilentlyContinue; $script:ActiveHeartbeatJob = $null }
 
     Write-Host "Mission $missionId completed with status $terminalStatus."
+}
+
+# Capture the installed release once; subsequent changes require a restart.
+$script:StartupRelease = $null
+try {
+    $script:StartupRelease = Get-ReleaseReport
+}
+catch {
+    Write-Warning "Unable to calculate startup Minion release fingerprint: $_"
 }
 
 # Execution loop

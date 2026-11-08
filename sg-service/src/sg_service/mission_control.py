@@ -30,7 +30,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sg_core import GateRequest, PolicyEngine
 from sg_poledit.validate import validate_policy_dict
 
@@ -190,7 +190,7 @@ class MinionInstanceField(BaseModel):
 class MinionTypeManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: int = Field(ge=1, le=1)
+    schema_version: int = Field(ge=1, le=2)
     type_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
     name: str = Field(min_length=1, max_length=200)
     version: str = Field(min_length=1, max_length=100)
@@ -200,6 +200,23 @@ class MinionTypeManifest(BaseModel):
     capabilities: list[str] = Field(min_length=1, max_length=100)
     requires_target_scope: bool
     instance_fields: list[MinionInstanceField] = Field(default_factory=list, max_length=30)
+    family: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    release_files: list[str] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_release_identity(self) -> "MinionTypeManifest":
+        if self.schema_version == 2:
+            if not self.family or not self.release_files:
+                raise ValueError("Version 2 manifests require a family and release files")
+            if self.release_files != sorted(set(self.release_files)) or any(
+                not re.fullmatch(r"[A-Za-z0-9._/-]+", path)
+                or any(part in {"", ".", ".."} for part in path.split("/"))
+                for path in self.release_files
+            ):
+                raise ValueError("Release files must be unique sorted safe relative paths")
+        elif self.family is not None or self.release_files:
+            raise ValueError("Version 1 manifests do not support release fingerprints")
+        return self
 
     @field_validator("name", "version", "runtime_type", "artifact")
     @classmethod
@@ -252,6 +269,19 @@ class UpdateMinionTypeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool
+
+
+class MinionCheckIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: str = Field(min_length=1, max_length=100)
+    fingerprint: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
+
+
+class AssignMinionReleaseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type_id: str = Field(min_length=1)
 
 
 class MinionConfigExportRequest(BaseModel):
@@ -383,10 +413,9 @@ def insert_mission_once(values: tuple[Any, ...], key: str, audit_records: list[d
             existing = find_open_equivalent(connection, key)
             if existing:
                 return existing
-            routing = json.loads(values[7])
-            if values[5] in OPEN_MISSION_STATUSES and not routing.get("fallback"):
-                deployed = connection.execute("SELECT enabled FROM minions WHERE minion_id = ?", (values[3],)).fetchone()
-                if deployed is None or not deployed["enabled"]:
+            if values[5] in OPEN_MISSION_STATUSES:
+                deployed = connection.execute("SELECT enabled, version, package_sha256, release_schema, reported_version, reported_fingerprint FROM minions WHERE minion_id = ?", (values[3],)).fetchone()
+                if deployed is None or not deployed["enabled"] or minion_release_status(deployed) != "MATCH":
                     raise HTTPException(status_code=503, detail="Selected Minion is no longer available; retry the request")
             connection.execute(f"INSERT INTO missions ({columns}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (*values, key))
             for record in audit_records or []:
@@ -546,6 +575,12 @@ def initialize() -> None:
                 manifest TEXT NOT NULL,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 created_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS minion_release_history (
+                type_id TEXT PRIMARY KEY,
+                family TEXT,
+                version TEXT NOT NULL,
+                manifest TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS minions (
                 minion_id TEXT PRIMARY KEY,
@@ -728,6 +763,9 @@ def initialize() -> None:
             ("last_contact_at", "REAL"),
             ("type_id", "TEXT"),
             ("instance_metadata", "TEXT NOT NULL DEFAULT '{}'"),
+            ("reported_version", "TEXT"),
+            ("reported_fingerprint", "TEXT"),
+            ("release_schema", "INTEGER NOT NULL DEFAULT 1"),
         ]:
             try:
                 connection.execute(f"ALTER TABLE minions ADD COLUMN {col} {col_def}")
@@ -768,24 +806,50 @@ def initialize() -> None:
             if development_public_key and Path(development_public_key).is_file():
                 public_key = Path(development_public_key).read_text(encoding="utf-8")
                 now = time.time()
-                demo_manifest = {
-                    "schema_version": 1, "type_id": "DEMO-STUB", "name": "Demo Stub Minion",
-                    "version": "development", "runtime_type": "python", "artifact": "demo_stub/worker.py",
-                    "package_sha256": None, "capabilities": ["windows.patch.reconcile", "demo.action", "stripe.refund", "stripe.charge"],
-                    "requires_target_scope": True,
-                }
+                manifest_path = Path(os.environ.get("SG_DEV_MINION_MANIFEST_PATH", "/opt/sluicegate/demo-minion-release.json"))
+                demo_manifest = MinionTypeManifest.model_validate_json(manifest_path.read_text(encoding="utf-8")).model_dump()
                 connection.execute(
                     "INSERT OR IGNORE INTO minion_types (type_id, manifest, created_at) VALUES (?, ?, ?)",
-                    ("DEMO-STUB", json.dumps(demo_manifest), now),
+                    (demo_manifest["type_id"], json.dumps(demo_manifest), now),
                 )
                 connection.execute(
                     """
-                    INSERT INTO minions (minion_id, type_id, name, runtime_type, version, capabilities, scope_metadata, public_key, created_at, updated_at)
-                    VALUES ('DEMO-STUB-01', 'DEMO-STUB', 'Demo Stub Minion', 'python', 'development', '["windows.patch.reconcile", "demo.action", "stripe.refund", "stripe.charge"]', '{"targets": ["*"]}', ?, ?, ?)
-                    ON CONFLICT(minion_id) DO UPDATE SET type_id = excluded.type_id, public_key = excluded.public_key, capabilities = excluded.capabilities, scope_metadata = excluded.scope_metadata, enabled = 1
+                    INSERT INTO minions (minion_id, type_id, name, runtime_type, version, package_sha256, release_schema, capabilities, scope_metadata, public_key, created_at, updated_at)
+                    VALUES ('DEMO-STUB-01', ?, ?, ?, ?, ?, 2, ?, '{"targets": ["*"]}', ?, ?, ?)
+                    ON CONFLICT(minion_id) DO UPDATE SET
+                        type_id = CASE WHEN minions.type_id = 'DEMO-STUB' THEN excluded.type_id ELSE minions.type_id END,
+                        version = CASE WHEN minions.type_id = 'DEMO-STUB' THEN excluded.version ELSE minions.version END,
+                        package_sha256 = CASE WHEN minions.type_id = 'DEMO-STUB' THEN excluded.package_sha256 ELSE minions.package_sha256 END,
+                        release_schema = CASE WHEN minions.type_id = 'DEMO-STUB' THEN 2 ELSE minions.release_schema END,
+                        public_key = excluded.public_key
                     """,
-                    (public_key, now, now),
+                    (demo_manifest["type_id"], demo_manifest["name"], demo_manifest["runtime_type"], demo_manifest["version"],
+                     demo_manifest["package_sha256"], json.dumps(demo_manifest["capabilities"]), public_key, now, now),
                 )
+        for release in connection.execute("SELECT type_id, manifest FROM minion_types").fetchall():
+            registered = MinionTypeManifest.model_validate_json(release["manifest"]).model_dump()
+            registered["package_sha256"] = registered["package_sha256"].lower()
+            remember_minion_release(connection, registered)
+
+
+def remember_minion_release(connection: sqlite3.Connection, manifest: dict[str, Any]) -> None:
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    existing = connection.execute(
+        "SELECT manifest FROM minion_release_history WHERE type_id = ?", (manifest["type_id"],)
+    ).fetchone()
+    if existing is not None:
+        if json.loads(existing["manifest"]) != manifest:
+            raise HTTPException(status_code=409, detail="A registered release ID cannot be reused with different metadata")
+        return
+    if manifest.get("family") and connection.execute(
+        "SELECT 1 FROM minion_release_history WHERE family = ? AND version = ?",
+        (manifest["family"], manifest["version"]),
+    ).fetchone():
+        raise HTTPException(status_code=409, detail="A release version already exists for this Minion family")
+    connection.execute(
+        "INSERT INTO minion_release_history (type_id, family, version, manifest) VALUES (?, ?, ?, ?)",
+        (manifest["type_id"], manifest.get("family"), manifest["version"], canonical),
+    )
 
 
 def _insert_environment_key(connection: sqlite3.Connection, kind: str, token: str, principal_id: str) -> None:
@@ -988,6 +1052,14 @@ def minion_scope_covers(scope_metadata: dict[str, Any], names: list[str]) -> boo
     return all(any(fnmatch.fnmatchcase(name.lower(), pattern) for pattern in lowered) for name in names)
 
 
+def minion_release_status(row: sqlite3.Row) -> str:
+    if not row["reported_version"] or not row["reported_fingerprint"]:
+        return "NOT REPORTED"
+    if row["release_schema"] == 2 and row["reported_version"] == row["version"] and row["reported_fingerprint"] == row["package_sha256"]:
+        return "MATCH"
+    return "MISMATCH"
+
+
 def resolve_minion(capability: str, environment: str = "prod", scope_target: dict[str, Any] | None = None) -> dict[str, Any]:
     """Pick the oldest enabled, fresh Minion whose capability, environment and scope all match; fail closed otherwise."""
     names = target_names(scope_target)
@@ -995,7 +1067,7 @@ def resolve_minion(capability: str, environment: str = "prod", scope_target: dic
     rejected: dict[str, str] = {}
     with connect() as conn:
         rows = conn.execute(
-            "SELECT minion_id, capabilities, environment, scope_metadata, last_contact_at FROM minions WHERE enabled = 1 ORDER BY created_at ASC, minion_id ASC"
+            "SELECT minion_id, capabilities, environment, scope_metadata, last_contact_at, version, package_sha256, release_schema, reported_version, reported_fingerprint FROM minions WHERE enabled = 1 ORDER BY created_at ASC, minion_id ASC"
         ).fetchall()
     for r in rows:
         minion_id = str(r["minion_id"])
@@ -1005,11 +1077,14 @@ def resolve_minion(capability: str, environment: str = "prod", scope_target: dic
             rejected[minion_id] = "capability"
         elif not minion_scope_covers(json.loads(r["scope_metadata"] or "{}"), names):
             rejected[minion_id] = "scope"
+        elif minion_release_status(r) != "MATCH":
+            rejected[minion_id] = "release"
         elif MINION_STALE_SECONDS > 0 and (r["last_contact_at"] is None or now - r["last_contact_at"] > MINION_STALE_SECONDS):
             rejected[minion_id] = "stale"
         else:
             return {"minion_id": minion_id, "reason": "eligible", "fallback": False, "decided_at": now}
-    if ALLOW_FALLBACK_MINION and PATCH_MINION_ID:
+    fallback = next((row for row in rows if row["minion_id"] == PATCH_MINION_ID and minion_release_status(row) == "MATCH"), None)
+    if ALLOW_FALLBACK_MINION and fallback:
         routing_logger.warning("Routing %s to fallback Minion %s (SG_ALLOW_FALLBACK_MINION); rejected: %s", capability, PATCH_MINION_ID, rejected)
         return {"minion_id": PATCH_MINION_ID, "reason": "development fallback", "fallback": True, "decided_at": now}
     routing_logger.warning("No eligible Minion for %s in %s (targets %s); rejected: %s", capability, environment, names, rejected)
@@ -1537,12 +1612,15 @@ def create_action(request: CanonicalActionRequest, principal: str = Depends(requ
 
 
 @app.post("/internal/v1/minions/{minion_id}/check-in")
-def minion_check_in(minion_id: str, principal: str = Depends(require_minion)) -> dict[str, Any]:
+def minion_check_in(minion_id: str, report: MinionCheckIn | None = None, principal: str = Depends(require_minion)) -> dict[str, Any]:
     if minion_id != principal:
         raise HTTPException(status_code=403, detail="Minion identity not authorized")
     now = time.time()
     with transaction() as connection:
-        connection.execute("UPDATE minions SET last_contact_at = ? WHERE minion_id = ?", (now, minion_id))
+        connection.execute(
+            "UPDATE minions SET last_contact_at = ?, reported_version = ?, reported_fingerprint = ? WHERE minion_id = ?",
+            (now, report.version if report else None, report.fingerprint.lower() if report else None, minion_id),
+        )
     return {"minion_id": minion_id, "status": "CONNECTED", "server_time": now}
 
 
@@ -1636,6 +1714,12 @@ def claim_mission(minion_id: str, principal: str = Depends(require_minion)) -> d
     claimed_mission: dict[str, Any] | None = None
     retry_deadlines: list[float] = []
     with transaction() as connection:
+        release = connection.execute(
+            "SELECT enabled, version, package_sha256, release_schema, reported_version, reported_fingerprint FROM minions WHERE minion_id = ?",
+            (minion_id,),
+        ).fetchone()
+        if release is None or not release["enabled"] or minion_release_status(release) != "MATCH":
+            raise HTTPException(status_code=409, detail="A matching Minion release check-in is required to claim missions")
         rows = connection.execute(
             "SELECT mission_id, request_id, envelope, status, attempt_count, claim_generation, lease_expires_at, attempt_started_at, execution_started_at, next_retry_at FROM missions WHERE minion_id = ? AND status IN ('QUEUED', 'CLAIMED', 'MISSION_ACKNOWLEDGED', 'MISSION_IN_PROGRESS', 'MISSION_WAITING_FOR_REBOOT') ORDER BY created_at",
             (minion_id,),
@@ -2461,6 +2545,7 @@ def register_minion_type(body: MinionTypeManifest, _admin: str = Depends(require
     with transaction() as connection:
         if connection.execute("SELECT 1 FROM minion_types WHERE type_id = ?", (body.type_id,)).fetchone():
             raise HTTPException(status_code=409, detail="Minion type ID already registered")
+        remember_minion_release(connection, manifest)
         connection.execute(
             "INSERT INTO minion_types (type_id, manifest, created_at) VALUES (?, ?, ?)",
             (body.type_id, json.dumps(manifest), time.time()),
@@ -2533,8 +2618,8 @@ def register_minion(body: RegisterMinionRequest, _admin: str = Depends(require_a
             raise HTTPException(status_code=409, detail="Minion ID belongs to historical missions and cannot be reused")
         connection.execute(
             """
-            INSERT INTO minions (minion_id, type_id, name, description, runtime_type, version, package_sha256, environment, capabilities, scope_metadata, instance_metadata, transport_type, endpoint_info, public_key, enabled, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pull', '', ?, 1, ?, ?)
+            INSERT INTO minions (minion_id, type_id, name, description, runtime_type, version, package_sha256, release_schema, environment, capabilities, scope_metadata, instance_metadata, transport_type, endpoint_info, public_key, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pull', '', ?, 1, ?, ?)
             """,
             (
                 body.minion_id,
@@ -2544,6 +2629,7 @@ def register_minion(body: RegisterMinionRequest, _admin: str = Depends(require_a
                 manifest["runtime_type"],
                 manifest["version"],
                 manifest["package_sha256"],
+                manifest["schema_version"],
                 body.environment,
                 json.dumps(body.capabilities),
                 json.dumps(body.scope_metadata),
@@ -2598,6 +2684,7 @@ def credential_lifecycle(connection: sqlite3.Connection, kind: str, principal_id
 
 def serialize_minion_registry_row(connection: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
+    item["release_status"] = minion_release_status(row)
     item["capabilities"] = json.loads(item["capabilities"] or "[]")
     item["scope_metadata"] = json.loads(item["scope_metadata"] or "{}")
     item["instance_metadata"] = json.loads(item["instance_metadata"] or "{}")
@@ -2627,7 +2714,7 @@ def serialize_minion_registry_row(connection: sqlite3.Connection, row: sqlite3.R
 def list_minions(_admin: str = Depends(require_admin)) -> list[dict[str, Any]]:
     with connect() as connection:
         rows = connection.execute(
-            "SELECT minion_id, type_id, name, description, runtime_type, version, package_sha256, environment, capabilities, scope_metadata, instance_metadata, transport_type, endpoint_info, enabled, created_at, updated_at, last_contact_at FROM minions ORDER BY created_at DESC"
+            "SELECT minion_id, type_id, name, description, runtime_type, version, package_sha256, release_schema, reported_version, reported_fingerprint, environment, capabilities, scope_metadata, instance_metadata, transport_type, endpoint_info, enabled, created_at, updated_at, last_contact_at FROM minions ORDER BY created_at DESC"
         ).fetchall()
         return [serialize_minion_registry_row(connection, row) for row in rows]
 
@@ -2636,7 +2723,7 @@ def list_minions(_admin: str = Depends(require_admin)) -> list[dict[str, Any]]:
 def get_minion(minion_id: str, _admin: str = Depends(require_admin)) -> dict[str, Any]:
     with connect() as connection:
         row = connection.execute(
-            "SELECT minion_id, type_id, name, description, runtime_type, version, package_sha256, environment, capabilities, scope_metadata, instance_metadata, transport_type, endpoint_info, enabled, created_at, updated_at, last_contact_at FROM minions WHERE minion_id = ?",
+            "SELECT minion_id, type_id, name, description, runtime_type, version, package_sha256, release_schema, reported_version, reported_fingerprint, environment, capabilities, scope_metadata, instance_metadata, transport_type, endpoint_info, enabled, created_at, updated_at, last_contact_at FROM minions WHERE minion_id = ?",
             (minion_id,),
         ).fetchone()
         if row is None:
@@ -2835,6 +2922,32 @@ def delete_minion(minion_id: str, _admin: str = Depends(require_admin)) -> dict[
         connection.execute("UPDATE api_keys SET enabled = 0, revoked_at = ? WHERE principal_id = ? AND kind = 'minion' AND revoked_at IS NULL", (time.time(), minion_id))
         connection.execute("DELETE FROM minions WHERE minion_id = ?", (minion_id,))
     return {"minion_id": minion_id, "status": "DELETED"}
+
+
+@app.post("/admin/v1/minions/{minion_id}/release")
+def assign_minion_release(minion_id: str, body: AssignMinionReleaseRequest, admin: str = Depends(require_admin)) -> dict[str, Any]:
+    with transaction() as connection:
+        row = connection.execute("SELECT * FROM minions WHERE minion_id = ?", (minion_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Minion not found")
+        previous = connection.execute("SELECT manifest FROM minion_types WHERE type_id = ?", (row["type_id"],)).fetchone()
+        target = connection.execute("SELECT manifest, enabled FROM minion_types WHERE type_id = ?", (body.type_id,)).fetchone()
+        if target is None or not target["enabled"]:
+            raise HTTPException(status_code=422, detail="Select an enabled registered release")
+        new_manifest = json.loads(target["manifest"])
+        old_manifest = json.loads(previous["manifest"]) if previous else {}
+        if not old_manifest.get("family") or old_manifest["family"] != new_manifest.get("family"):
+            raise HTTPException(status_code=422, detail="Release must belong to the same Minion family")
+        if connection.execute(f"SELECT 1 FROM missions WHERE minion_id = ? AND status IN ({OPEN_STATUS_SQL})", (minion_id,)).fetchone():
+            raise HTTPException(status_code=409, detail="Cannot change release while missions are unfinished")
+        validate_minion_instance(new_manifest, json.loads(row["capabilities"]), json.loads(row["scope_metadata"]), json.loads(row["instance_metadata"]))
+        connection.execute(
+            "UPDATE minions SET type_id = ?, name = ?, runtime_type = ?, version = ?, package_sha256 = ?, release_schema = ?, reported_version = NULL, reported_fingerprint = NULL, last_contact_at = NULL, updated_at = ? WHERE minion_id = ?",
+            (body.type_id, new_manifest["name"], new_manifest["runtime_type"], new_manifest["version"], new_manifest["package_sha256"], new_manifest["schema_version"], time.time(), minion_id),
+        )
+        record_audit_event("minion.release_assigned", "ADMIN", admin, minion_id=minion_id, status="ASSIGNED",
+                           detail={"previous_type_id": row["type_id"], "type_id": body.type_id}, connection=connection)
+    return get_minion(minion_id, admin)
 
 
 @app.post("/admin/v1/minions/{minion_id}/rotate-key")

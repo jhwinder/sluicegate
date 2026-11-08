@@ -82,7 +82,7 @@ def test_canonical_action_api_allow_pause_approval(tmp_path: Path, monkeypatch) 
         ).json()
         minion_key = minion_reg["api_key"]
         minion_headers = {"Authorization": f"Bearer {minion_key}"}
-        client.post("/internal/v1/minions/REFUND-MINION-01/check-in", headers=minion_headers)
+        client.post("/internal/v1/minions/REFUND-MINION-01/check-in", headers=minion_headers, json={"version": minion_reg["version"], "fingerprint": minion_reg["package_sha256"]})
 
         # Register billing agent
         agent_data = client.post(

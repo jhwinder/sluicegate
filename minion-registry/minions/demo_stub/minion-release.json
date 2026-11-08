@@ -1,0 +1,21 @@
+{
+  "schema_version": 2,
+  "type_id": "DEMO-STUB-1.0.0",
+  "family": "demo-stub",
+  "name": "Demo Stub Minion",
+  "version": "1.0.0",
+  "runtime_type": "python",
+  "artifact": "worker.py",
+  "capabilities": [
+    "windows.patch.reconcile",
+    "demo.action",
+    "stripe.refund",
+    "stripe.charge"
+  ],
+  "requires_target_scope": true,
+  "package_sha256": "f067e9b782cda4448bc29781f328030418cd17d1e9d47b7da494575d63c09e1e",
+  "release_files": [
+    "requirements.txt",
+    "worker.py"
+  ]
+}

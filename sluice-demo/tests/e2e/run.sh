@@ -55,6 +55,7 @@ openssl pkey -in "$workdir/demo-minion-key.pem" -pubout -out "$workdir/demo-mini
 export SG_E2E_SERVICE_PORT="$("${compose[@]}" port sg-service 8443 | awk -F: '{print $NF}')"
 export SG_E2E_BACKEND_PORT="$("${compose[@]}" port backend 8000 | awk -F: '{print $NF}')"
 export SG_E2E_FRONTEND_PORT="$("${compose[@]}" port frontend 80 | awk -F: '{print $NF}')"
+export SG_E2E_MINION_CONTAINER="$("${compose[@]}" ps -q demo-minion)"
 
 cd "$root/sluice-demo/tests/e2e"
 npm test

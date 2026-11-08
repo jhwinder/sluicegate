@@ -184,7 +184,7 @@ The policy is the rule set that decides whether a request is allowed, paused for
 The Admin Console issues each API key once, so copy each directly into its protected destination.
 
 1. In **Agent Registry**, register an Agent for the operator or test client that will submit patch requests. Save its API key in the organization's approved password manager or secrets vault. Do not put it in source code, a normal text file, shell history, or a command-line argument.
-2. In **Minion Registry**, use **Register from File** to import the bundle's `minion-release.json` as a registered type. Verify its artifact and hash against your approved release before importing; the manifest's hash covers the Minion service executable, not the entire bundle. Under **Deployed Minions**, select **Add Deployed Minion**, choose the registered type, and enter an ID matching `-MinionId` (`PATCH-01` above), environment `prod`, and select `windows.patch.reconcile`. Set its target scope to the servers it may patch (names or wildcards such as `*.contoso.com`, or `*` for all). A Minion that has not contacted the service in the last five minutes receives no Missions. Paste the Minion's public key, which you can display with:
+2. In **Minion Registry**, use **Register from File** to import the bundle's `minion-release.json` or the repository's `minion-registry/minions/patching/minion-release.json`. Verify the approved executable, scripts, shared module and protocol schema before importing; the release fingerprint does not cover the entire bundle. Under **Deployed Minions**, select **Add Deployed Minion**, choose the registered type, and enter an ID matching `-MinionId` (`PATCH-01` above), environment `prod`, and select `windows.patch.reconcile`. Set its target scope to the servers it may patch (names or wildcards such as `*.contoso.com`, or `*` for all). Routing requires a matching release report and a recent check-in. Paste the Minion's public key, which you can display with:
 
    ```powershell
    Get-Content 'C:\ProgramData\SluiceGate\Minion\keys\minion-public-key.pem'
@@ -206,7 +206,7 @@ The Admin Console issues each API key once, so copy each directly into its prote
    Start-Service SluiceGateMinion
    ```
 
-6. Confirm the Agent and the Minion show as enabled in their tabs.
+6. Confirm the Agent and the Minion show as enabled, and that the Minion reports **MATCH**. See the [Windows deployment guide](../deployment/windows/README.md#updating-an-installed-minion-from-the-repository) for the stop, copy, assign, and restart update workflow. A self-report is not independent attestation.
 
 ## 7. Run a safe connectivity check
 

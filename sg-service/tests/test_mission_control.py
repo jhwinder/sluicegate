@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi.testclient import TestClient
-from minion_helpers import register_test_minion
+from minion_helpers import check_in_test_minion, create_routable_test_minion, register_test_minion
 
 from sg_service.protocol import canonical_json
 
@@ -165,6 +165,7 @@ def test_patch_request_claim_status_ownership_and_signed_result(tmp_path: Path, 
         )
         assert registered.status_code == 201
         minion_key = registered.json()["api_key"]
+        check_in_test_minion(client, registered.json())
 
         request_response = client.post(
             "/api/v1/patch-requests",
@@ -739,6 +740,7 @@ def test_approved_pause_outside_window_runs_now_with_signed_override(tmp_path: P
             "/admin/v1/credentials/agent/agent-one",
             headers={"Authorization": f"Bearer {admin_key}"},
         ).json()["api_key"]
+        create_routable_test_minion(client, {"Authorization": f"Bearer {admin_key}"})
 
         def request_patch() -> str:
             response = client.post(

@@ -961,7 +961,9 @@ function Invoke-MinionCheckIn {
         [string]$MinionId,
 
         [Parameter(Mandatory = $true)]
-        [string]$ApiKey
+        [string]$ApiKey,
+
+        [hashtable]$ReleaseReport
     )
 
     $url = "$($MissionControlUrl.TrimEnd('/'))/internal/v1/minions/$MinionId/check-in"
@@ -971,7 +973,8 @@ function Invoke-MinionCheckIn {
     }
 
     try {
-        $response = Invoke-MinionHttp -Method Post -Uri $url -Headers $headers -TimeoutSec 15
+        $body = if ($ReleaseReport) { $ReleaseReport | ConvertTo-Json -Compress } else { $null }
+        $response = Invoke-MinionHttp -Method Post -Uri $url -Headers $headers -Body $body -TimeoutSec 15
         return $response
     }
     catch {
