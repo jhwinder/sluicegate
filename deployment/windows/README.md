@@ -39,6 +39,8 @@ The installer creates and manages these. Nothing here needs hand-editing before 
 
 Existing `service.env`, policy, signing key, certificate, and Minion configuration are never overwritten on upgrade, so edits made in the Admin Console and issued keys survive.
 
+The bundle builder also creates `minion-release.json` for import into the Minion Registry. It identifies the service executable and its SHA-256; it does not hash the whole bundle or attest to running software. Verify the executable and all other bundle files against an independently trusted release before registration.
+
 ## Package contents
 
 ```text

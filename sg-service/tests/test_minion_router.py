@@ -5,6 +5,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi.testclient import TestClient
+from minion_helpers import register_test_minion
 
 
 def setup_test_service(tmp_path: Path, monkeypatch):
@@ -67,9 +68,8 @@ def test_minion_registration_router_and_checkin(tmp_path: Path, monkeypatch) -> 
         admin_headers = {"Authorization": f"Bearer {admin_key}"}
 
         # 1. Register Minion via Admin API
-        reg_resp = client.post(
-            "/admin/v1/minions",
-            json={
+        reg_resp = register_test_minion(
+            client, admin_headers, {
                 "minion_id": "DYNAMIC-PATCHER-01",
                 "name": "Dynamic Windows Patching Minion",
                 "runtime_type": "powershell",
@@ -80,7 +80,6 @@ def test_minion_registration_router_and_checkin(tmp_path: Path, monkeypatch) -> 
                 "package_sha256": "a" * 64,
                 "public_key": minion_pub_pem,
             },
-            headers=admin_headers,
         )
         assert reg_resp.status_code == 201
         minion_info = reg_resp.json()
@@ -165,9 +164,8 @@ def _routing_fixture(service, client, scope_targets, capabilities=("windows.patc
     ).decode("utf-8")
     admin_key = client.post("/admin/v1/credentials/admin/admin", headers={"Authorization": "Bearer test-admin-secret"}).json()["api_key"]
     admin_headers = {"Authorization": f"Bearer {admin_key}"}
-    minion = client.post(
-        "/admin/v1/minions",
-        json={
+    minion = register_test_minion(
+        client, admin_headers, {
             "minion_id": "ROUTE-01",
             "name": "Route test",
             "environment": "prod",
@@ -175,7 +173,6 @@ def _routing_fixture(service, client, scope_targets, capabilities=("windows.patc
             "scope_metadata": {"targets": scope_targets} if scope_targets is not None else {},
             "public_key": minion_pub_pem,
         },
-        headers=admin_headers,
     ).json()
     if check_in:
         client.post("/internal/v1/minions/ROUTE-01/check-in", headers={"Authorization": f"Bearer {minion['api_key']}"})

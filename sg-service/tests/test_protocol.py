@@ -8,6 +8,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi.testclient import TestClient
+from minion_helpers import register_test_minion
 
 from sg_service.protocol import canonical_json, protocol_dir, schema_errors
 
@@ -71,10 +72,8 @@ def mission(tmp_path: Path, monkeypatch):
     minion_key = ed25519.Ed25519PrivateKey.generate()
     with TestClient(service.app) as client:
         admin = {"Authorization": "Bearer " + client.post("/admin/v1/credentials/admin/admin", headers={"Authorization": "Bearer test-admin-secret"}).json()["api_key"]}
-        registered = client.post(
-            "/admin/v1/minions",
-            json={"minion_id": "PATCH-01", "name": "Patcher", "capabilities": ["windows.patch.reconcile", "demo.action"], "scope_metadata": {"targets": ["*"]}, "public_key": public_pem(minion_key)},
-            headers=admin,
+        registered = register_test_minion(
+            client, admin, {"minion_id": "PATCH-01", "name": "Patcher", "capabilities": ["windows.patch.reconcile", "demo.action"], "scope_metadata": {"targets": ["*"]}, "public_key": public_pem(minion_key)},
         ).json()
         minion = {"Authorization": f"Bearer {registered['api_key']}"}
         client.post("/internal/v1/minions/PATCH-01/check-in", headers=minion)

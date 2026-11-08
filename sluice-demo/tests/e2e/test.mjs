@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { generateKeyPairSync } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { chromium } from "playwright";
 
@@ -202,6 +203,51 @@ try {
   assert.equal(await adminPage.locator("#tab-minions h2").first().innerText(), "Registered Minions");
   await adminPage.locator("#adminTokenInput").fill(process.env.SG_BOOTSTRAP_ADMIN_KEY);
   await adminPage.locator('button[onclick="saveAdminToken()"]').click();
+  await adminPage.locator('.nav-tab[onclick="switchTab(\'minions\')"]').click();
+  const manifest = {
+    schema_version: 1, type_id: "E2E-PATCHER", name: "E2E Patcher", version: "2.0",
+    runtime_type: "powershell", artifact: "patcher.zip", package_sha256: "a".repeat(64),
+    capabilities: ["windows.patch.reconcile", "windows.patch.status"], requires_target_scope: true,
+    instance_fields: [{ id: "owner", label: "Owner team", required: true }],
+  };
+  await adminPage.locator("#minionManifestFile").setInputFiles({
+    name: "patcher.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(manifest)),
+  });
+  const typeRow = adminPage.locator("#minionTypesTableBody tr").filter({ hasText: manifest.type_id });
+  await typeRow.waitFor();
+  await adminPage.getByRole("button", { name: "+ Add Deployed Minion" }).click();
+  await adminPage.locator("#deployMinionType").selectOption(manifest.type_id);
+  assert.match(await adminPage.locator("#deployMinionTypeDetails").innerText(), /patcher.zip/);
+  await adminPage.locator("#newMinionId").fill("E2E-INSTANCE");
+  await adminPage.locator("#newMinionTargets").fill("test-*.example.gov");
+  await adminPage.locator('#deployMinionFields input[data-field-id="owner"]').fill("Operations");
+  await adminPage.locator('#deployMinionCapabilities input[value="windows.patch.status"]').uncheck();
+  const publicKey = generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "pem" });
+  await adminPage.locator("#newMinionPubKey").fill(publicKey);
+  await adminPage.locator("#registerMinionModal").getByRole("button", { name: "Save" }).click();
+  const instanceRow = adminPage.locator("#minionsTableBody tr").filter({ hasText: "E2E-INSTANCE" });
+  await instanceRow.waitFor();
+  assert.ok(await typeRow.getByRole("button", { name: "Delete" }).isDisabled());
+  assert.ok(await typeRow.getByRole("button", { name: "Disable" }).isDisabled());
+  await instanceRow.getByRole("button", { name: "Edit" }).click();
+  assert.equal(await adminPage.locator('#deployMinionFields input[data-field-id="owner"]').inputValue(), "Operations");
+  await adminPage.locator("#newMinionTargets").fill("updated.example.gov");
+  await adminPage.locator('#deployMinionCapabilities input[value="windows.patch.status"]').check();
+  await adminPage.locator("#registerMinionModal").getByRole("button", { name: "Save" }).click();
+  await instanceRow.getByText("updated.example.gov").waitFor();
+  assert.match(await instanceRow.innerText(), /windows\.patch\.status/i);
+  await instanceRow.getByRole("button", { name: "Disable" }).click();
+  await instanceRow.getByRole("button", { name: "Enable", exact: true }).waitFor();
+  await instanceRow.getByRole("button", { name: "Enable", exact: true }).click();
+  await instanceRow.getByRole("button", { name: "Disable", exact: true }).waitFor();
+  await instanceRow.getByRole("button", { name: "Delete", exact: true }).click();
+  await instanceRow.waitFor({ state: "detached" });
+  await typeRow.getByRole("button", { name: "Disable" }).click();
+  await typeRow.getByRole("button", { name: "Enable" }).waitFor();
+  await typeRow.getByRole("button", { name: "Delete" }).click();
+  await typeRow.waitFor({ state: "detached" });
+  console.log("MINIONS: manifest import and type/deployment lifecycle verified");
+  await adminPage.locator('.nav-tab[onclick="switchTab(\'missions\')"]').click();
   await adminPage.locator("#auditRequestId").fill(allowed);
   const auditCard = adminPage.locator(".card").filter({ has: adminPage.getByRole("heading", { name: "Audit Events" }) });
   const filteredResponse = adminPage.waitForResponse((response) =>

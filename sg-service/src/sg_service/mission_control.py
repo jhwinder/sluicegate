@@ -179,34 +179,79 @@ class UpdateAgentRequest(BaseModel):
     poll_rate_limit_per_minute: int | None = None
 
 
+class MinionInstanceField(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z][A-Za-z0-9_-]*$")
+    label: str = Field(min_length=1, max_length=100)
+    required: bool
+
+
+class MinionTypeManifest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = Field(ge=1, le=1)
+    type_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    name: str = Field(min_length=1, max_length=200)
+    version: str = Field(min_length=1, max_length=100)
+    runtime_type: str = Field(min_length=1, max_length=100)
+    artifact: str = Field(min_length=1, max_length=255)
+    package_sha256: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
+    capabilities: list[str] = Field(min_length=1, max_length=100)
+    requires_target_scope: bool
+    instance_fields: list[MinionInstanceField] = Field(default_factory=list, max_length=30)
+
+    @field_validator("name", "version", "runtime_type", "artifact")
+    @classmethod
+    def nonblank_manifest_field(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Must not be blank")
+        return value.strip()
+
+    @field_validator("capabilities")
+    @classmethod
+    def valid_manifest_capabilities(cls, value: list[str]) -> list[str]:
+        if any(not item.strip() or item != item.strip() for item in value) or len(set(value)) != len(value):
+            raise ValueError("Capabilities must be nonempty, unique, and have no surrounding whitespace")
+        return value
+
+    @field_validator("instance_fields")
+    @classmethod
+    def unique_instance_fields(cls, value: list[MinionInstanceField]) -> list[MinionInstanceField]:
+        if len({item.id for item in value}) != len(value) or any(not item.label.strip() for item in value):
+            raise ValueError("Instance fields must have unique IDs and nonblank labels")
+        return value
+
+
 class RegisterMinionRequest(BaseModel):
-    minion_id: str = Field(min_length=1)
-    name: str = Field(min_length=1)
+    model_config = ConfigDict(extra="forbid")
+
+    minion_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    type_id: str = Field(min_length=1)
     description: str = ""
-    runtime_type: str = "powershell"
-    version: str = "1.0"
-    package_sha256: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
-    environment: str = "prod"
-    capabilities: list[str] = Field(default_factory=lambda: ["windows.patch.reconcile"])
+    environment: str = Field(default="prod", min_length=1, max_length=100)
+    capabilities: list[str] = Field(min_length=1)
     scope_metadata: dict[str, Any] = Field(default_factory=dict)
-    transport_type: str = "pull"
-    endpoint_info: str = ""
+    instance_metadata: dict[str, str] = Field(default_factory=dict)
     public_key: str = Field(min_length=1)
 
 
 class UpdateMinionRequest(BaseModel):
-    name: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
     description: str | None = None
-    runtime_type: str | None = None
-    version: str | None = None
-    package_sha256: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
-    environment: str | None = None
+    environment: str | None = Field(default=None, min_length=1, max_length=100)
     capabilities: list[str] | None = None
     scope_metadata: dict[str, Any] | None = None
-    transport_type: str | None = None
-    endpoint_info: str | None = None
+    instance_metadata: dict[str, str] | None = None
     enabled: bool | None = None
     public_key: str | None = None
+
+
+class UpdateMinionTypeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
 
 
 class MinionConfigExportRequest(BaseModel):
@@ -338,6 +383,11 @@ def insert_mission_once(values: tuple[Any, ...], key: str, audit_records: list[d
             existing = find_open_equivalent(connection, key)
             if existing:
                 return existing
+            routing = json.loads(values[7])
+            if values[5] in OPEN_MISSION_STATUSES and not routing.get("fallback"):
+                deployed = connection.execute("SELECT enabled FROM minions WHERE minion_id = ?", (values[3],)).fetchone()
+                if deployed is None or not deployed["enabled"]:
+                    raise HTTPException(status_code=503, detail="Selected Minion is no longer available; retry the request")
             connection.execute(f"INSERT INTO missions ({columns}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (*values, key))
             for record in audit_records or []:
                 record_audit_event(**record, connection=connection)
@@ -490,6 +540,12 @@ def initialize() -> None:
                 enabled INTEGER NOT NULL DEFAULT 1,
                 created_at REAL NOT NULL,
                 revoked_at REAL
+            );
+            CREATE TABLE IF NOT EXISTS minion_types (
+                type_id TEXT PRIMARY KEY,
+                manifest TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at REAL NOT NULL
             );
             CREATE TABLE IF NOT EXISTS minions (
                 minion_id TEXT PRIMARY KEY,
@@ -670,6 +726,8 @@ def initialize() -> None:
             ("endpoint_info", "TEXT DEFAULT ''"),
             ("updated_at", "REAL NOT NULL DEFAULT 0"),
             ("last_contact_at", "REAL"),
+            ("type_id", "TEXT"),
+            ("instance_metadata", "TEXT NOT NULL DEFAULT '{}'"),
         ]:
             try:
                 connection.execute(f"ALTER TABLE minions ADD COLUMN {col} {col_def}")
@@ -710,11 +768,21 @@ def initialize() -> None:
             if development_public_key and Path(development_public_key).is_file():
                 public_key = Path(development_public_key).read_text(encoding="utf-8")
                 now = time.time()
+                demo_manifest = {
+                    "schema_version": 1, "type_id": "DEMO-STUB", "name": "Demo Stub Minion",
+                    "version": "development", "runtime_type": "python", "artifact": "demo_stub/worker.py",
+                    "package_sha256": None, "capabilities": ["windows.patch.reconcile", "demo.action", "stripe.refund", "stripe.charge"],
+                    "requires_target_scope": True,
+                }
+                connection.execute(
+                    "INSERT OR IGNORE INTO minion_types (type_id, manifest, created_at) VALUES (?, ?, ?)",
+                    ("DEMO-STUB", json.dumps(demo_manifest), now),
+                )
                 connection.execute(
                     """
-                    INSERT INTO minions (minion_id, name, capabilities, scope_metadata, public_key, created_at, updated_at)
-                    VALUES ('DEMO-STUB-01', 'Demo Stub Minion', '["windows.patch.reconcile", "demo.action", "stripe.refund", "stripe.charge"]', '{"targets": ["*"]}', ?, ?, ?)
-                    ON CONFLICT(minion_id) DO UPDATE SET public_key = excluded.public_key, capabilities = excluded.capabilities, scope_metadata = excluded.scope_metadata, enabled = 1
+                    INSERT INTO minions (minion_id, type_id, name, runtime_type, version, capabilities, scope_metadata, public_key, created_at, updated_at)
+                    VALUES ('DEMO-STUB-01', 'DEMO-STUB', 'Demo Stub Minion', 'python', 'development', '["windows.patch.reconcile", "demo.action", "stripe.refund", "stripe.charge"]', '{"targets": ["*"]}', ?, ?, ?)
+                    ON CONFLICT(minion_id) DO UPDATE SET type_id = excluded.type_id, public_key = excluded.public_key, capabilities = excluded.capabilities, scope_metadata = excluded.scope_metadata, enabled = 1
                     """,
                     (public_key, now, now),
                 )
@@ -788,6 +856,11 @@ def authenticated_principal(kind: str, authorization: str | None) -> str:
                         raise HTTPException(status_code=403, detail="Agent is disabled")
                 with transaction() as conn:
                     conn.execute("UPDATE agents SET last_used_at = ? WHERE agent_id = ?", (time.time(), principal_id))
+            elif kind == "minion":
+                with connect() as conn:
+                    minion_row = conn.execute("SELECT enabled FROM minions WHERE minion_id = ?", (principal_id,)).fetchone()
+                if minion_row is None or not minion_row["enabled"]:
+                    raise HTTPException(status_code=403, detail="Minion is not deployed or is disabled")
             return principal_id
     raise HTTPException(status_code=401, detail="Invalid credentials")
 
@@ -2371,6 +2444,71 @@ def revoke_credential(key_id: str, _admin: str = Depends(require_admin)) -> dict
     return {"key_id": key_id, "status": "REVOKED"}
 
 
+@app.get("/admin/v1/minion-types")
+def list_minion_types(_admin: str = Depends(require_admin)) -> list[dict[str, Any]]:
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT t.*, (SELECT COUNT(*) FROM minions m WHERE m.type_id = t.type_id) AS deployment_count "
+            "FROM minion_types t ORDER BY t.created_at, t.type_id"
+        ).fetchall()
+    return [{**json.loads(row["manifest"]), "enabled": bool(row["enabled"]), "deployment_count": row["deployment_count"]} for row in rows]
+
+
+@app.post("/admin/v1/minion-types", status_code=status.HTTP_201_CREATED)
+def register_minion_type(body: MinionTypeManifest, _admin: str = Depends(require_admin)) -> dict[str, Any]:
+    manifest = body.model_dump()
+    manifest["package_sha256"] = body.package_sha256.lower()
+    with transaction() as connection:
+        if connection.execute("SELECT 1 FROM minion_types WHERE type_id = ?", (body.type_id,)).fetchone():
+            raise HTTPException(status_code=409, detail="Minion type ID already registered")
+        connection.execute(
+            "INSERT INTO minion_types (type_id, manifest, created_at) VALUES (?, ?, ?)",
+            (body.type_id, json.dumps(manifest), time.time()),
+        )
+    return {**manifest, "enabled": True, "deployment_count": 0}
+
+
+@app.patch("/admin/v1/minion-types/{type_id}")
+def update_minion_type(type_id: str, body: UpdateMinionTypeRequest, _admin: str = Depends(require_admin)) -> dict[str, Any]:
+    with transaction() as connection:
+        row = connection.execute("SELECT * FROM minion_types WHERE type_id = ?", (type_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Minion type not found")
+        count = connection.execute("SELECT COUNT(*) FROM minions WHERE type_id = ?", (type_id,)).fetchone()[0]
+        if not body.enabled and count:
+            raise HTTPException(status_code=409, detail="Cannot disable a type with deployed instances")
+        connection.execute("UPDATE minion_types SET enabled = ? WHERE type_id = ?", (int(body.enabled), type_id))
+        return {**json.loads(row["manifest"]), "enabled": body.enabled, "deployment_count": count}
+
+
+@app.delete("/admin/v1/minion-types/{type_id}")
+def delete_minion_type(type_id: str, _admin: str = Depends(require_admin)) -> dict[str, str]:
+    with transaction() as connection:
+        if not connection.execute("SELECT 1 FROM minion_types WHERE type_id = ?", (type_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="Minion type not found")
+        if connection.execute("SELECT 1 FROM minions WHERE type_id = ?", (type_id,)).fetchone():
+            raise HTTPException(status_code=409, detail="Cannot delete a type with deployed instances")
+        connection.execute("DELETE FROM minion_types WHERE type_id = ?", (type_id,))
+    return {"type_id": type_id, "status": "DELETED"}
+
+
+def validate_minion_instance(manifest: dict[str, Any], capabilities: list[str], scope: dict[str, Any], metadata: dict[str, str]) -> None:
+    if not capabilities or len(set(capabilities)) != len(capabilities) or not set(capabilities).issubset(manifest["capabilities"]):
+        raise HTTPException(status_code=422, detail="Select one or more distinct capabilities supported by the Minion type")
+    targets = scope.get("targets")
+    if targets is not None and (not isinstance(targets, list) or any(not isinstance(item, str) or not item.strip() for item in targets)):
+        raise HTTPException(status_code=422, detail="Target scope must be a list of nonempty names or patterns")
+    if manifest["requires_target_scope"] and not targets:
+        raise HTTPException(status_code=422, detail="This Minion type requires a target scope")
+    fields = {field["id"]: field for field in manifest.get("instance_fields", [])}
+    if set(metadata) - set(fields):
+        raise HTTPException(status_code=422, detail="Instance metadata contains fields not declared by the type")
+    if any(field["required"] and not metadata.get(field_id, "").strip() for field_id, field in fields.items()):
+        raise HTTPException(status_code=422, detail="Complete all required instance fields")
+    if any(len(value) > 1024 for value in metadata.values()):
+        raise HTTPException(status_code=422, detail="Instance field values cannot exceed 1024 characters")
+
+
 @app.post("/admin/v1/minions", status_code=status.HTTP_201_CREATED)
 def register_minion(body: RegisterMinionRequest, _admin: str = Depends(require_admin)) -> dict[str, Any]:
     try:
@@ -2384,64 +2522,55 @@ def register_minion(body: RegisterMinionRequest, _admin: str = Depends(require_a
     key_id = f"KEY-{uuid.uuid4().hex}"
     now = time.time()
     with transaction() as connection:
+        type_row = connection.execute("SELECT * FROM minion_types WHERE type_id = ?", (body.type_id,)).fetchone()
+        if type_row is None or not type_row["enabled"]:
+            raise HTTPException(status_code=422, detail="Select an enabled registered Minion type")
+        manifest = json.loads(type_row["manifest"])
+        validate_minion_instance(manifest, body.capabilities, body.scope_metadata, body.instance_metadata)
+        if connection.execute("SELECT 1 FROM minions WHERE minion_id = ?", (body.minion_id,)).fetchone():
+            raise HTTPException(status_code=409, detail="Minion ID already deployed")
+        if connection.execute("SELECT 1 FROM missions WHERE minion_id = ?", (body.minion_id,)).fetchone():
+            raise HTTPException(status_code=409, detail="Minion ID belongs to historical missions and cannot be reused")
         connection.execute(
             """
-            INSERT INTO minions (minion_id, name, description, runtime_type, version, package_sha256, environment, capabilities, scope_metadata, transport_type, endpoint_info, public_key, enabled, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-            ON CONFLICT(minion_id) DO UPDATE SET
-                name = excluded.name,
-                description = excluded.description,
-                runtime_type = excluded.runtime_type,
-                version = excluded.version,
-                package_sha256 = excluded.package_sha256,
-                environment = excluded.environment,
-                capabilities = excluded.capabilities,
-                scope_metadata = excluded.scope_metadata,
-                transport_type = excluded.transport_type,
-                endpoint_info = excluded.endpoint_info,
-                public_key = excluded.public_key,
-                enabled = 1,
-                updated_at = excluded.updated_at
+            INSERT INTO minions (minion_id, type_id, name, description, runtime_type, version, package_sha256, environment, capabilities, scope_metadata, instance_metadata, transport_type, endpoint_info, public_key, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pull', '', ?, 1, ?, ?)
             """,
             (
                 body.minion_id,
-                body.name,
+                body.type_id,
+                manifest["name"],
                 body.description,
-                body.runtime_type,
-                body.version,
-                body.package_sha256.lower() if body.package_sha256 else None,
+                manifest["runtime_type"],
+                manifest["version"],
+                manifest["package_sha256"],
                 body.environment,
                 json.dumps(body.capabilities),
                 json.dumps(body.scope_metadata),
-                body.transport_type,
-                body.endpoint_info,
+                json.dumps(body.instance_metadata),
                 body.public_key,
                 now,
                 now,
             ),
         )
         connection.execute(
-            "UPDATE api_keys SET enabled = 0, revoked_at = ? WHERE principal_id = ? AND kind = 'minion' AND enabled = 1",
-            (now, body.minion_id),
-        )
-        connection.execute(
             "INSERT INTO api_keys (key_id, principal_id, secret_hash, kind, created_at) VALUES (?, ?, ?, 'minion', ?)",
             (key_id, body.minion_id, _token_hash(token), now),
         )
-        if body.package_sha256:
+        if manifest["package_sha256"]:
             record_audit_event(
                 "minion.package_approved", "ADMIN", _admin, minion_id=body.minion_id, status="APPROVED",
-                detail={"version": body.version, "sha256": body.package_sha256.lower()}, connection=connection,
+                detail={"version": manifest["version"], "sha256": manifest["package_sha256"]}, connection=connection,
             )
 
     return {
         "minion_id": body.minion_id,
-        "name": body.name,
+        "name": manifest["name"],
         "capabilities": body.capabilities,
         "environment": body.environment,
-        "version": body.version,
-        "package_sha256": body.package_sha256.lower() if body.package_sha256 else None,
-        "package_approved": body.package_sha256 is not None,
+        "version": manifest["version"],
+        "package_sha256": manifest["package_sha256"],
+        "package_approved": manifest["package_sha256"] is not None,
         "api_key": token,
         "key_id": key_id,
     }
@@ -2471,6 +2600,7 @@ def serialize_minion_registry_row(connection: sqlite3.Connection, row: sqlite3.R
     item = dict(row)
     item["capabilities"] = json.loads(item["capabilities"] or "[]")
     item["scope_metadata"] = json.loads(item["scope_metadata"] or "{}")
+    item["instance_metadata"] = json.loads(item["instance_metadata"] or "{}")
     item["keys"] = credential_lifecycle(connection, "minion", item["minion_id"], bool(item["enabled"]))
     item["package_approved"] = bool(item.get("package_sha256"))
     if not item["enabled"]:
@@ -2497,7 +2627,7 @@ def serialize_minion_registry_row(connection: sqlite3.Connection, row: sqlite3.R
 def list_minions(_admin: str = Depends(require_admin)) -> list[dict[str, Any]]:
     with connect() as connection:
         rows = connection.execute(
-            "SELECT minion_id, name, description, runtime_type, version, package_sha256, environment, capabilities, scope_metadata, transport_type, endpoint_info, enabled, created_at, updated_at, last_contact_at FROM minions ORDER BY created_at DESC"
+            "SELECT minion_id, type_id, name, description, runtime_type, version, package_sha256, environment, capabilities, scope_metadata, instance_metadata, transport_type, endpoint_info, enabled, created_at, updated_at, last_contact_at FROM minions ORDER BY created_at DESC"
         ).fetchall()
         return [serialize_minion_registry_row(connection, row) for row in rows]
 
@@ -2506,7 +2636,7 @@ def list_minions(_admin: str = Depends(require_admin)) -> list[dict[str, Any]]:
 def get_minion(minion_id: str, _admin: str = Depends(require_admin)) -> dict[str, Any]:
     with connect() as connection:
         row = connection.execute(
-            "SELECT minion_id, name, description, runtime_type, version, package_sha256, environment, capabilities, scope_metadata, transport_type, endpoint_info, enabled, created_at, updated_at, last_contact_at FROM minions WHERE minion_id = ?",
+            "SELECT minion_id, type_id, name, description, runtime_type, version, package_sha256, environment, capabilities, scope_metadata, instance_metadata, transport_type, endpoint_info, enabled, created_at, updated_at, last_contact_at FROM minions WHERE minion_id = ?",
             (minion_id,),
         ).fetchone()
         if row is None:
@@ -2641,23 +2771,21 @@ def update_minion(minion_id: str, body: UpdateMinionRequest, _admin: str = Depen
         if row is None:
             raise HTTPException(status_code=404, detail="Minion not found")
 
+        if body.capabilities is not None or body.scope_metadata is not None or body.instance_metadata is not None:
+            type_row = connection.execute("SELECT manifest FROM minion_types WHERE type_id = ?", (row["type_id"],)).fetchone()
+            if type_row is None:
+                raise HTTPException(status_code=409, detail="Minion has no registered type")
+            validate_minion_instance(
+                json.loads(type_row["manifest"]),
+                body.capabilities if body.capabilities is not None else json.loads(row["capabilities"]),
+                body.scope_metadata if body.scope_metadata is not None else json.loads(row["scope_metadata"]),
+                body.instance_metadata if body.instance_metadata is not None else json.loads(row["instance_metadata"]),
+            )
         updates: list[str] = []
         params: list[Any] = []
-        if body.name is not None:
-            updates.append("name = ?")
-            params.append(body.name)
         if body.description is not None:
             updates.append("description = ?")
             params.append(body.description)
-        if body.runtime_type is not None:
-            updates.append("runtime_type = ?")
-            params.append(body.runtime_type)
-        if body.version is not None:
-            updates.append("version = ?")
-            params.append(body.version)
-        if body.package_sha256 is not None:
-            updates.append("package_sha256 = ?")
-            params.append(body.package_sha256.lower())
         if body.environment is not None:
             updates.append("environment = ?")
             params.append(body.environment)
@@ -2667,12 +2795,9 @@ def update_minion(minion_id: str, body: UpdateMinionRequest, _admin: str = Depen
         if body.scope_metadata is not None:
             updates.append("scope_metadata = ?")
             params.append(json.dumps(body.scope_metadata))
-        if body.transport_type is not None:
-            updates.append("transport_type = ?")
-            params.append(body.transport_type)
-        if body.endpoint_info is not None:
-            updates.append("endpoint_info = ?")
-            params.append(body.endpoint_info)
+        if body.instance_metadata is not None:
+            updates.append("instance_metadata = ?")
+            params.append(json.dumps(body.instance_metadata))
         if body.enabled is not None:
             updates.append("enabled = ?")
             params.append(1 if body.enabled else 0)
@@ -2695,16 +2820,21 @@ def update_minion(minion_id: str, body: UpdateMinionRequest, _admin: str = Depen
             params.append(time.time())
             params.append(minion_id)
             connection.execute(f"UPDATE minions SET {', '.join(updates)} WHERE minion_id = ?", params)
-        if body.package_sha256 is not None or body.version is not None:
-            package_hash = body.package_sha256.lower() if body.package_sha256 is not None else row["package_sha256"]
-            package_version = body.version if body.version is not None else row["version"]
-            record_audit_event(
-                "minion.package_approved" if package_hash else "minion.package_metadata_updated",
-                "ADMIN", _admin, minion_id=minion_id, status="APPROVED" if package_hash else "UNAPPROVED",
-                detail={"version": package_version, "sha256": package_hash}, connection=connection,
-            )
-
     return get_minion(minion_id, _admin)
+
+
+@app.delete("/admin/v1/minions/{minion_id}")
+def delete_minion(minion_id: str, _admin: str = Depends(require_admin)) -> dict[str, str]:
+    with transaction() as connection:
+        if not connection.execute("SELECT 1 FROM minions WHERE minion_id = ?", (minion_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="Minion not found")
+        if connection.execute(
+            f"SELECT 1 FROM missions WHERE minion_id = ? AND status IN ({OPEN_STATUS_SQL}) LIMIT 1", (minion_id,)
+        ).fetchone():
+            raise HTTPException(status_code=409, detail="Cannot delete a Minion with unfinished missions")
+        connection.execute("UPDATE api_keys SET enabled = 0, revoked_at = ? WHERE principal_id = ? AND kind = 'minion' AND revoked_at IS NULL", (time.time(), minion_id))
+        connection.execute("DELETE FROM minions WHERE minion_id = ?", (minion_id,))
+    return {"minion_id": minion_id, "status": "DELETED"}
 
 
 @app.post("/admin/v1/minions/{minion_id}/rotate-key")
@@ -2722,22 +2852,6 @@ def rotate_minion_key(minion_id: str, _admin: str = Depends(require_admin)) -> d
             (key_id, minion_id, _token_hash(token), now),
         )
     return {"minion_id": minion_id, "key_id": key_id, "api_key": token}
-
-
-@app.post("/admin/v1/minions/{minion_id}/enroll", status_code=status.HTTP_201_CREATED)
-def enroll_minion(minion_id: str, public_key: str, _admin: str = Depends(require_admin)) -> dict[str, str]:
-    try:
-        key = serialization.load_pem_public_key(public_key.encode("utf-8"))
-        if not isinstance(key, ed25519.Ed25519PublicKey):
-            raise ValueError("Expected Ed25519 public key")
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=400, detail="Invalid Ed25519 public key") from None
-    with transaction() as connection:
-        connection.execute(
-            "INSERT INTO minions (minion_id, public_key, created_at) VALUES (?, ?, ?) ON CONFLICT(minion_id) DO UPDATE SET public_key = excluded.public_key, enabled = 1",
-            (minion_id, public_key, time.time()),
-        )
-    return {"minion_id": minion_id, "status": "ENROLLED"}
 
 
 def serialize_adapter(row: sqlite3.Row) -> dict[str, Any]:

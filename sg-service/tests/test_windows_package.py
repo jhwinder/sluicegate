@@ -86,6 +86,7 @@ def test_bundle_contains_everything_the_installer_requires(tmp_path: Path) -> No
         "Minion/runtime/SluiceGate.Minion.Core.psm1",
         "Minion/runtime/protocol/mission-envelope.schema.json",
         "Minion/runtime/version.json",
+        "minion-release.json",
         "minion.config.template.json",
         "service.env.example",
         "policy.starter.yml",
@@ -102,6 +103,15 @@ def test_bundle_contains_everything_the_installer_requires(tmp_path: Path) -> No
 
     version = json.loads((bundle / "Minion/runtime/version.json").read_text(encoding="utf-8-sig"))
     assert version["version"] == "9.9.9" and version["serviceImage"] == "sluicegate/sg-service:9.9.9"
+
+    release = json.loads((bundle / "minion-release.json").read_text(encoding="utf-8-sig"))
+    assert release["schema_version"] == 1 and release["version"] == "9.9.9"
+    assert release["artifact"] == "Minion/SluiceGate.Minion.Service.exe"
+    assert release["package_sha256"] == hashlib.sha256((bundle / release["artifact"]).read_bytes()).hexdigest()
+    assert release["capabilities"] == ["windows.patch.reconcile", "windows.patch.discover", "windows.patch.status"]
+    assert release["requires_target_scope"] is True
+    from sg_service.mission_control import MinionTypeManifest
+    assert MinionTypeManifest.model_validate(release).type_id == release["type_id"]
 
     template = json.loads((bundle / "minion.config.template.json").read_text(encoding="utf-8-sig"))
     assert "ApiKey" not in template and "ApiKeyPath" in template and template["DryRun"] is True

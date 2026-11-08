@@ -29,6 +29,19 @@ Here are the minor items we need to fix.  When complete, change `PENDING` to `CO
 - Reject policies that cannot round-trip exactly, including unsupported rules, comments, or formatting, and leave the original YAML unchanged. Continue to support manual editing for those policies.
 - Use authenticated service-side validation and prevent overwriting a draft that changes while the visual editor is open.
 
+2.6 `COMPLETE` Separate available Minion types from deployed Minion instances in the admin console.
+
+- Show all available registered Minion types under **Registered Minions**, with read-only, inspectable settings such as name, version, runtime, package hash, and supported capabilities. Consider displaying a deployment count for each type.
+- Allow administrators to register new Minion types and enable or disable registered types; only enabled types can be selected for new deployments.
+- Allow administrators to delete a registered type after a warning and confirmation, but prohibit deletion or disabling while any deployed instance is based on it.
+- Show deployed Minion instances separately from the available types, so administrators can distinguish a registered type from its deployments.
+- Allow administrators to add, modify, delete, and enable or disable deployed instances.
+- When deploying a Minion, require the administrator to select an enabled registered type. Populate type-defined values, such as name, version, runtime, and hash, as read-only.
+- Let administrators enable desired capabilities by selecting checkboxes from those supported by the chosen type. Collect instance-specific required information, such as target scope for a patching Minion, through editable fields.
+- Import type/version metadata from a local JSON release manifest; the official online catalog is unavailable for now. The Windows bundle builder generates a manifest for its Minion service executable.
+- Associate each new instance with its selected type. Registration records metadata and does not install software or verify the deployed artifact.
+- Block deletion of deployed instances with unfinished missions; revoke their credentials when deletion succeeds.
+
 3. DEFERRED
 3.1 Change the patching registry from CSV to SQL
 3.2 Implement intelligent multi-Minion load balancing

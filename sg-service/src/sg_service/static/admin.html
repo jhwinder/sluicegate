@@ -400,12 +400,25 @@
     <div class="card">
       <div class="card-header">
         <h2>Registered Minions</h2>
-        <button onclick="openModal('registerMinionModal')">+ Register New Minion</button>
+        <div><button onclick="document.getElementById('minionManifestFile').click()">+ Register from File</button>
+        <button class="secondary" disabled title="Official catalog is not available yet">Official Catalog (unavailable)</button>
+        <input type="file" id="minionManifestFile" accept=".json,application/json" style="display:none" onchange="importMinionManifest(this)" /></div>
+      </div>
+      <p>Register an approved release manifest. Importing metadata does not install or verify Minion software.</p>
+      <table>
+        <thead><tr><th>Type ID</th><th>Name</th><th>Version / Runtime</th><th>Capabilities</th><th>Artifact / SHA-256</th><th>Deployments</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody id="minionTypesTableBody"><tr><td colspan="8">Loading registered types...</td></tr></tbody>
+      </table>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <h2>Deployed Minions</h2>
+        <button onclick="openDeployMinion()">+ Add Deployed Minion</button>
       </div>
       <table>
         <thead>
           <tr>
-            <th>Minion ID</th>
+            <th>Minion ID / Type</th>
             <th>Name</th>
             <th>Runtime / Environment</th>
             <th>Capabilities</th>
@@ -539,39 +552,39 @@
 
   <!-- MODAL: REGISTER MINION -->
   <div id="registerMinionModal" class="modal-backdrop">
-    <div class="modal">
-      <h3>Register New Minion</h3>
+    <div class="modal" style="max-height:90vh; overflow:auto;">
+      <h3 id="deployMinionTitle">Add Deployed Minion</h3>
+      <div class="form-group">
+        <label>Registered Minion type</label>
+        <select id="deployMinionType" onchange="renderMinionTypeFields()"></select>
+      </div>
+      <pre id="deployMinionTypeDetails"></pre>
       <div class="form-group">
         <label>Minion ID</label>
         <input type="text" id="newMinionId" placeholder="e.g. PATCH-01" />
       </div>
       <div class="form-group">
-        <label>Minion Name</label>
-        <input type="text" id="newMinionName" placeholder="e.g. Windows Server Patcher" />
+        <label>Environment</label>
+        <input type="text" id="deployMinionEnvironment" value="prod" />
       </div>
       <div class="form-group">
-        <label>Approved package version</label>
-        <input type="text" id="newMinionVersion" value="1.0" />
-      </div>
-      <div class="form-group">
-        <label>Approved package SHA-256</label>
-        <input type="text" id="newMinionPackageSha256" placeholder="64 hexadecimal characters" minlength="64" maxlength="64" pattern="[0-9a-fA-F]{64}" />
-      </div>
-      <div class="form-group">
-        <label>Capabilities (comma separated)</label>
-        <input type="text" id="newMinionCaps" value="windows.patch.reconcile, windows.patch.status" />
+        <label>Active capabilities</label>
+        <div id="deployMinionCapabilities"></div>
       </div>
       <div class="form-group">
         <label>Target scope (comma separated names or wildcards, e.g. *.example.gov; * for all)</label>
         <input type="text" id="newMinionTargets" placeholder="e.g. server-01.example.gov, web-*.example.gov" />
       </div>
+      <div id="deployMinionFields"></div>
+      <p>Additional instance fields are registry metadata, not worker configuration. Do not enter secrets.</p>
       <div class="form-group">
         <label>Public Key (Ed25519 PEM)</label>
         <textarea id="newMinionPubKey" rows="4" placeholder="-----BEGIN PUBLIC KEY-----..."></textarea>
+        <small id="deployMinionPublicKeyHint"></small>
       </div>
       <div style="display:flex; justify-content:flex-end; gap:8px;">
         <button class="secondary" onclick="closeModal('registerMinionModal')">Cancel</button>
-        <button onclick="submitRegisterMinion()">Register</button>
+        <button onclick="submitRegisterMinion()">Save</button>
       </div>
     </div>
   </div>
@@ -1083,9 +1096,65 @@
       }
     }
 
+    let minionTypes = [];
+    let editingMinion = null;
+
+    async function loadMinionTypes() {
+      const res = await fetch("/admin/v1/minion-types", { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(await res.text());
+      minionTypes = await res.json();
+      const tbody = document.getElementById("minionTypesTableBody");
+      tbody.innerHTML = minionTypes.length ? minionTypes.map(t => `
+        <tr><td class="mono">${esc(t.type_id)}</td><td>${esc(t.name)}</td>
+        <td>${esc(t.version)} / ${esc(t.runtime_type)}</td><td>${t.capabilities.map(esc).join(", ")}</td>
+        <td>${esc(t.artifact)}<br><small class="mono">${esc(t.package_sha256 || "Not specified")}</small></td>
+        <td>${t.deployment_count}</td><td>${t.enabled ? "Enabled" : "Disabled"}</td>
+        <td><button class="secondary" data-id="${esc(t.type_id)}" onclick="inspectMinionType(this.dataset.id)">Inspect</button>
+        <button class="secondary" data-id="${esc(t.type_id)}" onclick="toggleMinionType(this.dataset.id, ${!t.enabled})" ${t.deployment_count ? "disabled" : ""}>${t.enabled ? "Disable" : "Enable"}</button>
+        <button class="secondary" data-id="${esc(t.type_id)}" onclick="deleteMinionType(this.dataset.id)" ${t.deployment_count ? "disabled" : ""}>Delete</button></td></tr>
+      `).join("") : '<tr><td colspan="8">No registered Minion types. Import a release manifest.</td></tr>';
+    }
+
+    async function importMinionManifest(input) {
+      const file = input.files[0];
+      input.value = "";
+      if (!file) return;
+      try {
+        if (file.size > 65536) throw new Error("Manifest is too large (maximum 64 KiB).");
+        const manifest = JSON.parse(await file.text());
+        if (!confirm(`Review the release manifest from ${file.name}:\n\n${JSON.stringify(manifest, null, 2)}\n\nVerify the artifact and hash independently before registering.`)) return;
+        const res = await fetch("/admin/v1/minion-types", { method: "POST", headers: getAuthHeaders(), body: JSON.stringify(manifest) });
+        if (!res.ok) throw new Error(await res.text());
+        await loadMinions();
+      } catch (err) { alert("Minion type registration failed: " + err.message); }
+    }
+
+    function inspectMinionType(id) {
+      const type = minionTypes.find(t => t.type_id === id);
+      if (!type) { alert("Minion type not found; refresh the registry."); return; }
+      document.getElementById("detailTitle").innerText = `Registered Minion: ${id}`;
+      document.getElementById("detailContent").innerText = JSON.stringify(type, null, 2);
+      openModal("missionDetailModal");
+    }
+
+    async function toggleMinionType(id, enabled) {
+      const res = await fetch(`/admin/v1/minion-types/${encodeURIComponent(id)}`, { method: "PATCH", headers: getAuthHeaders(), body: JSON.stringify({ enabled }) });
+      if (!res.ok) { alert("Failed to update Minion type: " + await res.text()); return; }
+      await loadMinions();
+    }
+
+    async function deleteMinionType(id) {
+      if (!confirm(`Delete registered Minion type ${id}? This cannot be undone.`)) return;
+      const res = await fetch(`/admin/v1/minion-types/${encodeURIComponent(id)}`, { method: "DELETE", headers: getAuthHeaders() });
+      if (!res.ok) { alert("Failed to delete Minion type: " + await res.text()); return; }
+      await loadMinions();
+    }
+
     async function loadMinions() {
       try {
+        await loadMinionTypes();
         const res = await fetch("/admin/v1/minions", { headers: getAuthHeaders() });
+        if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
         const tbody = document.getElementById("minionsTableBody");
         if (data.length === 0) {
@@ -1094,7 +1163,7 @@
         }
         tbody.innerHTML = data.map(m => `
           <tr>
-            <td class="mono"><b>${esc(m.minion_id)}</b></td>
+            <td class="mono"><b>${esc(m.minion_id)}</b><br><small>${esc(m.type_id || "No registered type")}</small></td>
             <td>${esc(m.name)}</td>
             <td>${esc(m.runtime_type)} ${esc(m.version)}<br><small>${esc(m.environment)} · ${esc(m.transport_type)}</small></td>
             <td>${(m.capabilities || []).map(c => `<span class="badge badge-info">${esc(c)}</span>`).join(" ")}</td>
@@ -1104,38 +1173,83 @@
             <td>${m.active_mission_count} active<br><small>${renderCredentialSummary(m.keys)}</small></td>
             <td style="display:flex; gap:6px;">
               <button class="secondary" onclick="viewMinionDetail(this.dataset.id)" data-id="${esc(m.minion_id)}">Inspect</button>
-              <button class="secondary" onclick="openMinionConfig(this.dataset.id)" data-id="${esc(m.minion_id)}">Config</button>
-              <button class="secondary" onclick="approveMinionPackage(this.dataset.id)" data-id="${esc(m.minion_id)}">Package</button>
+              <button class="secondary" onclick="openDeployMinion(this.dataset.id)" data-id="${esc(m.minion_id)}">Edit</button>
+              ${m.runtime_type === "powershell" && m.capabilities.some(c => c.startsWith("windows.patch.")) ? `<button class="secondary" onclick="openMinionConfig(this.dataset.id)" data-id="${esc(m.minion_id)}">Config</button>` : ""}
               <button class="secondary" onclick="revokeMinionKey(this.dataset.id)" data-id="${esc(m.minion_id)}">Revoke Key</button>
               <button class="secondary" onclick="toggleMinion(this.dataset.id, ${!m.enabled})" data-id="${esc(m.minion_id)}">${m.enabled ? 'Disable' : 'Enable'}</button>
               <button class="secondary" onclick="rotateMinionKey(this.dataset.id)" data-id="${esc(m.minion_id)}">Rotate Key</button>
+              <button class="secondary" onclick="deleteMinion(this.dataset.id)" data-id="${esc(m.minion_id)}">Delete</button>
             </td>
           </tr>
         `).join("");
       } catch (err) {
-        console.error(err);
+        document.getElementById("minionsTableBody").innerText = "Unable to load Minions: " + err.message;
       }
+    }
+
+    function renderMinionTypeFields() {
+      const type = minionTypes.find(t => t.type_id === document.getElementById("deployMinionType").value);
+      document.getElementById("deployMinionTypeDetails").innerText = type ? JSON.stringify({
+        name: type.name, version: type.version, runtime: type.runtime_type, artifact: type.artifact, sha256: type.package_sha256
+      }, null, 2) : "Select an enabled type.";
+      document.getElementById("deployMinionCapabilities").innerHTML = type ? type.capabilities.map((c, i) =>
+        `<label style="display:block"><input type="checkbox" value="${esc(c)}" ${!editingMinion || editingMinion.capabilities.includes(c) ? "checked" : ""} /> ${esc(c)}</label>`
+      ).join("") : "";
+      document.getElementById("deployMinionFields").innerHTML = type ? (type.instance_fields || []).map(field =>
+        `<div class="form-group"><label>${esc(field.label)}${field.required ? " (required)" : ""}</label><input type="text" data-field-id="${esc(field.id)}" value="${esc(editingMinion?.instance_metadata?.[field.id] || "")}" maxlength="1024" ${field.required ? "required" : ""} /></div>`
+      ).join("") : "";
+    }
+
+    async function openDeployMinion(id = null) {
+      try {
+        await loadMinionTypes();
+        editingMinion = null;
+        if (id) {
+          const res = await fetch(`/admin/v1/minions/${encodeURIComponent(id)}`, { headers: getAuthHeaders() });
+          if (!res.ok) throw new Error(await res.text());
+          editingMinion = await res.json();
+        }
+        const available = minionTypes.filter(t => t.enabled || t.type_id === editingMinion?.type_id);
+        if (!available.length) { alert("Register and enable a Minion type first."); return; }
+        const select = document.getElementById("deployMinionType");
+        select.innerHTML = available.map(t => `<option value="${esc(t.type_id)}">${esc(t.name)} (${esc(t.version)})</option>`).join("");
+        select.disabled = !!editingMinion;
+        if (editingMinion) select.value = editingMinion.type_id;
+        if (!select.value) throw new Error("This Minion has no registered type and cannot be edited here.");
+        document.getElementById("deployMinionTitle").innerText = editingMinion ? "Edit Deployed Minion" : "Add Deployed Minion";
+        document.getElementById("newMinionId").value = editingMinion?.minion_id || "";
+        document.getElementById("newMinionId").disabled = !!editingMinion;
+        document.getElementById("deployMinionEnvironment").value = editingMinion?.environment || "prod";
+        document.getElementById("newMinionTargets").value = (editingMinion?.scope_metadata?.targets || []).join(", ");
+        document.getElementById("newMinionPubKey").value = "";
+        document.getElementById("deployMinionPublicKeyHint").innerText = editingMinion ? "Leave blank to keep the current public key." : "Paste the Minion's public key.";
+        renderMinionTypeFields();
+        openModal("registerMinionModal");
+      } catch (err) { alert("Unable to open Minion form: " + err.message); }
     }
 
     async function submitRegisterMinion() {
       const minion_id = document.getElementById("newMinionId").value.trim();
-      const name = document.getElementById("newMinionName").value.trim();
-      const version = document.getElementById("newMinionVersion").value.trim();
-      const package_sha256 = document.getElementById("newMinionPackageSha256").value.trim();
-      const capabilities = document.getElementById("newMinionCaps").value.split(",").map(c => c.trim()).filter(Boolean);
+      const type_id = document.getElementById("deployMinionType").value;
+      const environment = document.getElementById("deployMinionEnvironment").value.trim();
+      const capabilities = [...document.querySelectorAll("#deployMinionCapabilities input:checked")].map(c => c.value);
       const public_key = document.getElementById("newMinionPubKey").value.trim();
       const targets = document.getElementById("newMinionTargets").value.split(",").map(t => t.trim()).filter(Boolean);
+      const instance_metadata = Object.fromEntries([...document.querySelectorAll("#deployMinionFields input")].map(input => [input.dataset.fieldId, input.value]));
 
       try {
-        const res = await fetch("/admin/v1/minions", {
-          method: "POST",
+        const body = { environment, capabilities, scope_metadata: { ...(editingMinion?.scope_metadata || {}), targets }, instance_metadata };
+        if (public_key) body.public_key = public_key;
+        if (!editingMinion) Object.assign(body, { minion_id, type_id });
+        const res = await fetch(editingMinion ? `/admin/v1/minions/${encodeURIComponent(minion_id)}` : "/admin/v1/minions", {
+          method: editingMinion ? "PATCH" : "POST",
           headers: getAuthHeaders(),
-          body: JSON.stringify({ minion_id, name, version, package_sha256: package_sha256 || null, capabilities, scope_metadata: { targets }, public_key })
+          body: JSON.stringify(body)
         });
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
         closeModal("registerMinionModal");
-        prompt("Minion enrolled! Copy this Mission Control API Key for minion.config.json:", data.api_key);
+        if (!editingMinion) prompt("Minion enrolled! Copy this Mission Control API key and store it in the protected key file:", data.api_key);
         loadMinions();
       } catch (err) {
         alert("Registration failed: " + err.message);
@@ -1143,12 +1257,20 @@
     }
 
     async function toggleMinion(id, enable) {
-      await fetch(`/admin/v1/minions/${id}`, {
+      const res = await fetch(`/admin/v1/minions/${encodeURIComponent(id)}`, {
         method: "PATCH",
         headers: getAuthHeaders(),
         body: JSON.stringify({ enabled: enable })
       });
+      if (!res.ok) { alert("Failed to update Minion: " + await res.text()); return; }
       loadMinions();
+    }
+
+    async function deleteMinion(id) {
+      if (!confirm(`Delete deployed Minion ${id} and revoke its credentials? Unfinished missions prevent deletion.`)) return;
+      const res = await fetch(`/admin/v1/minions/${encodeURIComponent(id)}`, { method: "DELETE", headers: getAuthHeaders() });
+      if (!res.ok) { alert("Failed to delete Minion: " + await res.text()); return; }
+      await loadMinions();
     }
 
     async function rotateMinionKey(id) {
@@ -1167,24 +1289,6 @@
       if (!confirm(`Revoke key ${active.key_id}? This Minion will no longer be able to check in.`)) return;
       const res = await fetch(`/admin/v1/credentials/${encodeURIComponent(active.key_id)}/revoke`, { method: "POST", headers: getAuthHeaders() });
       if (!res.ok) { alert("Key revocation failed: " + await res.text()); return; }
-      loadMinions();
-    }
-
-    async function approveMinionPackage(id) {
-      const version = prompt("Approved package version:", "");
-      if (version === null) return;
-      const package_sha256 = prompt("Approved package SHA-256 (64 hexadecimal characters):", "");
-      if (package_sha256 === null) return;
-      if (!/^[0-9a-fA-F]{64}$/.test(package_sha256.trim())) {
-        alert("Package SHA-256 must contain exactly 64 hexadecimal characters.");
-        return;
-      }
-      const res = await fetch(`/admin/v1/minions/${encodeURIComponent(id)}`, {
-        method: "PATCH",
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ version: version.trim(), package_sha256: package_sha256.trim() })
-      });
-      if (!res.ok) { alert("Package approval failed: " + await res.text()); return; }
       loadMinions();
     }
 

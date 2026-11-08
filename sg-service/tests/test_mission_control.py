@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi.testclient import TestClient
+from minion_helpers import register_test_minion
 
 from sg_service.protocol import canonical_json
 
@@ -158,15 +159,12 @@ def test_patch_request_claim_status_ownership_and_signed_result(tmp_path: Path, 
             "/admin/v1/credentials/agent/agent-two",
             headers={"Authorization": f"Bearer {admin_key}"},
         ).json()["api_key"]
-        minion_key = client.post(
-            "/admin/v1/credentials/minion/PATCH-01",
-            headers={"Authorization": f"Bearer {admin_key}"},
-        ).json()["api_key"]
-        assert client.post(
-            "/admin/v1/minions/PATCH-01/enroll",
-            params={"public_key": minion_public_key},
-            headers={"Authorization": f"Bearer {admin_key}"},
-        ).status_code == 201
+        registered = register_test_minion(
+            client, {"Authorization": f"Bearer {admin_key}"},
+            {"minion_id": "PATCH-01", "scope_metadata": {"targets": ["*"]}, "public_key": minion_public_key},
+        )
+        assert registered.status_code == 201
+        minion_key = registered.json()["api_key"]
 
         request_response = client.post(
             "/api/v1/patch-requests",

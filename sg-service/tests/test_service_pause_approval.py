@@ -5,6 +5,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi.testclient import TestClient
+from minion_helpers import register_test_minion
 
 
 def test_service_pause_and_approval_workflow(tmp_path: Path, monkeypatch) -> None:
@@ -84,16 +85,12 @@ def test_service_pause_and_approval_workflow(tmp_path: Path, monkeypatch) -> Non
             headers={"Authorization": f"Bearer {admin_key}"},
         ).json()["api_key"]
 
-        minion_key = client.post(
-            "/admin/v1/credentials/minion/PATCH-01",
-            headers={"Authorization": f"Bearer {admin_key}"},
-        ).json()["api_key"]
-
-        client.post(
-            "/admin/v1/minions/PATCH-01/enroll",
-            params={"public_key": minion_public_key},
-            headers={"Authorization": f"Bearer {admin_key}"},
+        registered = register_test_minion(
+            client, {"Authorization": f"Bearer {admin_key}"},
+            {"minion_id": "PATCH-01", "scope_metadata": {"targets": ["*"]}, "public_key": minion_public_key},
         )
+        assert registered.status_code == 201
+        minion_key = registered.json()["api_key"]
 
         # 1. Agent submits request requiring reboot -> Policy evaluates to PAUSE
         req_resp = client.post(

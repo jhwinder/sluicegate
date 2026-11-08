@@ -54,6 +54,19 @@ $runtimeDirectory = Join-Path $OutputDirectory "Minion/runtime"
 New-Item -ItemType Directory -Path $runtimeDirectory -Force | Out-Null
 
 Copy-Item -LiteralPath $MinionExecutable -Destination (Join-Path $OutputDirectory "Minion/SluiceGate.Minion.Service.exe") -Force
+$minionArtifact = "Minion/SluiceGate.Minion.Service.exe"
+$manifest = [ordered]@{
+    schema_version = 1
+    type_id = "windows-patching-$([guid]::NewGuid().ToString('N'))"
+    name = "Windows Patching Minion"
+    version = $Version
+    runtime_type = "powershell"
+    artifact = $minionArtifact
+    package_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $OutputDirectory $minionArtifact)).Hash.ToLowerInvariant()
+    capabilities = @("windows.patch.reconcile", "windows.patch.discover", "windows.patch.status")
+    requires_target_scope = $true
+}
+$manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $OutputDirectory "minion-release.json") -Encoding UTF8
 foreach ($file in $runtimeFiles) {
     $destination = if ($file.Target) { Join-Path $runtimeDirectory $file.Target } else { $runtimeDirectory }
     New-Item -ItemType Directory -Path $destination -Force | Out-Null

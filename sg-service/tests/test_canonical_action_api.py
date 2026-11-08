@@ -5,6 +5,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi.testclient import TestClient
+from minion_helpers import register_test_minion
 
 
 def setup_test_service(tmp_path: Path, monkeypatch):
@@ -70,16 +71,14 @@ def test_canonical_action_api_allow_pause_approval(tmp_path: Path, monkeypatch) 
         ).json()["api_key"]
         admin_headers = {"Authorization": f"Bearer {admin_key}"}
 
-        minion_reg = client.post(
-            "/admin/v1/minions",
-            json={
+        minion_reg = register_test_minion(
+            client, admin_headers, {
                 "minion_id": "REFUND-MINION-01",
                 "name": "Payments Refund Minion",
                 "capabilities": ["payments.refund"],
                 "scope_metadata": {"targets": ["*"]},
                 "public_key": minion_pub_pem,
             },
-            headers=admin_headers,
         ).json()
         minion_key = minion_reg["api_key"]
         minion_headers = {"Authorization": f"Bearer {minion_key}"}
