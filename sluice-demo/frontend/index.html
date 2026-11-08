@@ -83,6 +83,7 @@
 
   <div class="card">
     <h3>Audit Trail</h3>
+    <p>Each row shows the policy decision or mission status recorded by that event. A dash means the event did not record one.</p>
     <div class="row" style="margin-bottom:12px; align-items:center;">
       <button onclick="refreshAudit()">Refresh Audit</button>
 
@@ -98,6 +99,7 @@
 <script>
   const API = "http://localhost:8000";
   let currentId = null;
+  let auditRefreshGeneration = 0;
 
   function escapeHtml(s) {
     return String(s)
@@ -210,6 +212,8 @@
 
     const data = await r.json();
     currentId = data.request_id;
+    auditRefreshGeneration++;
+    document.getElementById("auditTable").innerText = "Loading audit events…";
 
     // Render immediate result from /decide (fast feedback)
     document.getElementById("statusLine").innerText =
@@ -266,24 +270,31 @@
 
   async function refreshAudit() {
     const showAll = document.getElementById("showAllAudit")?.checked;
+    const requestId = currentId;
+    const generation = ++auditRefreshGeneration;
+    const isCurrent = () => generation === auditRefreshGeneration
+      && requestId === currentId
+      && showAll === document.getElementById("showAllAudit")?.checked;
 
-    const url = (showAll || !currentId)
+    const url = (showAll || !requestId)
       ? `${API}/api/audit?limit=200`
-      : `${API}/api/audit?request_id=${encodeURIComponent(currentId)}&limit=200`;
+      : `${API}/api/audit?request_id=${encodeURIComponent(requestId)}&limit=200`;
 
     let r;
     try {
       r = await fetch(url);
     } catch (error) {
-      document.getElementById("auditTable").innerText = `Unable to load audit events: ${error.message}`;
+      if (isCurrent()) document.getElementById("auditTable").innerText = `Unable to load audit events: ${error.message}`;
       return;
     }
+    if (!isCurrent()) return;
     if (!r.ok) {
       document.getElementById("auditTable").innerText = `Unable to load audit events: HTTP ${r.status}`;
       return;
     }
     const events = await r.json();
-    const scopeLabel = (showAll || !currentId) ? "All events" : `Events for ${currentId.slice(0,8)}…`;
+    if (!isCurrent()) return;
+    const scopeLabel = (showAll || !requestId) ? "All events" : `Events for ${requestId.slice(0,8)}…`;
 
     if (!events.length) {
       document.getElementById("auditTable").innerHTML = `<em>No audit events yet. (${escapeHtml(scopeLabel)})</em>`;
@@ -296,13 +307,15 @@
         <td>${escapeHtml(e.event_type)}</td>
         <td class="mono">${e.request_id ? escapeHtml(e.request_id.slice(0, 8)) + "…" : "—"}</td>
         <td>${escapeHtml(e.actor_type)}${e.actor_id ? " / " + escapeHtml(e.actor_id) : ""}</td>
-        <td>${escapeHtml(e.policy_decision || "—")} / ${escapeHtml(e.current_status || "—")}</td>
+        <td>${escapeHtml(e.event_decision || "—")}</td>
+        <td>${escapeHtml(e.event_mission_status || "—")}</td>
         <td>${escapeHtml(e.summary)}</td>
       </tr>
     `).join("");
 
     document.getElementById("auditTable").innerHTML = `
       <div style="margin-bottom:8px;"><span class="pill">${escapeHtml(scopeLabel)}</span></div>
+      ${!showAll && requestId ? `<p>Latest request snapshot at refresh: decision / outcome: ${escapeHtml(events[0].policy_decision || "—")}; mission status: ${escapeHtml(events[0].current_status || "—")}</p>` : ""}
       <table>
         <thead>
           <tr>
@@ -310,7 +323,8 @@
             <th>Event</th>
             <th>Request</th>
             <th>Actor</th>
-            <th title="Current policy decision and mission status">Decision</th>
+            <th>Policy decision</th>
+            <th>Mission status</th>
             <th>Summary</th>
           </tr>
         </thead>

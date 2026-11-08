@@ -107,8 +107,11 @@ Approvals can be performed directly in the UI.
 
 - Stripe execution is stubbed (no real charges)
 - The service stores missions and audit events in the Compose database volume.
-  The demo Audit Trail shows service events with the current policy decision
-  and mission status; event times use the browser's local time zone.
+  The demo Audit Trail shows the policy decision or mission status recorded by
+  each event, with a dash where no such value was recorded. For a selected
+  request, its latest decision and status are shown separately above the table;
+  use **Refresh Audit** to update that snapshot. Event times use the browser's
+  local time zone.
 - Policies can be edited live and reloaded
 - This demo is intentionally minimal and auditable
 - `sg_core` is built from the local monorepo source; demo containers do not install `sg-core` from PyPI

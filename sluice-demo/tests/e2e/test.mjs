@@ -118,7 +118,8 @@ try {
     assert.ok(events.some((event) => event.event_type === "policy.decision"));
     await page.evaluate(() => refreshAudit());
     const headers = await page.locator("#auditTable th").allTextContents();
-    assert.deepEqual(headers, ["Time (local)", "Event", "Request", "Actor", "Decision", "Summary"]);
+    assert.deepEqual(headers, ["Time (local)", "Event", "Request", "Actor", "Policy decision", "Mission status", "Summary"]);
+    assert.match(await page.locator("#auditTable").innerText(), new RegExp(`Latest request snapshot at refresh: decision / outcome: ${decision}; mission status: ${status}`));
     const first = events[0];
     const cells = page.locator("#auditTable tbody tr").first().locator("td");
     const [expectedTime, utcTime] = await page.evaluate((timestamp) => [
@@ -129,15 +130,45 @@ try {
     assert.equal(await cells.nth(0).innerText(), expectedTime);
     assert.equal(await cells.nth(1).innerText(), first.event_type);
     assert.equal(await cells.nth(3).innerText(), `${first.actor_type} / ${first.actor_id}`);
-    assert.equal(await cells.nth(4).innerText(), `${decision} / ${status}`);
-    assert.ok((await cells.nth(5).innerText()).includes(first.status || "—"));
+    assert.equal(await cells.nth(4).innerText(), first.event_decision || "—");
+    assert.equal(await cells.nth(5).innerText(), first.event_mission_status || "—");
+    assert.ok((await cells.nth(6).innerText()).includes(first.status || "—"));
+    for (const [index, event] of events.entries()) {
+      const row = page.locator("#auditTable tbody tr").nth(index).locator("td");
+      assert.equal(await row.nth(4).innerText(), event.event_decision || "—");
+      assert.equal(await row.nth(5).innerText(), event.event_mission_status || "—");
+    }
+    return events;
   }
 
   const allowed = await submit(100, "ALLOW");
   await assertCompleted(allowed);
-  await assertDemoAudit(allowed, "ALLOW", "MISSION_COMPLETE_SUCCEEDED");
+  const allowedEvents = await assertDemoAudit(allowed, "ALLOW", "MISSION_COMPLETE_SUCCEEDED");
+  assert.equal(allowedEvents.find((e) => e.event_type === "request.received").event_decision, null);
+  assert.equal(allowedEvents.find((e) => e.event_type === "policy.decision").event_decision, "ALLOW");
+  assert.equal(allowedEvents.find((e) => e.event_type === "mission.issued").event_mission_status, "QUEUED");
+  assert.equal(allowedEvents.find((e) => e.event_type === "mission.claimed").event_mission_status, "CLAIMED");
+  assert.ok(allowedEvents.some((e) => e.event_type === "minion.status" && e.event_mission_status === "MISSION_IN_PROGRESS"));
+  assert.equal(allowedEvents.find((e) => e.event_type === "minion.result").event_mission_status, "MISSION_COMPLETE_SUCCEEDED");
   console.log("ALLOW: browser submission and signed no-op Minion result verified");
 
+  await page.locator("#showAllAudit").check();
+  await page.evaluate(() => refreshAudit());
+  assert.match(await page.locator("#auditTable").innerText(), /All events/);
+  assert.doesNotMatch(await page.locator("#auditTable").innerText(), /Latest request snapshot/);
+  await page.locator("#showAllAudit").uncheck();
+
+  let releaseDemoAudit;
+  let demoAuditRequested;
+  const demoRequested = new Promise((resolve) => { demoAuditRequested = resolve; });
+  const demoDelayed = new Promise((resolve) => { releaseDemoAudit = resolve; });
+  await page.route(`**/api/audit?request_id=${allowed}&limit=200`, async (route) => {
+    demoAuditRequested();
+    await demoDelayed;
+    await route.continue({ url: route.request().url().replace("http://localhost:8000", backend) });
+  }, { times: 1 });
+  await page.evaluate(() => { window.delayedAuditRefresh = refreshAudit(); });
+  await demoRequested;
   const paused = await submit(500, "PAUSE");
   await page.locator("#waitPanel").waitFor({ state: "visible" });
   assert.equal((await requestState(paused)).status, "WAITING_FOR_APPROVAL");
@@ -145,13 +176,20 @@ try {
   assert.equal((await requestState(paused)).status, "WAITING_FOR_APPROVAL");
   await assertNotExecuted(paused);
   await assertDemoAudit(paused, "PAUSE", "WAITING_FOR_APPROVAL");
+  releaseDemoAudit();
+  await page.evaluate(() => window.delayedAuditRefresh);
+  assert.match(await page.locator("#auditTable").innerText(), /decision \/ outcome: PAUSE; mission status: WAITING_FOR_APPROVAL/);
+  assert.match(await page.locator("#auditTable").innerText(), new RegExp(`Events for ${paused.slice(0, 8)}`));
   const approval = page.waitForResponse((response) =>
     response.url().endsWith(`/api/requests/${paused}/approve`) && response.request().method() === "POST",
   );
   await page.locator("#approveBtn").click();
   assert.equal((await approval).status(), 200);
   await assertCompleted(paused);
-  await assertDemoAudit(paused, "ALLOW", "MISSION_COMPLETE_SUCCEEDED");
+  const approvedEvents = await assertDemoAudit(paused, "ALLOW", "MISSION_COMPLETE_SUCCEEDED");
+  assert.equal(approvedEvents.find((e) => e.event_type === "policy.decision").event_decision, "PAUSE");
+  assert.equal(approvedEvents.find((e) => e.event_type === "mission.issued").event_mission_status, "WAITING_FOR_APPROVAL");
+  assert.equal(approvedEvents.find((e) => e.event_type === "approval.re_evaluated").event_decision, "ALLOW");
   assert.ok((await auditEvents(paused)).some((event) => event.event_type === "approval.re_evaluated"));
   console.log("PAUSE: no execution before browser approval; signed result verified afterward");
 
@@ -234,13 +272,17 @@ try {
   );
   await assertNotExecuted(rejected);
   assert.ok((await auditEvents(rejected)).some((event) => event.event_type === "approval.rejected"));
-  await assertDemoAudit(rejected, "REJECTED", "CLOSED");
+  const rejectedEvents = await assertDemoAudit(rejected, "REJECTED", "CLOSED");
+  assert.equal(rejectedEvents.find((e) => e.event_type === "approval.rejected").event_decision, null);
+  assert.equal(rejectedEvents.find((e) => e.event_type === "approval.rejected").event_mission_status, null);
   console.log("REJECT: browser rejection closed the request without Minion execution");
 
   const blocked = await submit(1000, "BLOCK");
   assert.equal((await requestState(blocked)).status, "CLOSED");
   await assertNotExecuted(blocked);
-  await assertDemoAudit(blocked, "BLOCK", "CLOSED");
+  const blockedEvents = await assertDemoAudit(blocked, "BLOCK", "CLOSED");
+  assert.equal(blockedEvents.find((e) => e.event_type === "policy.decision").event_decision, "BLOCK");
+  assert.equal(blockedEvents.find((e) => e.event_type === "mission.issued").event_mission_status, "CLOSED");
   assert.deepEqual(await json(`${backend}/api/audit?request_id=unknown&limit=1`), []);
   const allEvents = await json(`${backend}/api/audit?limit=1`);
   assert.equal(allEvents.length, 1);

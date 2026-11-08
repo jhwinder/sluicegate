@@ -250,6 +250,11 @@ def get_audit(request_id: Optional[str] = None, limit: int = Query(default=200, 
 
     missions = {mission["request_id"]: mission for mission in mission_response.json()}
     events = []
+    mission_events = {
+        "mission.issued", "mission.claimed", "mission.claim_reissued",
+        "mission.expired", "mission.retry_scheduled", "mission.waiting_for_window",
+        "minion.status", "minion.result",
+    }
     for event in audit_response.json()["events"]:
         mission = missions.get(event["request_id"])
         detail = event["detail"]
@@ -260,6 +265,11 @@ def get_audit(request_id: Optional[str] = None, limit: int = Query(default=200, 
             summary.append(detail["reason"])
         if isinstance(result, dict) and isinstance(result.get("message"), str):
             summary.append(result["message"])
+        event_type = event["event_type"]
+        event_decision = event["status"] if event_type in ("policy.decision", "approval.re_evaluated") else None
+        event_mission_status = event["status"] if event_type in mission_events else None
+        if event_mission_status == "RETRY_SCHEDULED":
+            event_mission_status = None
         events.append({
             "audit_id": event["audit_id"],
             "request_id": event["request_id"],
@@ -271,6 +281,8 @@ def get_audit(request_id: Optional[str] = None, limit: int = Query(default=200, 
             "timestamp": event["occurred_at"],
             "policy_decision": mission["policy_decision"] if mission else None,
             "current_status": mission["status"] if mission else None,
+            "event_decision": event_decision,
+            "event_mission_status": event_mission_status,
         })
     return events
 
