@@ -97,9 +97,15 @@ The service includes a self-contained web console served directly at:
 
 ### UI Tabs & Functions
 
+#### Policies
+- **Create New** opens a guided patching-policy builder seeded with a default BLOCK decision. Add exact, ordered target-server lists and patching constraints, then generate a draft; a policy with no rules blocks all requests. Approval outside a maintenance window permits immediate execution.
+- **Load YAML / Download YAML** exchange drafts with local files. The wizard only creates new policies; use the YAML editor to preserve and edit imported policies or features it does not represent.
+- **Validate / Save and Activate** validate and explicitly activate the draft. Reload from Service replaces the editor with the saved policy; unsaved drafts are protected by a confirmation. Saves back up the previous file and reject concurrent changes.
+
 #### 1. Missions & Audit Tab
 - **View Transactions**: Shows the current Mission summary. The Audit Events table shows correlated request receipt, policy decision, routing, signed Mission envelope, claim/recovery, status/result, signature-verification, approval and administrative-mutation events.
 - **Filter and inspect**: Search by request/transaction ID, Mission, Agent, Minion, status, event type, and occurred-at time. Inspect an event to view its structured evidence, including the signed payload where relevant.
+- **Clear and reload**: Clear removes events from the current display after confirmation; it never deletes audit records. Reload or refreshing the page retrieves events again using the current filters. Reset filters removes the search criteria.
 - **API**: `GET /admin/v1/audit-events` accepts `request_id` (or `transaction_id`), `mission_id`, `agent_id`, `minion_id`, `status_filter`, `event_type`, `since`, `until`, `limit` (1-500), and `before_id`. It requires an Admin bearer token.
 - **Storage limits**: Audit rows are retained without automatic expiry. SQLite triggers prevent ordinary application updates/deletes but do not make the database tamper-proof against a host or database administrator. Back up the WSL database and signing-key environment securely; use an independent immutable log store when stronger tamper evidence is required.
 

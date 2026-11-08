@@ -48,7 +48,7 @@ def test_admin_ui_endpoints(tmp_path: Path, monkeypatch) -> None:
         r_ui = client.get("/admin/ui")
         assert r_ui.status_code == 200
         assert "text/html" in r_ui.headers["content-type"]
-        assert "SluiceGate Control Plane" in r_ui.text
+        assert "<h1>SluiceGate " in r_ui.text
         assert "Agent Registry" in r_ui.text
         assert "Minion Registry" in r_ui.text
         assert "Generate Minion Configuration" in r_ui.text
@@ -70,6 +70,11 @@ def test_policy_admin_workflow_is_authenticated_validated_and_audited(tmp_path: 
         ).status_code == 401
 
         headers = {"Authorization": "Bearer policy-admin-secret"}
+        assert client.get("/admin/v1/policy/time-zones").status_code == 401
+        zones = client.get("/admin/v1/policy/time-zones", headers=headers)
+        assert zones.status_code == 200
+        assert zones.json() == sorted(service.supported_time_zones())
+        assert "UTC" in zones.json()
         current = client.get("/admin/v1/policy", headers=headers)
         assert current.status_code == 200
         initial_hash = current.json()["file_hash"]
@@ -178,6 +183,13 @@ def test_audit_history_is_filtered_authenticated_append_only_and_persistent(tmp_
         )
         assert submission.status_code == 202
         request_id = submission.json()["request_id"]
+        mission = next(
+            item for item in client.get("/admin/v1/missions", headers=admin_headers).json()
+            if item["request_id"] == request_id
+        )
+        assert mission["policy_decision"] == "ALLOW"
+        assert mission["status"] == "QUEUED"
+        assert "envelope" not in mission
 
         history = client.get("/admin/v1/audit-events", params={"request_id": request_id}, headers=admin_headers)
         assert history.status_code == 200

@@ -1983,9 +1983,14 @@ def request_status(request_id: str, principal: str = Depends(require_agent)) -> 
 def list_missions(_admin: str = Depends(require_admin)) -> list[dict[str, Any]]:
     with connect() as connection:
         rows = connection.execute(
-            "SELECT mission_id, request_id, minion_id, status, created_at, updated_at FROM missions ORDER BY created_at DESC"
+            "SELECT mission_id, request_id, minion_id, status, envelope, created_at, updated_at FROM missions ORDER BY created_at DESC"
         ).fetchall()
-    return [dict(row) for row in rows]
+    missions = []
+    for row in rows:
+        mission = dict(row)
+        mission["policy_decision"] = json.loads(mission.pop("envelope")).get("policy_decision")
+        missions.append(mission)
+    return missions
 
 
 @app.get("/admin/v1/audit-events")
@@ -2254,6 +2259,11 @@ def get_policy(_admin: str = Depends(require_admin)) -> dict[str, str]:
 def validate_policy(request: PolicyContentRequest, _admin: str = Depends(require_admin)) -> dict[str, Any]:
     _, issues, is_valid = validate_policy_content(request.content)
     return {"is_valid": is_valid, "issues": issues}
+
+
+@app.get("/admin/v1/policy/time-zones")
+def policy_time_zones(_admin: str = Depends(require_admin)) -> list[str]:
+    return sorted(supported_time_zones())
 
 
 @app.post("/admin/v1/policy")

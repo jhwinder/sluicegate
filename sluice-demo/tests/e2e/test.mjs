@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { chromium } from "playwright";
 
@@ -78,7 +79,7 @@ const browser = await chromium.launch({
   ...(process.env.SG_E2E_CHROMIUM_PATH ? { executablePath: process.env.SG_E2E_CHROMIUM_PATH } : {}),
 });
 try {
-  const page = await browser.newPage();
+  const page = await browser.newPage({ timezoneId: "America/Los_Angeles" });
   await page.route("http://localhost:8000/**", (route) =>
     route.continue({ url: route.request().url().replace("http://localhost:8000", backend) }),
   );
@@ -106,8 +107,35 @@ try {
     return result.request_id;
   }
 
+  async function assertDemoAudit(requestId, decision, status) {
+    const events = await json(`${backend}/api/audit?request_id=${requestId}&limit=200`);
+    const serviceEvents = await auditEvents(requestId);
+    assert.ok(events.length > 0);
+    assert.deepEqual(events.map((event) => event.audit_id), serviceEvents.map((event) => event.audit_id));
+    assert.ok(events.every((event) => event.request_id === requestId));
+    assert.ok(events.every((event) => event.policy_decision === decision && event.current_status === status));
+    assert.ok(events.every((event) => !("detail" in event)));
+    assert.ok(events.some((event) => event.event_type === "policy.decision"));
+    await page.evaluate(() => refreshAudit());
+    const headers = await page.locator("#auditTable th").allTextContents();
+    assert.deepEqual(headers, ["Time (local)", "Event", "Request", "Actor", "Decision", "Summary"]);
+    const first = events[0];
+    const cells = page.locator("#auditTable tbody tr").first().locator("td");
+    const [expectedTime, utcTime] = await page.evaluate((timestamp) => [
+      new Date(timestamp * 1000).toLocaleString(),
+      new Date(timestamp * 1000).toLocaleString(undefined, { timeZone: "UTC" }),
+    ], first.timestamp);
+    assert.notEqual(expectedTime, utcTime);
+    assert.equal(await cells.nth(0).innerText(), expectedTime);
+    assert.equal(await cells.nth(1).innerText(), first.event_type);
+    assert.equal(await cells.nth(3).innerText(), `${first.actor_type} / ${first.actor_id}`);
+    assert.equal(await cells.nth(4).innerText(), `${decision} / ${status}`);
+    assert.ok((await cells.nth(5).innerText()).includes(first.status || "—"));
+  }
+
   const allowed = await submit(100, "ALLOW");
   await assertCompleted(allowed);
+  await assertDemoAudit(allowed, "ALLOW", "MISSION_COMPLETE_SUCCEEDED");
   console.log("ALLOW: browser submission and signed no-op Minion result verified");
 
   const paused = await submit(500, "PAUSE");
@@ -116,12 +144,14 @@ try {
   await sleep(3000);
   assert.equal((await requestState(paused)).status, "WAITING_FOR_APPROVAL");
   await assertNotExecuted(paused);
+  await assertDemoAudit(paused, "PAUSE", "WAITING_FOR_APPROVAL");
   const approval = page.waitForResponse((response) =>
     response.url().endsWith(`/api/requests/${paused}/approve`) && response.request().method() === "POST",
   );
   await page.locator("#approveBtn").click();
   assert.equal((await approval).status(), 200);
   await assertCompleted(paused);
+  await assertDemoAudit(paused, "ALLOW", "MISSION_COMPLETE_SUCCEEDED");
   assert.ok((await auditEvents(paused)).some((event) => event.event_type === "approval.re_evaluated"));
   console.log("PAUSE: no execution before browser approval; signed result verified afterward");
 
@@ -130,8 +160,55 @@ try {
   const adminPage = await browser.newPage();
   adminPage.on("dialog", (dialog) => dialog.accept("Approved by E2E test"));
   await adminPage.goto(`${service}/admin/ui`, { waitUntil: "load" });
+  assert.match(await adminPage.locator("header h1").innerText(), /^SluiceGate\s+v/i);
+  assert.equal(await adminPage.locator("#tab-agents h2").first().innerText(), "Registered Agents");
+  assert.equal(await adminPage.locator("#tab-minions h2").first().innerText(), "Registered Minions");
   await adminPage.locator("#adminTokenInput").fill(process.env.SG_BOOTSTRAP_ADMIN_KEY);
   await adminPage.locator('button[onclick="saveAdminToken()"]').click();
+  await adminPage.locator("#auditRequestId").fill(allowed);
+  const auditCard = adminPage.locator(".card").filter({ has: adminPage.getByRole("heading", { name: "Audit Events" }) });
+  const filteredResponse = adminPage.waitForResponse((response) =>
+    response.url().includes(`/admin/v1/audit-events?request_id=${allowed}`) && response.status() === 200,
+  );
+  await auditCard.getByRole("button", { name: "Filter", exact: true }).click();
+  await filteredResponse;
+  await adminPage.locator("#auditEventsTableBody tr").filter({ hasText: allowed }).first().waitFor();
+  const storedEvents = await auditEvents(allowed);
+  const dialog = adminPage.locator("#clearAuditDialog");
+  await auditCard.getByRole("button", { name: "Clear", exact: true }).click();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  assert.ok((await adminPage.locator("#auditEventsTableBody").innerText()).includes(allowed));
+
+  let releaseAudit;
+  let auditRequested;
+  const requested = new Promise((resolve) => { auditRequested = resolve; });
+  const delayed = new Promise((resolve) => { releaseAudit = resolve; });
+  await adminPage.route("**/admin/v1/audit-events?**", async (route) => {
+    auditRequested();
+    await delayed;
+    await route.continue();
+  }, { times: 1 });
+  await adminPage.evaluate(() => { loadAudit(true); });
+  await requested;
+  await auditCard.getByRole("button", { name: "Clear", exact: true }).click();
+  await dialog.getByRole("button", { name: "Continue" }).click();
+  const delayedResponse = adminPage.waitForResponse((response) =>
+    response.url().includes(`/admin/v1/audit-events?request_id=${allowed}`),
+  );
+  releaseAudit();
+  await delayedResponse;
+  assert.match(await adminPage.locator("#auditEventsTableBody").innerText(), /Display cleared/);
+  assert.equal(await adminPage.locator("#auditOlderButton").isVisible(), false);
+  assert.deepEqual((await auditEvents(allowed)).map((event) => event.audit_id), storedEvents.map((event) => event.audit_id));
+  const reloadResponse = adminPage.waitForResponse((response) =>
+    response.url().includes(`/admin/v1/audit-events?request_id=${allowed}`) && response.status() === 200,
+  );
+  await auditCard.getByRole("button", { name: "Reload", exact: true }).click();
+  await reloadResponse;
+  await adminPage.locator("#auditEventsTableBody tr").filter({ hasText: allowed }).first().waitFor();
+  assert.equal(await adminPage.locator("#auditRequestId").inputValue(), allowed);
+  await auditCard.getByRole("button", { name: "Reset filters" }).click();
+  assert.equal(await adminPage.locator("#auditRequestId").inputValue(), "");
   await adminPage.locator('.nav-tab[onclick="switchTab(\'approvals\')"]').click();
   const row = adminPage.locator("#approvalsTableBody tr").filter({ hasText: adminPaused });
   await row.waitFor({ state: "visible" });
@@ -157,12 +234,143 @@ try {
   );
   await assertNotExecuted(rejected);
   assert.ok((await auditEvents(rejected)).some((event) => event.event_type === "approval.rejected"));
+  await assertDemoAudit(rejected, "REJECTED", "CLOSED");
   console.log("REJECT: browser rejection closed the request without Minion execution");
 
   const blocked = await submit(1000, "BLOCK");
   assert.equal((await requestState(blocked)).status, "CLOSED");
   await assertNotExecuted(blocked);
+  await assertDemoAudit(blocked, "BLOCK", "CLOSED");
+  assert.deepEqual(await json(`${backend}/api/audit?request_id=unknown&limit=1`), []);
+  const allEvents = await json(`${backend}/api/audit?limit=1`);
+  assert.equal(allEvents.length, 1);
+  assert.equal((await fetch(`${backend}/api/audit?limit=501`)).status, 422);
+  await page.route("http://localhost:8000/api/audit?**", (route) =>
+    route.fulfill({ status: 503, body: "unavailable" }),
+  );
+  await page.evaluate(() => refreshAudit());
+  assert.match(await page.locator("#auditTable").innerText(), /Unable to load audit events: HTTP 503/);
   console.log("BLOCK: browser submission was denied without Minion execution");
+
+  const policyPage = await browser.newPage({ acceptDownloads: true });
+  let acceptConfirmation = true;
+  policyPage.on("dialog", async (dialog) => {
+    if (acceptConfirmation) await dialog.accept();
+    else await dialog.dismiss();
+  });
+  await policyPage.goto(`${service}/admin/ui`);
+  await policyPage.locator("#adminTokenInput").fill(process.env.SG_BOOTSTRAP_ADMIN_KEY);
+  await policyPage.locator('button[onclick="saveAdminToken()"]').click();
+  await policyPage.locator('.nav-tab[onclick="switchTab(\'policy\')"]').click();
+  await policyPage.waitForFunction(() => document.getElementById("policyHashInfo").textContent.startsWith("File SHA-256:"));
+  const activePolicy = await json(`${service}/admin/v1/policy`, { headers: adminHeaders });
+  const editor = policyPage.locator("#policyEditor");
+  await editor.fill("# unsaved\n" + activePolicy.content);
+  acceptConfirmation = false;
+  await policyPage.getByRole("button", { name: "Reload from Service" }).click();
+  assert.ok((await editor.inputValue()).startsWith("# unsaved\n"));
+  await policyPage.locator('.nav-tab[onclick="switchTab(\'agents\')"]').click();
+  await policyPage.locator('.nav-tab[onclick="switchTab(\'policy\')"]').click();
+  assert.ok((await editor.inputValue()).startsWith("# unsaved\n"));
+  await policyPage.getByRole("button", { name: "Create New" }).click();
+  const wizard = policyPage.locator("#policyWizard");
+  await wizard.getByRole("button", { name: "Generate YAML" }).click();
+  assert.ok((await editor.inputValue()).startsWith("# unsaved\n"));
+  acceptConfirmation = true;
+  await wizard.getByRole("button", { name: "Generate YAML" }).click();
+  const blank = await editor.inputValue();
+  assert.match(blank, /decision: BLOCK/);
+  assert.match(blank, /rules: \[\]/);
+  assert.equal((await json(`${service}/admin/v1/policy`, { headers: adminHeaders })).content, activePolicy.content);
+  await policyPage.getByRole("button", { name: "Save and Activate" }).click();
+  await policyPage.waitForFunction(() => document.getElementById("policyFeedback").textContent.includes("Policy saved and activated"));
+  assert.equal((await json(`${service}/admin/v1/policy`, { headers: adminHeaders })).content, blank);
+
+  await policyPage.getByRole("button", { name: "Create New" }).click();
+  assert.ok(await wizard.locator("#wizardZone option[value='America/New_York']").count());
+  await wizard.locator("#wizardTargets").fill("patch-test.example.gov");
+  await wizard.locator('input[name="wizardSource"][value="nessus_catalog"]').check();
+  await wizard.locator("#wizardExecutables").fill("msiexec.exe");
+  await wizard.locator("#wizardWindowEnabled").check();
+  await wizard.locator("#wizardZone").selectOption("America/New_York");
+  await wizard.locator('input[name="wizardDay"][value="SAT"]').check();
+  await wizard.locator("#wizardEnd").fill("01:00");
+  await wizard.getByRole("button", { name: "Add rule" }).click();
+  assert.match(await wizard.locator("#wizardError").innerText(), /different start and end times/);
+  await wizard.locator("#wizardEnd").fill("05:00");
+  await wizard.getByRole("button", { name: "Add rule" }).click();
+  await wizard.locator("#wizardTargets").fill("direct-test.example.gov");
+  await wizard.locator("#wizardApproval").uncheck();
+  await wizard.getByRole("button", { name: "Add rule" }).click();
+  assert.equal(await wizard.locator("#wizardRuleList li").count(), 2);
+  await wizard.getByRole("button", { name: "Generate YAML" }).click();
+  const generated = await editor.inputValue();
+  assert.match(generated, /default:\n  decision: BLOCK/);
+  const validation = await json(`${service}/admin/v1/policy/validate`, {
+    method: "POST", headers: { ...adminHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify({ content: generated }),
+  });
+  assert.equal(validation.is_valid, true, JSON.stringify(validation.issues));
+  assert.equal((await json(`${service}/admin/v1/policy`, { headers: adminHeaders })).content, blank);
+  const downloadPromise = policyPage.waitForEvent("download");
+  await policyPage.getByRole("button", { name: "Download YAML" }).click();
+  const download = await downloadPromise;
+  assert.equal(await readFile(await download.path(), "utf8"), generated);
+
+  const imported = "# imported policy, preserve unknown content\nversion: 1\ndefault: {decision: BLOCK}\nrules: []\n";
+  await policyPage.locator("#policyFile").setInputFiles({ name: "custom.yaml", mimeType: "application/yaml", buffer: Buffer.from(imported) });
+  await policyPage.waitForFunction((text) => document.getElementById("policyEditor").value === text, imported);
+  assert.equal((await json(`${service}/admin/v1/policy`, { headers: adminHeaders })).content, blank);
+  await policyPage.locator("#policyFile").setInputFiles({ name: "generated.yaml", mimeType: "application/yaml", buffer: Buffer.from(generated) });
+  await policyPage.waitForFunction((text) => document.getElementById("policyEditor").value === text, generated);
+  await policyPage.getByRole("button", { name: "Save and Activate" }).click();
+  await policyPage.waitForFunction(() => document.getElementById("policyFeedback").textContent.includes("Policy saved and activated"));
+
+  async function submitPatch(servers) {
+    const response = await fetch(`${service}/api/v1/patch-requests`, {
+      method: "POST",
+      headers: { Authorization: "Bearer " + process.env.SG_DEMO_AGENT_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({ servers }),
+    });
+    if (response.status !== 202) throw new Error(`Patch request failed: ${response.status} ${await response.text()}`);
+    return response.json();
+  }
+  const pendingPatch = await submitPatch(["patch-test.example.gov"]);
+  assert.equal((await requestState(pendingPatch.request_id)).status, "WAITING_FOR_APPROVAL");
+  const issued = (await auditEvents(pendingPatch.request_id)).find((event) => event.event_type === "mission.issued");
+  assert.deepEqual(issued.detail.signed_envelope.target.servers, ["patch-test.example.gov"]);
+  const parameters = issued.detail.signed_envelope.parameters;
+  assert.deepEqual(parameters.patch_sources, ["wsus", "nessus_catalog"]);
+  assert.deepEqual(parameters.patch_constraints.allowed_patch_types, ["SECURITY"]);
+  assert.equal(parameters.patch_constraints.allow_reboot, false);
+  assert.deepEqual(parameters.maintenance_window, { timezone: "America/New_York", days: ["SAT"], start: "01:00", end: "05:00" });
+  assert.deepEqual(
+    issued.detail.signed_envelope.obligations.find((item) => item.type === "allowed_patch_executables").data.executables,
+    ["msiexec.exe"],
+  );
+  const approvedPatch = await fetch(`${service}/admin/v1/requests/${pendingPatch.request_id}/approve`, {
+    method: "POST", headers: { ...adminHeaders, "Content-Type": "application/json" }, body: "{}",
+  });
+  assert.equal(approvedPatch.status, 200);
+  assert.equal((await approvedPatch.json()).decision, "ALLOW");
+  const unrelatedPatch = await submitPatch(["other.example.gov"]);
+  assert.equal((await requestState(unrelatedPatch.request_id)).status, "CLOSED");
+  assert.equal((await requestState(unrelatedPatch.request_id)).policy_decision, "BLOCK");
+  const directPatch = await submitPatch(["direct-test.example.gov"]);
+  assert.equal((await requestState(directPatch.request_id)).policy_decision, "ALLOW");
+  const active = await json(`${service}/admin/v1/policy`, { headers: adminHeaders });
+  const otherSave = await fetch(`${service}/admin/v1/policy`, {
+    method: "POST", headers: { ...adminHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify({ content: blank, expected_file_hash: active.file_hash }),
+  });
+  assert.equal(otherSave.status, 200);
+  await editor.fill(generated + "# stale local draft\n");
+  await policyPage.getByRole("button", { name: "Save and Activate" }).click();
+  await policyPage.waitForFunction(() => document.getElementById("policyFeedback").textContent.includes("Policy was not activated"));
+  assert.match(await policyPage.locator("#policyFeedback").innerText(), /changed since it was loaded/);
+  assert.equal((await json(`${service}/admin/v1/policy`, { headers: adminHeaders })).content, blank);
+  await policyPage.close();
+  console.log("POLICY: wizard, file round-trip, draft safety, and patch decisions verified");
 } finally {
   await browser.close();
 }

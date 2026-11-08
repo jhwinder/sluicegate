@@ -4,7 +4,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 import requests
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
@@ -230,33 +230,49 @@ def reject(request_id: str, request: Request):
 
 
 @app.get("/api/audit")
-def get_audit(request_id: Optional[str] = None, limit: int = 200):
+def get_audit(request_id: Optional[str] = None, limit: int = Query(default=200, ge=1, le=500)):
     try:
-        r = requests.get(
+        audit_response = requests.get(
+            f"{SG_SERVICE_URL}/admin/v1/audit-events",
+            params={"limit": limit, **({"request_id": request_id} if request_id else {})},
+            headers=admin_headers(),
+            timeout=10.0,
+        )
+        audit_response.raise_for_status()
+        mission_response = requests.get(
             f"{SG_SERVICE_URL}/admin/v1/missions",
             headers=admin_headers(),
             timeout=10.0,
         )
-        missions = r.json() if r.status_code == 200 else []
-    except Exception:
-        missions = []
+        mission_response.raise_for_status()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=503, detail=f"Failed to retrieve service audit data: {e}") from e
 
+    missions = {mission["request_id"]: mission for mission in mission_response.json()}
     events = []
-    for m in missions:
-        rid = m.get("request_id", "")
-        if request_id and rid != request_id:
-            continue
+    for event in audit_response.json()["events"]:
+        mission = missions.get(event["request_id"])
+        detail = event["detail"]
+        signed_payload = detail.get("signed_payload")
+        result = signed_payload.get("result") if isinstance(signed_payload, dict) else None
+        summary = [event["status"] or "—"]
+        if isinstance(detail.get("reason"), str):
+            summary.append(detail["reason"])
+        if isinstance(result, dict) and isinstance(result.get("message"), str):
+            summary.append(result["message"])
         events.append({
-            "request_id": rid,
-            "event_type": "GATE_DECIDED" if m.get("status") in ("QUEUED", "WAITING_FOR_APPROVAL") else "EXECUTION_COMPLETED",
-            "actor_type": "SYSTEM",
-            "actor_id": "sg_service",
-            "summary": f"Mission {m.get('mission_id')}: {m.get('status')}",
-            "details": {"minion_id": m.get("minion_id"), "status": m.get("status")},
-            "timestamp": m.get("updated_at", 0),
+            "audit_id": event["audit_id"],
+            "request_id": event["request_id"],
+            "event_type": event["event_type"],
+            "actor_type": event["actor_type"],
+            "actor_id": event["actor_id"],
+            "status": event["status"],
+            "summary": " — ".join(summary),
+            "timestamp": event["occurred_at"],
+            "policy_decision": mission["policy_decision"] if mission else None,
+            "current_status": mission["status"] if mission else None,
         })
-
-    return events[:limit]
+    return events
 
 
 @app.post("/api/policy/reload")

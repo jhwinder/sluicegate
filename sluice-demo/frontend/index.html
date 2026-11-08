@@ -271,7 +271,17 @@
       ? `${API}/api/audit?limit=200`
       : `${API}/api/audit?request_id=${encodeURIComponent(currentId)}&limit=200`;
 
-    const r = await fetch(url);
+    let r;
+    try {
+      r = await fetch(url);
+    } catch (error) {
+      document.getElementById("auditTable").innerText = `Unable to load audit events: ${error.message}`;
+      return;
+    }
+    if (!r.ok) {
+      document.getElementById("auditTable").innerText = `Unable to load audit events: HTTP ${r.status}`;
+      return;
+    }
     const events = await r.json();
     const scopeLabel = (showAll || !currentId) ? "All events" : `Events for ${currentId.slice(0,8)}…`;
 
@@ -282,14 +292,12 @@
 
     const rows = events.map(e => `
       <tr>
-        <td style="white-space:nowrap;">${escapeHtml(e.timestamp)}</td>
+        <td style="white-space:nowrap;">${escapeHtml(new Date(e.timestamp * 1000).toLocaleString())}</td>
         <td>${escapeHtml(e.event_type)}</td>
-        <td class="mono">${escapeHtml((e.request_id || "").slice(0, 8))}…</td>
+        <td class="mono">${e.request_id ? escapeHtml(e.request_id.slice(0, 8)) + "…" : "—"}</td>
         <td>${escapeHtml(e.actor_type)}${e.actor_id ? " / " + escapeHtml(e.actor_id) : ""}</td>
-        <td>
-          ${escapeHtml(e.summary || "")}
-          ${e.details?.agent_type ? `<br/><small><b>Agent:</b> ${escapeHtml(e.details.agent_type)}</small>` : ""}
-        </td>
+        <td>${escapeHtml(e.policy_decision || "—")} / ${escapeHtml(e.current_status || "—")}</td>
+        <td>${escapeHtml(e.summary)}</td>
       </tr>
     `).join("");
 
@@ -298,10 +306,11 @@
       <table>
         <thead>
           <tr>
-            <th>Time (UTC)</th>
+            <th>Time (local)</th>
             <th>Event</th>
             <th>Request</th>
             <th>Actor</th>
+            <th title="Current policy decision and mission status">Decision</th>
             <th>Summary</th>
           </tr>
         </thead>

@@ -17,6 +17,7 @@ WORKDIR /app
 COPY sg-service/pyproject.toml /tmp/sg-service-pyproject.toml
 COPY --from=build /wheels /wheels
 COPY minion-registry/protocol/*.schema.json /opt/sluicegate/protocol/
+COPY minion-registry/protocol/windows-timezones.json /opt/sluicegate/protocol/
 RUN python -m venv /opt/venv \
         && /opt/venv/bin/pip install --no-cache-dir /wheels/sg_core-*.whl /wheels/sg_service-*.whl \
         && rm -rf /wheels /tmp/sg-service-pyproject.toml

@@ -137,7 +137,7 @@ The policy is the rule set that decides whether a request is allowed, paused for
    ```
 
 2. In a browser on the server, open `https://127.0.0.1:8443/admin`. A self-signed certificate makes the browser warn; that is expected for the pilot, and you can continue after confirming the address. Paste the key into **Admin Bearer Token** and click **Save**.
-3. Open the **Policies** tab. It shows the starter policy, which blocks every request. Replace its contents with a narrowly scoped policy for your test target, click **Validate**, then **Save and Activate**. This example pauses a request for one test server for approval and allows it after approval; use your own server name. Rule syntax and the required obligations are in [Policy DSL](Policy_DSL.md):
+3. Open the **Policies** tab. It shows the starter policy, which blocks every request. Use **Create New** for a guided patching policy, or edit the YAML directly. The wizard starts with a default BLOCK and matches each rule against the exact ordered server list in the request; it produces a draft, not an active policy. You can also load or download YAML files locally. Review the draft, click **Validate**, then **Save and Activate**. This example pauses a request for one test server for approval and allows it after approval; use your own server name. Rule syntax and the required obligations are in [Policy DSL](Policy_DSL.md):
 
    ```yaml
    version: 1

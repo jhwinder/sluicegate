@@ -29,6 +29,13 @@ cleanup() {
     fi
   done
   rm -f "$workdir/sg-signing-key.pem" "$workdir/demo-minion-key.pem" "$workdir/demo-minion-public.pem"
+  if [[ -d "$workdir/policy" ]]; then
+    rm -f "$workdir/policy/demo-policy.yml" "$workdir"/policy/demo-policy.yml.*.bak
+    if ! rmdir "$workdir/policy"; then
+      echo "Failed to clean up $workdir/policy" >&2
+      result=1
+    fi
+  fi
   if ! rmdir "$workdir"; then
     echo "Failed to clean up $workdir" >&2
     result=1
@@ -38,6 +45,8 @@ cleanup() {
 trap cleanup EXIT
 
 umask 077
+mkdir "$workdir/policy"
+cp "$root/sg-service/policies/demo-policy.yml" "$workdir/policy/demo-policy.yml"
 openssl genpkey -algorithm ED25519 -out "$workdir/sg-signing-key.pem"
 openssl genpkey -algorithm ED25519 -out "$workdir/demo-minion-key.pem"
 openssl pkey -in "$workdir/demo-minion-key.pem" -pubout -out "$workdir/demo-minion-public.pem"

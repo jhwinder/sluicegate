@@ -30,7 +30,9 @@ It approves requests through both the demo and administrative interfaces,
 checks that paused and rejected requests are not executed, and verifies the
 demo Minion's signed no-op results in the service audit log. Each run uses
 temporary test keys, an isolated Compose project, dynamically allocated ports,
-and a fresh database; the containers and volume are removed afterward.
+and a fresh database and writable policy copy; the containers and volume are
+removed afterward. The browser test also checks policy wizard generation,
+local file exchange, activation and patch-request decisions.
 
 To run it locally, install Node.js 20 or newer, Docker with Compose 2.24.4 or
 newer, and OpenSSL with Ed25519 support. From the repository root:

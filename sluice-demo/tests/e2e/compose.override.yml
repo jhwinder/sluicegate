@@ -6,7 +6,7 @@ services:
     volumes:
       - ${SG_E2E_SECRETS_DIR}/sg-signing-key.pem:/run/secrets/sg-signing-key.pem:ro
       - ${SG_E2E_SECRETS_DIR}/demo-minion-public.pem:/run/secrets/demo-minion-public.pem:ro
-      - ../sg-service/policies:/config:ro
+      - ${SG_E2E_SECRETS_DIR}/policy:/config
 
   demo-minion:
     volumes:

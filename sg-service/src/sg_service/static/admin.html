@@ -174,7 +174,7 @@
 
   <header>
     <div>
-      <h1>SluiceGate Control Plane <span class="badge badge-info">v0.1.0</span></h1>
+      <h1>SluiceGate <span class="badge badge-info">v0.1.0</span></h1>
       <small style="color:var(--text-muted);">Administrative Console & Decision Ledger</small>
     </div>
     <div class="auth-bar">
@@ -200,9 +200,18 @@
     <div class="card">
       <div class="card-header">
         <h2>Active Policy</h2>
-        <button class="secondary" onclick="loadPolicyEditor()">Reload from Service</button>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="secondary" onclick="openPolicyWizard()">Create New</button>
+          <button class="secondary" onclick="loadPolicyEditor()">Reload from Service</button>
+        </div>
       </div>
       <p id="policyHashInfo" style="color:var(--text-muted);">Loading policy metadata...</p>
+      <p>Changes are a draft until you select Save and Activate.</p>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+        <button class="secondary" onclick="document.getElementById('policyFile').click()">Load YAML</button>
+        <input id="policyFile" type="file" accept=".yml,.yaml,application/yaml,text/yaml" hidden onchange="loadPolicyFile(this)" />
+        <button class="secondary" onclick="downloadPolicyFile()">Download YAML</button>
+      </div>
       <div class="form-group">
         <label for="policyEditor">Policy YAML</label>
         <textarea id="policyEditor" rows="24" spellcheck="false" style="width:100%; font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;"></textarea>
@@ -214,6 +223,64 @@
       <pre id="policyFeedback" class="json-viewer" style="white-space:pre-wrap; margin-top:16px;"></pre>
     </div>
   </section>
+
+  <dialog id="policyWizard" aria-labelledby="policyWizardTitle" class="modal" style="max-width:780px; max-height:90vh; overflow-y:auto;">
+    <h2 id="policyWizardTitle">Create patching policy</h2>
+    <p>New policies block unmatched requests. Add rules in order, or generate a policy with no rules to block everything. Generated YAML is a draft and does not change the active policy.</p>
+    <p>Each rule matches the exact ordered server list supplied in a patch request. Other targets or combinations are blocked. The first matching rule wins.</p>
+    <ol id="wizardRuleList"></ol>
+    <form id="wizardRuleForm" onsubmit="addWizardRule(event)">
+      <fieldset>
+        <legend>Add a patching rule</legend>
+        <div class="form-group">
+          <label for="wizardTargets">Target server names (comma-separated, exact request order)</label>
+          <input id="wizardTargets" required placeholder="server1.example.com, server2.example.com" />
+        </div>
+        <fieldset><legend>Patch sources</legend>
+          <label><input type="checkbox" name="wizardSource" value="wsus" checked /> WSUS</label>
+          <label><input type="checkbox" name="wizardSource" value="nessus_catalog" /> Nessus catalog</label>
+        </fieldset>
+        <fieldset><legend>Allowed patch types</legend>
+          <label><input type="checkbox" name="wizardType" value="SECURITY" checked /> Security</label>
+          <label><input type="checkbox" name="wizardType" value="BUGFIX" /> Bugfix</label>
+          <label><input type="checkbox" name="wizardType" value="FEATURE" /> Feature</label>
+          <label><input type="checkbox" name="wizardType" value="SERVICE_PACK" /> Service pack</label>
+          <label><input type="checkbox" name="wizardType" value="DRIVER" /> Driver</label>
+          <label><input type="checkbox" name="wizardType" value="OTHER" /> Other</label>
+        </fieldset>
+        <div class="form-group">
+          <label for="wizardExecutables">Allowed catalog installer executable names (comma-separated)</label>
+          <input id="wizardExecutables" placeholder="msiexec.exe" />
+          <small>Required for catalog patches; only explicitly listed executables are authorized.</small>
+        </div>
+        <label><input id="wizardReboot" type="checkbox" /> Allow reboot</label><br />
+        <label><input id="wizardApproval" type="checkbox" checked /> Require approval</label><br />
+        <label><input id="wizardWindowEnabled" type="checkbox" onchange="toggleWizardWindow()" /> Restrict to a weekly maintenance window</label>
+        <div id="wizardWindow" hidden>
+          <p>Approval outside the window permits immediate execution; without approval, WAIT queues and BLOCK denies outside the window.</p>
+          <div class="form-group"><label for="wizardZone">Time zone</label><select id="wizardZone"></select></div>
+          <fieldset><legend>Window start days</legend>
+            <label><input type="checkbox" name="wizardDay" value="MON" /> Mon</label>
+            <label><input type="checkbox" name="wizardDay" value="TUE" /> Tue</label>
+            <label><input type="checkbox" name="wizardDay" value="WED" /> Wed</label>
+            <label><input type="checkbox" name="wizardDay" value="THU" /> Thu</label>
+            <label><input type="checkbox" name="wizardDay" value="FRI" /> Fri</label>
+            <label><input type="checkbox" name="wizardDay" value="SAT" /> Sat</label>
+            <label><input type="checkbox" name="wizardDay" value="SUN" /> Sun</label>
+          </fieldset>
+          <div class="form-group"><label for="wizardStart">Start time</label><input id="wizardStart" type="time" value="01:00" /></div>
+          <div class="form-group"><label for="wizardEnd">End time (earlier means next day)</label><input id="wizardEnd" type="time" value="05:00" /></div>
+          <div class="form-group"><label for="wizardOutside">Outside window</label><select id="wizardOutside"><option value="WAIT">Wait</option><option value="BLOCK">Block</option></select></div>
+        </div>
+        <p id="wizardError" role="alert" style="color:var(--danger);"></p>
+        <button type="submit" class="secondary">Add rule</button>
+      </fieldset>
+    </form>
+    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px;">
+      <button class="secondary" onclick="document.getElementById('policyWizard').close()">Cancel</button>
+      <button onclick="generateWizardPolicy()">Generate YAML</button>
+    </div>
+  </dialog>
 
   <!-- TAB: MISSIONS & AUDIT -->
   <section id="tab-missions" class="tab-content">
@@ -256,7 +323,9 @@
       </div>
       <div style="display:flex; gap:8px; margin-bottom:12px;">
         <button onclick="loadAudit(true)">Filter</button>
-        <button class="secondary" onclick="clearAuditFilters()">Clear</button>
+        <button class="secondary" onclick="clearAuditFilters()">Reset filters</button>
+        <button class="secondary" onclick="document.getElementById('clearAuditDialog').showModal()">Clear</button>
+        <button class="secondary" onclick="loadAudit(true)">Reload</button>
       </div>
       <table>
         <thead>
@@ -301,7 +370,7 @@
   <section id="tab-agents" class="tab-content" style="display:none;">
     <div class="card">
       <div class="card-header">
-        <h2>Registered Autonomous Agents</h2>
+        <h2>Registered Agents</h2>
         <button onclick="openModal('registerAgentModal')">+ Register New Agent</button>
       </div>
       <table>
@@ -329,7 +398,7 @@
   <section id="tab-minions" class="tab-content" style="display:none;">
     <div class="card">
       <div class="card-header">
-        <h2>Registered Minion Runtimes</h2>
+        <h2>Registered Minions</h2>
         <button onclick="openModal('registerMinionModal')">+ Register New Minion</button>
       </div>
       <table>
@@ -637,6 +706,15 @@
     </div>
   </div>
 
+  <dialog id="clearAuditDialog" aria-labelledby="clearAuditTitle" class="modal">
+    <h3 id="clearAuditTitle">Clear displayed audit events?</h3>
+    <p>This clears only the display. Audit events remain in the database and can be restored with Reload.</p>
+    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px;">
+      <button class="secondary" onclick="document.getElementById('clearAuditDialog').close()" autofocus>Cancel</button>
+      <button onclick="clearAuditDisplay()">Continue</button>
+    </div>
+  </dialog>
+
   <!-- MODAL: MISSION DETAIL VIEWER -->
   <div id="missionDetailModal" class="modal-backdrop">
     <div class="modal" style="max-width: 680px;">
@@ -671,7 +749,7 @@
       document.querySelectorAll(".nav-tab").forEach(el => el.classList.remove("active"));
       document.getElementById("tab-" + tabId).style.display = "block";
       event.target.classList.add("active");
-      if (tabId === "policy") loadPolicyEditor();
+      if (tabId === "policy" && !policyFileHash) loadPolicyEditor();
       if (tabId === "adapters") loadAdapters();
     }
 
@@ -719,6 +797,7 @@
 
     let auditBeforeId = null;
     let auditQuery = "";
+    let auditLoadGeneration = 0;
     const auditEventsById = new Map();
 
     async function loadMissions() {
@@ -747,9 +826,11 @@
     }
 
     async function loadAudit(reset = true) {
+      const generation = ++auditLoadGeneration;
       const tbody = document.getElementById("auditEventsTableBody");
       if (reset) {
         auditBeforeId = null;
+        document.getElementById("auditOlderButton").style.display = "none";
         const params = new URLSearchParams();
         const fields = [
           ["request_id", "auditRequestId"], ["mission_id", "auditMissionId"],
@@ -774,6 +855,7 @@
         const res = await fetch(`/admin/v1/audit-events?${params.toString()}`, { headers: getAuthHeaders() });
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
+        if (generation !== auditLoadGeneration) return;
         for (const item of data.events) auditEventsById.set(item.audit_id, item);
         const rows = data.events.map(item => `
           <tr>
@@ -793,6 +875,7 @@
         auditBeforeId = data.next_before_id;
         document.getElementById("auditOlderButton").style.display = auditBeforeId ? "inline-block" : "none";
       } catch (err) {
+        if (generation !== auditLoadGeneration) return;
         tbody.innerHTML = `<tr><td colspan="10" style="color:var(--danger);">Error: ${esc(err.message)}</td></tr>`;
         document.getElementById("auditOlderButton").style.display = "none";
       }
@@ -802,6 +885,16 @@
       ["auditRequestId", "auditMissionId", "auditAgentId", "auditMinionId", "auditStatus", "auditEventType", "auditSince", "auditUntil"]
         .forEach(id => { document.getElementById(id).value = ""; });
       loadAudit(true);
+    }
+
+    function clearAuditDisplay() {
+      ++auditLoadGeneration;
+      auditBeforeId = null;
+      auditEventsById.clear();
+      document.getElementById("auditEventsTableBody").innerHTML =
+        '<tr><td colspan="10" style="text-align:center; color:var(--text-muted);">Display cleared. Select Reload to restore audit events.</td></tr>';
+      document.getElementById("auditOlderButton").style.display = "none";
+      document.getElementById("clearAuditDialog").close();
     }
 
     function viewAuditEvent(auditId) {
@@ -1408,32 +1501,205 @@
     }
 
     async function reloadPolicy() {
+      if (!confirmPolicyReplacement()) return;
       try {
         const res = await fetch("/admin/v1/policy/reload", { method: "POST", headers: getAuthHeaders() });
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
         alert("Policy successfully reloaded! Active Hash: " + data.policy_hash);
-        loadPolicyEditor();
+        await loadPolicyEditor(true);
       } catch (err) {
         alert("Failed to reload policy: " + err.message);
       }
     }
 
     let policyFileHash = "";
+    let activePolicyContent = "";
+    let policyLoadGeneration = 0;
+    let wizardRules = [];
 
-    async function loadPolicyEditor() {
+    function confirmPolicyReplacement() {
+      const current = document.getElementById("policyEditor").value;
+      return current === activePolicyContent || confirm("Replace the unsaved policy draft? Your edits will be lost.");
+    }
+
+    function setPolicyDraft(content, message) {
+      ++policyLoadGeneration;
+      document.getElementById("policyEditor").value = content;
+      document.getElementById("policyFeedback").textContent = message;
+    }
+
+    async function openPolicyWizard() {
+      const dialog = document.getElementById("policyWizard");
+      const select = document.getElementById("wizardZone");
+      try {
+        const response = await fetch("/admin/v1/policy/time-zones", { headers: getAuthHeaders() });
+        if (!response.ok) throw new Error(await response.text());
+        const zones = await response.json();
+        select.replaceChildren(...zones.map(zone => new Option(zone, zone)));
+        select.value = "UTC";
+        document.getElementById("wizardRuleForm").reset();
+        select.value = "UTC";
+        toggleWizardWindow();
+        wizardRules = [];
+        renderWizardRules();
+        document.getElementById("wizardError").textContent = "";
+        dialog.showModal();
+      } catch (err) {
+        document.getElementById("policyFeedback").textContent = "Could not open policy wizard: " + err.message;
+      }
+    }
+
+    function toggleWizardWindow() {
+      document.getElementById("wizardWindow").hidden = !document.getElementById("wizardWindowEnabled").checked;
+    }
+
+    function renderWizardRules() {
+      const list = document.getElementById("wizardRuleList");
+      list.replaceChildren();
+      wizardRules.forEach((rule, index) => {
+        const item = document.createElement("li");
+        item.append(document.createTextNode(`${rule.targets.join(", ")} — ${rule.approval ? "approval required" : "allow"} `));
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "secondary";
+        remove.textContent = "Remove";
+        remove.setAttribute("aria-label", `Remove rule ${index + 1}`);
+        remove.onclick = () => { wizardRules.splice(index, 1); renderWizardRules(); };
+        item.append(remove);
+        list.append(item);
+      });
+    }
+
+    function addWizardRule(event) {
+      event.preventDefault();
+      const error = document.getElementById("wizardError");
+      const values = name => Array.from(document.querySelectorAll(`input[name="${name}"]:checked`), input => input.value);
+      const targets = document.getElementById("wizardTargets").value.split(",").map(value => value.trim());
+      const executables = document.getElementById("wizardExecutables").value.split(",").map(value => value.trim()).filter(Boolean);
+      const sources = values("wizardSource");
+      const types = values("wizardType");
+      const windowEnabled = document.getElementById("wizardWindowEnabled").checked;
+      const days = values("wizardDay");
+      const zone = document.getElementById("wizardZone").value;
+      const start = document.getElementById("wizardStart").value;
+      const end = document.getElementById("wizardEnd").value;
+      if (targets.some(target => !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(target))) {
+        error.textContent = "Enter exact server names separated by commas; wildcards and empty names are not supported.";
+        return;
+      }
+      if (new Set(targets.map(target => target.toLowerCase().replace(/\.$/, ""))).size !== targets.length) {
+        error.textContent = "Each target may appear only once in a rule.";
+        return;
+      }
+      if (wizardRules.some(rule => JSON.stringify(rule.targets) === JSON.stringify(targets))) {
+        error.textContent = "A rule already matches this exact server list.";
+        return;
+      }
+      if (!sources.length || !types.length) {
+        error.textContent = "Select at least one patch source and patch type.";
+        return;
+      }
+      if (executables.some(name => !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name)) || (sources.includes("nessus_catalog") && !executables.length)) {
+        error.textContent = "For catalog patches, enter one or more bare installer executable names without paths or arguments.";
+        return;
+      }
+      if (windowEnabled && (!zone || !days.length || !/^\d{2}:\d{2}$/.test(start) || !/^\d{2}:\d{2}$/.test(end) || start === end)) {
+        error.textContent = "Choose a supported time zone, at least one day, and different start and end times in HH:MM format.";
+        return;
+      }
+      wizardRules.push({
+        targets, sources, types, executables,
+        reboot: document.getElementById("wizardReboot").checked,
+        approval: document.getElementById("wizardApproval").checked,
+        window: windowEnabled ? { timezone: zone, days, start, end } : null,
+        outside: document.getElementById("wizardOutside").value,
+      });
+      error.textContent = "";
+      renderWizardRules();
+      document.getElementById("wizardTargets").value = "";
+    }
+
+    function generateWizardPolicy() {
+      if (document.getElementById("wizardTargets").value.trim()) {
+        document.getElementById("wizardError").textContent = "Add the entered rule or clear its target names before generating.";
+        return;
+      }
+      if (!confirmPolicyReplacement()) return;
+      const lines = ["version: 1", "default:", "  decision: BLOCK"];
+      if (!wizardRules.length) {
+        lines.push("rules: []");
+      } else {
+        lines.push("rules:");
+        wizardRules.forEach((rule, index) => {
+          const emitRule = (decision, approvalCondition) => {
+            lines.push(`  - name: ${JSON.stringify(`patch-${index + 1}-${decision.toLowerCase()}`)}`,
+              "    when:",
+              "      - path: action.name", "        eq: windows.patch.reconcile",
+              "      - path: target.servers", `        eq: ${JSON.stringify(rule.targets)}`);
+            if (approvalCondition !== null) {
+              lines.push("      - path: context.approval.approved",
+                approvalCondition ? "        eq: true" : "        exists: false");
+            }
+            lines.push(`    decision: ${decision}`, "    obligations:",
+              "      - type: allowed_patch_targets", `        servers: ${JSON.stringify(rule.targets)}`,
+              "      - type: patch_constraints", `        patch_sources: ${JSON.stringify(rule.sources)}`,
+              `        allowed_patch_types: ${JSON.stringify(rule.types)}`, `        allow_reboot: ${rule.reboot}`,
+              `        maintenance_window: ${JSON.stringify(rule.window)}`);
+            if (rule.window) lines.push(`        outside_window: ${rule.outside}`);
+            if (rule.executables.length) lines.push("      - type: allowed_patch_executables", `        executables: ${JSON.stringify(rule.executables)}`);
+          };
+          if (rule.approval) emitRule("ALLOW", true);
+          emitRule(rule.approval ? "PAUSE" : "ALLOW", rule.approval ? false : null);
+        });
+      }
+      setPolicyDraft(lines.join("\n") + "\n", "Draft generated. Validate and review it before activation.");
+      document.getElementById("policyWizard").close();
+    }
+
+    async function loadPolicyFile(input) {
+      const file = input.files[0];
+      input.value = "";
+      if (!file || !confirmPolicyReplacement()) return;
+      try {
+        if (file.size > 1_000_000) throw new Error("Policy file exceeds the 1 MB limit.");
+        const previous = document.getElementById("policyEditor").value;
+        const content = await file.text();
+        if (document.getElementById("policyEditor").value !== previous && !confirmPolicyReplacement()) return;
+        setPolicyDraft(content, `Loaded ${file.name} as a draft. Validate and review it before activation.`);
+      } catch (err) {
+        document.getElementById("policyFeedback").textContent = "Could not load policy file: " + err.message;
+      }
+    }
+
+    function downloadPolicyFile() {
+      const blob = new Blob([document.getElementById("policyEditor").value], { type: "application/yaml" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "sluicegate-policy.yml";
+      link.click();
+      URL.revokeObjectURL(url);
+    }
+
+    async function loadPolicyEditor(confirmed = false) {
+      if (!confirmed && !confirmPolicyReplacement()) return;
       const feedback = document.getElementById("policyFeedback");
+      const generation = ++policyLoadGeneration;
+      const priorContent = document.getElementById("policyEditor").value;
       try {
         const res = await fetch("/admin/v1/policy", { headers: getAuthHeaders() });
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
+        if (generation !== policyLoadGeneration || document.getElementById("policyEditor").value !== priorContent) return;
         document.getElementById("policyEditor").value = data.content;
+        activePolicyContent = data.content;
         policyFileHash = data.file_hash;
         document.getElementById("policyHashInfo").textContent =
           `File SHA-256: ${data.file_hash} | Active policy hash: ${data.active_policy_hash || "not loaded"}`;
         feedback.textContent = "Policy loaded from the service.";
       } catch (err) {
-        feedback.textContent = "Failed to load policy: " + err.message;
+        if (generation === policyLoadGeneration) feedback.textContent = "Failed to load policy: " + err.message;
       }
     }
 
@@ -1463,20 +1729,26 @@
         feedback.textContent = "Load the current policy before saving.";
         return;
       }
+      const content = document.getElementById("policyEditor").value;
       if (!await validatePolicyEditor()) return;
+      if (document.getElementById("policyEditor").value !== content) {
+        feedback.textContent = "Draft changed during validation. Validate and save again.";
+        return;
+      }
       if (!confirm("Save this policy and make it active? The current file will be backed up.")) return;
       try {
         const res = await fetch("/admin/v1/policy", {
           method: "POST",
           headers: getAuthHeaders(),
           body: JSON.stringify({
-            content: document.getElementById("policyEditor").value,
+            content,
             expected_file_hash: policyFileHash
           })
         });
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
         policyFileHash = data.policy_hash_full;
+        activePolicyContent = content;
         document.getElementById("policyHashInfo").textContent =
           `File SHA-256: ${data.policy_hash_full} | Active policy hash: ${data.policy_hash}`;
         feedback.textContent = `Policy saved and activated. Backup: ${data.backup_file}. Active hash: ${data.policy_hash}`;
@@ -1494,6 +1766,13 @@
       loadNotifications();
       loadAdapters();
     }
+
+    window.addEventListener("beforeunload", event => {
+      if (document.getElementById("policyEditor").value !== activePolicyContent) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    });
 
     // Auto-init on page load
     const saved = localStorage.getItem("sg_admin_token");

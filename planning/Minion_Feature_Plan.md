@@ -321,6 +321,7 @@ The following items are future build-out ideas:
 2. A generalized AI planner
 3. Additional minions, such as an Email Minion for email as a controlled action
 4. A SQL catalog backend
+5. The two-server deployment described in P2.7 above
 
 ## Validation Snapshot
 
