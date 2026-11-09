@@ -89,7 +89,58 @@ try {
     if ($failureTarget.Count -ne 1 -or $failureTarget[0].status -ne "FAILED" -or $failureTarget[0].error -notmatch "42") {
         throw "Mission diary did not record the installer failure."
     }
-    Write-Host "Loopback staging, execution, failure and duplicate prevention passed."
+
+    $rebootPatch = Join-Path $testDirectory "reboot-required.cmd"
+    [System.IO.File]::WriteAllText($rebootPatch, "@echo off`r`nexit /b 3010`r`n")
+    $rebootRow = [pscustomobject]@{
+        patch_path = $rebootPatch
+        patch_sha256 = (Get-FileHash -LiteralPath $rebootPatch -Algorithm SHA256).Hash
+        install_command = 'cmd.exe /c ""%PATCHPATH%""'
+        plugin_id = "reboot-plugin"
+        patch_id = "reboot-patch"
+    }
+    $arguments.PatchRow = $rebootRow
+    $rebootResult = Invoke-TargetPatchInstall @arguments
+    if ($rebootResult.status -ne "FAILED" -or $rebootResult.exit_code -ne 3010 -or -not $rebootResult.reboot_required -or $rebootResult.reboot_performed) {
+        throw "Reboot-required result did not fail closed: $($rebootResult | ConvertTo-Json -Depth 8 -Compress)"
+    }
+
+    $arguments.PatchRow = $row
+    $arguments.AllowedExecutables = @("msiexec.exe")
+    $denied = Invoke-TargetPatchInstall @arguments
+    if ($denied.status -ne "FAILED" -or $denied.error -notmatch "does not authorize" -or @(Get-Content -LiteralPath $marker).Count -ne 1) {
+        throw "Unauthorized executable was not rejected: $($denied | ConvertTo-Json -Depth 8 -Compress)"
+    }
+    $arguments.AllowedExecutables = @("cmd.exe")
+    $arguments.MaintenanceWindow = [pscustomobject]@{ timezone = "Invalid/Zone"; days = @("MON"); start = "01:00"; end = "02:00" }
+    $outsideWindow = Invoke-TargetPatchInstall @arguments
+    if ($outsideWindow.status -ne "FAILED" -or $outsideWindow.error -notmatch "maintenance window" -or @(Get-Content -LiteralPath $marker).Count -ne 1) {
+        throw "Invalid maintenance window did not block execution: $($outsideWindow | ConvertTo-Json -Depth 8 -Compress)"
+    }
+    $arguments.Remove("MaintenanceWindow")
+
+    $uncertainRow = [pscustomobject]@{
+        patch_path = $patch
+        patch_sha256 = $row.patch_sha256
+        install_command = $row.install_command
+        plugin_id = "uncertain-plugin"
+        patch_id = "uncertain-patch"
+    }
+    $safeTarget = $target.Trim().TrimEnd('.').ToLowerInvariant() -replace '[^A-Za-z0-9_-]', '_'
+    $uncertainPath = Join-Path $targetDirectory "target-$safeTarget-patch-uncertain-plugin-attempt-01.json"
+    @{
+        status = "PREPARING"
+        attempt = 1
+        patch_sha256 = $row.patch_sha256
+    } | ConvertTo-Json | Set-Content -LiteralPath $uncertainPath
+    $arguments.PatchRow = $uncertainRow
+    $arguments.Attempt = 2
+    $arguments.ClaimGeneration = 2
+    $uncertain = Invoke-TargetPatchInstall @arguments
+    if ($uncertain.status -ne "FAILED" -or $uncertain.error -notmatch "uncertain" -or @(Get-Content -LiteralPath $marker).Count -ne 1) {
+        throw "Uncertain prior operation did not block duplicate execution: $($uncertain | ConvertTo-Json -Depth 8 -Compress)"
+    }
+    Write-Host "Loopback staging, execution, policy, reboot-required and recovery safeguards passed."
 }
 finally {
     foreach ($path in @($testDirectory, $targetDirectory, $stagingDirectory)) {
