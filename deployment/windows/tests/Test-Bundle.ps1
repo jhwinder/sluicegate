@@ -15,9 +15,10 @@ function docker {
 $executable = Join-Path $PSScriptRoot "../Minion/SluiceGate.Minion.Service.exe"
 $bundle = Join-Path $WorkDir "bundle"
 $builder = Join-Path $PSScriptRoot "../Build-DeploymentBundle.ps1"
-& $builder -MinionExecutable $executable -ServiceImage "sluicegate/sg-service:9.9.9" -Version "1.0.0" -OutputDirectory $bundle 6>$null 3>$null
+$version = (Get-Content -LiteralPath (Join-Path $PSScriptRoot "../../../minion-registry/minions/patching/minion-release.json") -Raw | ConvertFrom-Json).version
+& $builder -MinionExecutable $executable -ServiceImage "sluicegate/sg-service:9.9.9" -Version $version -OutputDirectory $bundle 6>$null 3>$null
 
-$secondRun = try { & $builder -MinionExecutable $executable -ServiceImage "sluicegate/sg-service:9.9.9" -Version "1.0.0" -OutputDirectory $bundle 6>$null 3>$null; "no error" } catch { $_.Exception.Message }
+$secondRun = try { & $builder -MinionExecutable $executable -ServiceImage "sluicegate/sg-service:9.9.9" -Version $version -OutputDirectory $bundle 6>$null 3>$null; "no error" } catch { $_.Exception.Message }
 
 $runtime = Join-Path $bundle "Minion/runtime"
 $worker = Join-Path $runtime "PatchingMinion.ps1"

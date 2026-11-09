@@ -1,9 +1,9 @@
 {
   "schema_version": 2,
-  "type_id": "windows-patching-1.0.0",
+  "type_id": "windows-patching-1.0.1",
   "family": "windows-patching",
   "name": "Windows Patching Minion",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "runtime_type": "powershell",
   "artifact": "Minion/SluiceGate.Minion.Service.exe",
   "capabilities": [
@@ -12,7 +12,7 @@
     "windows.patch.status"
   ],
   "requires_target_scope": true,
-  "package_sha256": "8c3f3d487653302747e1c35fa8430eddaef70b075e4a4951f34a2a45e4b7d3a5",
+  "package_sha256": "1053e4dc8fd7c23e09e93e213d67518c5d73069fcaa6978b2ffa2d9c4b14e645",
   "release_files": [
     "SluiceGate.Minion.Service.exe",
     "runtime/PatchingCatalog.psm1",

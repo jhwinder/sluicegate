@@ -102,10 +102,11 @@ def test_bundle_contains_everything_the_installer_requires(tmp_path: Path) -> No
         assert (bundle / name).is_file(), name
 
     version = json.loads((bundle / "Minion/runtime/version.json").read_text(encoding="utf-8-sig"))
-    assert version["version"] == "1.0.0" and version["serviceImage"] == "sluicegate/sg-service:9.9.9"
+    repository_release = json.loads((REPOSITORY / "minion-registry/minions/patching/minion-release.json").read_text(encoding="utf-8"))
+    assert version["version"] == repository_release["version"] and version["serviceImage"] == "sluicegate/sg-service:9.9.9"
 
     release = json.loads((bundle / "minion-release.json").read_text(encoding="utf-8-sig"))
-    assert release["schema_version"] == 2 and release["version"] == "1.0.0"
+    assert release["schema_version"] == 2 and release["version"] == repository_release["version"]
     assert release["artifact"] == "Minion/SluiceGate.Minion.Service.exe"
     lines = "".join(f"{name}\0{hashlib.sha256((bundle / 'Minion' / name).read_bytes()).hexdigest()}\n" for name in release["release_files"])
     assert release["package_sha256"] == hashlib.sha256(lines.encode()).hexdigest()

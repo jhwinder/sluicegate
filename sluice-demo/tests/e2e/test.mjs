@@ -199,7 +199,7 @@ try {
   const adminPage = await browser.newPage();
   adminPage.on("dialog", (dialog) => dialog.accept("Approved by E2E test"));
   await adminPage.goto(`${service}/admin/ui`, { waitUntil: "load" });
-  assert.match(await adminPage.locator("header h1").innerText(), /^SluiceGate\s+v/i);
+  assert.match(await adminPage.locator("header h1").innerText(), /^SluiceGate Mission Control\s+v/i);
   assert.equal(await adminPage.locator("#tab-agents h2").first().innerText(), "Registered Agents");
   assert.equal(await adminPage.locator("#tab-minions h2").first().innerText(), "Registered Minions");
   await adminPage.locator("#adminTokenInput").fill(process.env.SG_BOOTSTRAP_ADMIN_KEY);

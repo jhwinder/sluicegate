@@ -159,6 +159,29 @@ def test_policy_admin_workflow_is_authenticated_validated_and_audited(tmp_path: 
         assert reload_event["policy_hash"] is None
 
 
+def test_policy_edit_preserves_hash_of_crlf_file_and_detects_changes(tmp_path: Path, monkeypatch) -> None:
+    import hashlib
+
+    service = setup_test_service(tmp_path, monkeypatch)
+    monkeypatch.setenv("SG_BOOTSTRAP_ADMIN_KEY", "policy-admin-secret")
+    original = b"version: 1\r\ndefault: {decision: BLOCK}\r\nrules: []\r\n"
+    service.POLICY_PATH.write_bytes(original)
+    headers = {"Authorization": "Bearer policy-admin-secret"}
+    with TestClient(service.app) as client:
+        policy = client.get("/admin/v1/policy", headers=headers).json()
+        assert policy["content"].encode("utf-8") == original
+        assert policy["file_hash"] == hashlib.sha256(original).hexdigest()
+        save = client.post("/admin/v1/policy", headers=headers, json={
+            "content": "version: 1\ndefault: {decision: BLOCK}\nrules: []\n",
+            "expected_file_hash": policy["file_hash"],
+        })
+        assert save.status_code == 200
+        service.POLICY_PATH.write_bytes(original)
+        assert client.post("/admin/v1/policy", headers=headers, json={
+            "content": policy["content"], "expected_file_hash": hashlib.sha256(b"changed").hexdigest(),
+        }).status_code == 409
+
+
 def test_audit_history_is_filtered_authenticated_append_only_and_persistent(tmp_path: Path, monkeypatch) -> None:
     import json
     import sqlite3

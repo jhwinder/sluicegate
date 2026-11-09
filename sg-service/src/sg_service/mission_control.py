@@ -2402,12 +2402,13 @@ def reject_request(
 def get_policy(_admin: str = Depends(require_admin)) -> dict[str, str]:
     with POLICY_LOCK:
         try:
-            content = POLICY_PATH.read_text(encoding="utf-8")
+            content_bytes = POLICY_PATH.read_bytes()
+            content = content_bytes.decode("utf-8")
         except OSError:
             raise HTTPException(status_code=503, detail="Configured policy file is unavailable") from None
         return {
             "content": content,
-            "file_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            "file_hash": hashlib.sha256(content_bytes).hexdigest(),
             "active_policy_hash": policy_engine.policy_hash_full if policy_engine else "",
         }
 

@@ -57,7 +57,10 @@ namespace SluiceGate
                     throw new FormatException("The certificate file contains an unterminated PEM block.");
                 }
                 string base64 = text.Substring(start + begin.Length, stop - start - begin.Length);
+                // DER certificate only; retain compatibility with Windows PowerShell 5.1.
+#pragma warning disable SYSLIB0057
                 certificates.Add(new X509Certificate2(Convert.FromBase64String(base64)));
+#pragma warning restore SYSLIB0057
                 index = stop + end.Length;
             }
             if (certificates.Count == 0)
