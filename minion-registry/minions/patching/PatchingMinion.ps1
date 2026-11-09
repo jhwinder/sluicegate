@@ -82,19 +82,14 @@ function Get-MissionDiaryPath {
 function Write-MissionDiary {
     param(
         [string]$Path,
-        [hashtable]$Diary
+        [object]$Diary
     )
     $Diary.updated_at_utc = [DateTimeOffset]::UtcNow.ToString("o")
-    $temporaryPath = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
-    try {
-        [System.IO.File]::WriteAllText($temporaryPath, ($Diary | ConvertTo-Json -Depth 12), [System.Text.UTF8Encoding]::new($false))
-        Move-Item -LiteralPath $temporaryPath -Destination $Path -Force
+    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+        $previous = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+        $Diary.target_processes = @($previous.target_processes)
     }
-    finally {
-        if (Test-Path -LiteralPath $temporaryPath) {
-            Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
-        }
-    }
+    Write-MissionDiaryFile -Path $Path -Content ($Diary | ConvertTo-Json -Depth 12)
 }
 
 function Read-PreviousMissionDiary {
@@ -161,7 +156,16 @@ function Start-MissionHeartbeat {
         while ($true) {
             $diaryState = @{}
             if (Test-Path -LiteralPath $ActiveDiaryPath -PathType Leaf) {
-                try { $diaryState = Get-Content -LiteralPath $ActiveDiaryPath -Raw | ConvertFrom-Json } catch { $diaryState = @{} }
+                try {
+                    $stream = [System.IO.File]::Open($ActiveDiaryPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+                    try {
+                        $reader = [System.IO.StreamReader]::new($stream)
+                        try { $diaryState = $reader.ReadToEnd() | ConvertFrom-Json }
+                        finally { $reader.Dispose() }
+                    }
+                    finally { $stream.Dispose() }
+                }
+                catch { $diaryState = @{} }
             }
             $targetProcesses = @(
                 foreach ($target in @($diaryState.target_processes)) {

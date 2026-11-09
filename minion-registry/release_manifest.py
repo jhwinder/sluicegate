@@ -10,10 +10,10 @@ ROOT = Path(__file__).resolve().parent.parent
 RELEASES = {
     "patching": {
         "directory": "minion-registry/minions/patching",
-        "type_id": "windows-patching-1.0.2",
+        "type_id": "windows-patching-1.0.3",
         "family": "windows-patching",
         "name": "Windows Patching Minion",
-        "version": "1.0.2",
+        "version": "1.0.3",
         "runtime_type": "powershell",
         "artifact": "Minion/SluiceGate.Minion.Service.exe",
         "capabilities": ["windows.patch.reconcile", "windows.patch.discover", "windows.patch.status"],

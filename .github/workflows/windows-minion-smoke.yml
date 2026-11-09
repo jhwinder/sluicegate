@@ -30,6 +30,10 @@ jobs:
       - name: Verify repository release fingerprints
         run: uv run --locked --package sg-service --group dev python minion-registry/release_manifest.py
 
+      - name: Test Mission Diary replacement
+        shell: pwsh
+        run: ./minion-registry/minions/patching/tests/Test-MissionDiary.ps1
+
       - name: Run live signed patch missions in dry-run mode
         run: uv run --locked --package sg-service --group dev pytest -v -rs deployment/windows/tests/test_live_patching_minion.py --junitxml=windows-minion-smoke-results.xml
 

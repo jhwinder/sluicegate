@@ -59,7 +59,9 @@ jobs:
 
       - name: Run patch policy tests
         shell: pwsh
-        run: ./minion-registry/minions/patching/tests/Test-PatchPolicy.ps1
+        run: |
+          ./minion-registry/minions/patching/tests/Test-PatchPolicy.ps1
+          ./minion-registry/minions/patching/tests/Test-MissionDiary.ps1
 
       - name: Build Windows service host
         run: dotnet build deployment/windows/MinionHost/SluiceGate.Minion.Service.csproj --configuration Release

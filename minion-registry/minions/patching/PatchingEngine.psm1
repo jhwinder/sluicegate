@@ -280,6 +280,39 @@ function Get-MissionMaintenanceWindowEndUtc {
     return $state.EndUtc.ToString("o")
 }
 
+function Write-MissionDiaryFile {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [string]$Content
+    )
+
+    $temporaryPath = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
+    try {
+        [System.IO.File]::WriteAllText($temporaryPath, $Content, [System.Text.UTF8Encoding]::new($false))
+        for ($attempt = 0; ; $attempt++) {
+            try {
+                if ([System.IO.File]::Exists($Path)) {
+                    [System.IO.File]::Replace($temporaryPath, $Path, [System.Management.Automation.Language.NullString]::Value)
+                }
+                else {
+                    [System.IO.File]::Move($temporaryPath, $Path)
+                }
+                break
+            }
+            catch [System.IO.IOException] {
+                if ($attempt -ge 9) { throw }
+                Start-Sleep -Milliseconds 100
+            }
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporaryPath) { Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 function Set-MissionDiaryTarget {
     [CmdletBinding()]
     param(
@@ -315,14 +348,7 @@ function Set-MissionDiaryTarget {
         updated_at_utc = [DateTimeOffset]::UtcNow.ToString("o")
     }
     $diary.target_processes = $targets
-    $temporaryPath = "$MissionDiaryPath.$([guid]::NewGuid().ToString('N')).tmp"
-    try {
-        [System.IO.File]::WriteAllText($temporaryPath, ($diary | ConvertTo-Json -Depth 12), [System.Text.UTF8Encoding]::new($false))
-        Move-Item -LiteralPath $temporaryPath -Destination $MissionDiaryPath -Force
-    }
-    finally {
-        if (Test-Path -LiteralPath $temporaryPath) { Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue }
-    }
+    Write-MissionDiaryFile -Path $MissionDiaryPath -Content ($diary | ConvertTo-Json -Depth 12)
 }
 
 function Wait-TargetOperationDiary {
@@ -1442,6 +1468,7 @@ Export-ModuleMember -Function `
     Get-WuaRebootBehavior, `
     Get-MissionMaintenanceWindowState, `
     Test-MissionMaintenanceWindow, `
+    Write-MissionDiaryFile, `
     Set-MissionDiaryTarget, `
     Wait-TargetOperationDiary, `
     Test-PatchFileHash, `
