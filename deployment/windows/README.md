@@ -158,7 +158,7 @@ In order, the installer:
 
 ## Validation checklist
 
-The manually dispatched **Windows patching Minion smoke test** GitHub Actions workflow runs signed dry-run missions and a non-dry-run loopback test on a disposable Windows runner. The loopback test enables WinRM, uses the runner as both Minion and target, and executes a harmless test batch file through a policy-authorized `cmd.exe`. It checks staging, target and mission diaries, exit codes, and duplicate prevention; it does not install a real patch, use a second server, or test reboot recovery. Never authorize `cmd.exe` for production patching just because this isolated test uses it.
+The manually dispatched **Windows patching Minion smoke test** GitHub Actions workflow runs signed dry-run missions and a non-dry-run loopback test on a disposable Windows runner. The loopback test enables WinRM, uses the runner as both Minion and target, and executes a harmless test batch file through a policy-authorized `cmd.exe`. It checks staging, target and mission diaries, exit codes, policy gates, and duplicate prevention. A separate service lifecycle test runs the checked-in host with a stub worker under the Windows Service Control Manager. These tests do not install a real patch, use a second server, or test reboot recovery. Never authorize `cmd.exe` for production patching just because this isolated test uses it.
 
 - The Minion service starts under the service account and its last-contact time updates in the Admin Console.
 - Credentials appear in no script argument, process command line, log, Mission Envelope, or package file.

@@ -18,6 +18,9 @@ jobs:
           version: "0.11.24"
           python-version: "3.11"
           enable-cache: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
+        with:
+          dotnet-version: "10.0.x"
 
       - name: Verify prerequisites
         shell: pwsh
@@ -40,6 +43,10 @@ jobs:
       - name: Test real loopback patch execution
         shell: pwsh
         run: ./deployment/windows/tests/Test-LoopbackPatching.ps1
+
+      - name: Test Windows service lifecycle
+        shell: pwsh
+        run: ./deployment/windows/tests/Test-ServiceLifecycle.ps1
 
       - name: Upload smoke test results
         if: always()
