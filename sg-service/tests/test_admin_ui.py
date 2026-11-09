@@ -108,7 +108,7 @@ def test_policy_admin_workflow_is_authenticated_validated_and_audited(tmp_path: 
             headers=headers,
         )
         assert invalid_save.status_code == 422
-        assert service.POLICY_PATH.read_text(encoding="utf-8") == current.json()["content"]
+        assert service.POLICY_PATH.read_bytes() == current.json()["content"].encode("utf-8")
 
         stale_save = client.post(
             "/admin/v1/policy",

@@ -181,7 +181,9 @@ namespace SluiceGate
         {
             try
             {
+#pragma warning disable SYSLIB0014
                 ServicePointManager.SecurityProtocol = ServicePointManager.SecurityProtocol | (SecurityProtocolType)3072;
+#pragma warning restore SYSLIB0014
             }
             catch (Exception)
             {
