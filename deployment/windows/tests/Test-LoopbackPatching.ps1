@@ -84,6 +84,11 @@ try {
     if ($failure.status -ne "FAILED" -or $failure.exit_code -ne 42) {
         throw "Installer failure was not reported correctly: $($failure | ConvertTo-Json -Depth 8 -Compress)"
     }
+    $failureDiary = Get-Content -LiteralPath $diaryPath -Raw | ConvertFrom-Json
+    $failureTarget = @($failureDiary.target_processes | Where-Object { $_.plugin_id -eq "failure-plugin" })
+    if ($failureTarget.Count -ne 1 -or $failureTarget[0].status -ne "FAILED" -or $failureTarget[0].error -notmatch "42") {
+        throw "Mission diary did not record the installer failure."
+    }
     Write-Host "Loopback staging, execution, failure and duplicate prevention passed."
 }
 finally {

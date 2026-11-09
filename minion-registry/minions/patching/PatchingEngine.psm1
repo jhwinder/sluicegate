@@ -1044,8 +1044,6 @@ function Invoke-TargetPatchInstall {
         $result.target_process_id = $processResult.target_process_id
         $result.target_process_started_at = $processResult.target_process_started_at
         $result.operation_diary = $processResult.diary_path
-        Set-MissionDiaryTarget -MissionDiaryPath $MissionDiaryPath -TargetServer $TargetServer -PluginId $pluginId -Attempt $Attempt -ClaimGeneration $ClaimGeneration -Status $(if ($result.status -eq "SUCCESS") { "SUCCEEDED" } else { "FAILED" }) -OperationDiaryPath $targetDiaryPath -TargetProcessId $processResult.target_process_id -TargetProcessStartedAt $processResult.target_process_started_at -ErrorMessage $result.error
-
         # 5. Determine success / reboot requirement
         # Standard Windows installer return codes: 0 = Success, 3010 = Success (Reboot required)
         if ($exitCode -eq 0) {
@@ -1065,6 +1063,7 @@ function Invoke-TargetPatchInstall {
             $result.status = "FAILED"
             $result.error = "Installer exited with non-zero code: $exitCode"
         }
+        Set-MissionDiaryTarget -MissionDiaryPath $MissionDiaryPath -TargetServer $TargetServer -PluginId $pluginId -Attempt $Attempt -ClaimGeneration $ClaimGeneration -Status $(if ($result.status -eq "SUCCESS") { "SUCCEEDED" } else { "FAILED" }) -OperationDiaryPath $targetDiaryPath -TargetProcessId $processResult.target_process_id -TargetProcessStartedAt $processResult.target_process_started_at -ErrorMessage $result.error
 
     }
     catch {

@@ -93,7 +93,7 @@ Done by a maintainer on any machine with Docker; the output is one folder to cop
 
    ```powershell
    .\Build-DeploymentBundle.ps1 -MinionExecutable .\Minion\SluiceGate.Minion.Service.exe `
-     -ServiceImage sluicegate/sg-service:1.0.0 -Version 1.0.3
+     -ServiceImage sluicegate/sg-service:1.0.0 -Version 1.0.4
    ```
 
    An unsigned Minion executable produces a warning. Pass `-RequireSignature` to refuse unsigned builds; the installer accepts the same switch.
