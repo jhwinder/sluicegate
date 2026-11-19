@@ -88,5 +88,16 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Run isolated Compose end-to-end tests
         run: bash sluice-demo/tests/e2e/run.sh
+      - name: Verify Mission Control branding and responsive layouts
+        run: node sluice-demo/tests/e2e/branding.mjs
+        env:
+          SG_BRANDING_ARTIFACTS_DIR: ${{ runner.temp }}/branding
       - name: Run isolated TEST worker and admin browser tests
         run: bash sg-service/tests/integration/run.sh
+      - name: Upload branding previews
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mission-control-branding
+          path: ${{ runner.temp }}/branding
+          if-no-files-found: warn

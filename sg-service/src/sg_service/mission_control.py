@@ -30,6 +30,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sg_core import GateRequest, PolicyEngine
 from sg_poledit.validate import validate_policy_dict
@@ -78,6 +79,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
 
 
 app = FastAPI(title="SluiceGate Service", version="0.1.0", lifespan=lifespan)
+app.mount("/admin/assets", StaticFiles(directory=ADMIN_HTML_PATH.parent / "assets"), name="admin-assets")
 app.add_middleware(HardeningMiddleware)
 policy_engine: PolicyEngine | None = None
 

@@ -4,243 +4,82 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>SluiceGate Administrative Console</title>
-  <style>
-    :root {
-      --bg-color: #f8fafc;
-      --card-bg: #ffffff;
-      --border-color: #e2e8f0;
-      --primary: #2563eb;
-      --primary-hover: #1d4ed8;
-      --text-main: #0f172a;
-      --text-muted: #64748b;
-      --success: #16a34a;
-      --warning: #d97706;
-      --danger: #dc2626;
-    }
-    * { box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      background: var(--bg-color);
-      color: var(--text-main);
-      margin: 0;
-      padding: 24px;
-    }
-    header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 24px;
-      padding-bottom: 16px;
-      border-bottom: 1px solid var(--border-color);
-    }
-    h1 { margin: 0; font-size: 24px; display: flex; align-items: center; gap: 8px; }
-    .badge {
-      display: inline-block;
-      padding: 3px 8px;
-      font-size: 11px;
-      font-weight: 600;
-      border-radius: 9999px;
-      text-transform: uppercase;
-    }
-    .badge-success { background: #dcfce7; color: var(--success); }
-    .badge-warning { background: #fef3c7; color: var(--warning); }
-    .badge-danger { background: #fee2e2; color: var(--danger); }
-    .badge-info { background: #e0f2fe; color: #0284c7; }
-    .auth-bar {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      background: var(--card-bg);
-      padding: 8px 16px;
-      border: 1px solid var(--border-color);
-      border-radius: 8px;
-    }
-    input, select, button, textarea {
-      font-family: inherit;
-      font-size: 14px;
-      padding: 8px 12px;
-      border: 1px solid var(--border-color);
-      border-radius: 6px;
-    }
-    button {
-      cursor: pointer;
-      background: var(--primary);
-      color: white;
-      border: none;
-      font-weight: 500;
-      transition: background 0.15s ease;
-    }
-    button:hover { background: var(--primary-hover); }
-    button.secondary { background: #e2e8f0; color: #334155; }
-    button.secondary:hover { background: #cbd5e1; }
-    button.danger { background: var(--danger); color: white; }
-    button.danger:hover { background: #b91c1c; }
-    .nav-tabs {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 20px;
-    }
-    .nav-tab {
-      padding: 8px 16px;
-      background: var(--card-bg);
-      border: 1px solid var(--border-color);
-      border-radius: 6px;
-      cursor: pointer;
-      font-weight: 500;
-      color: var(--text-muted);
-    }
-    .nav-tab.active {
-      background: var(--primary);
-      color: white;
-      border-color: var(--primary);
-    }
-    .card {
-      background: var(--card-bg);
-      border: 1px solid var(--border-color);
-      border-radius: 8px;
-      padding: 20px;
-      margin-bottom: 24px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-    }
-    .card-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 16px;
-    }
-    .card-header h2 { margin: 0; font-size: 18px; }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 13px;
-    }
-    th, td {
-      text-align: left;
-      padding: 10px 12px;
-      border-bottom: 1px solid var(--border-color);
-    }
-    th {
-      background: #f1f5f9;
-      color: var(--text-muted);
-      font-weight: 600;
-    }
-    tr:hover td { background: #f8fafc; }
-    .mono {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 12px;
-    }
-    .modal-backdrop {
-      display: none;
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0,0,0,0.5);
-      z-index: 50;
-      align-items: center;
-      justify-content: center;
-    }
-    .modal {
-      background: white;
-      padding: 24px;
-      border-radius: 8px;
-      width: 100%;
-      max-width: 540px;
-      box-shadow: 0 10px 25px rgba(0,0,0,0.15);
-    }
-    .form-group {
-      margin-bottom: 16px;
-    }
-    .form-group label {
-      display: block;
-      margin-bottom: 6px;
-      font-size: 13px;
-      font-weight: 500;
-    }
-    .form-group input, .form-group textarea, .form-group select {
-      width: 100%;
-    }
-    .json-viewer {
-      background: #0f172a;
-      color: #38bdf8;
-      padding: 12px;
-      border-radius: 6px;
-      font-family: monospace;
-      font-size: 12px;
-      overflow-x: auto;
-      max-height: 250px;
-    }
-  </style>
+  <link rel="stylesheet" href="/admin/assets/mission-control.css" />
 </head>
 <body>
 
-  <header>
-    <div>
-      <h1>SluiceGate Mission Control<span class="badge badge-info">v0.1.0</span></h1>
-      <small style="color:var(--text-muted);">Administrative Console & Decision Ledger</small>
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"><img class="brand-logo" src="/admin/assets/sluicegate-logo.png" alt="" width="1024" height="1536" /></div>
+      <div class="brand-copy">
+        <h1>SluiceGate Mission Control<span class="badge badge-info brand-version">v0.1.0</span></h1>
+        <small class="muted">Administrative Console & Decision Ledger</small>
+      </div>
     </div>
     <div class="auth-bar">
-      <span style="font-size:13px; font-weight:500;">Admin Bearer Token:</span>
-      <input type="password" id="adminTokenInput" placeholder="Bearer Key" style="width:220px;" />
+      <label for="adminTokenInput">Admin Bearer Token</label>
+      <input type="password" id="adminTokenInput" placeholder="Bearer Key" />
       <button onclick="saveAdminToken()">Save</button>
       <button class="secondary" onclick="reloadPolicy()">Reload Policy</button>
     </div>
   </header>
 
-  <nav class="nav-tabs">
-    <div class="nav-tab active" onclick="switchTab('missions')">Missions & Audit</div>
-    <div class="nav-tab" onclick="switchTab('approvals')">Pending Approvals (<span id="pendingCount">0</span>)</div>
-    <div class="nav-tab" onclick="switchTab('agents')">Agent Registry</div>
-    <div class="nav-tab" onclick="switchTab('minions')">Minion Registry</div>
-    <div class="nav-tab" onclick="switchTab('notifications')">Notification Profiles</div>
-    <div class="nav-tab" onclick="switchTab('adapters')">Notification Adapters</div>
-    <div class="nav-tab" onclick="switchTab('policy')">Policies</div>
+  <nav class="nav-tabs" role="tablist" aria-label="Mission Control sections">
+    <button type="button" id="nav-missions" class="nav-tab active" role="tab" aria-controls="tab-missions" aria-selected="true" tabindex="0" onclick="switchTab('missions')">Missions & Audit</button>
+    <button type="button" id="nav-approvals" class="nav-tab" role="tab" aria-controls="tab-approvals" aria-selected="false" tabindex="-1" onclick="switchTab('approvals')">Pending Approvals (<span id="pendingCount">0</span>)</button>
+    <button type="button" id="nav-agents" class="nav-tab" role="tab" aria-controls="tab-agents" aria-selected="false" tabindex="-1" onclick="switchTab('agents')">Agent Registry</button>
+    <button type="button" id="nav-minions" class="nav-tab" role="tab" aria-controls="tab-minions" aria-selected="false" tabindex="-1" onclick="switchTab('minions')">Minion Registry</button>
+    <button type="button" id="nav-notifications" class="nav-tab" role="tab" aria-controls="tab-notifications" aria-selected="false" tabindex="-1" onclick="switchTab('notifications')">Notification Profiles</button>
+    <button type="button" id="nav-adapters" class="nav-tab" role="tab" aria-controls="tab-adapters" aria-selected="false" tabindex="-1" onclick="switchTab('adapters')">Notification Adapters</button>
+    <button type="button" id="nav-policy" class="nav-tab" role="tab" aria-controls="tab-policy" aria-selected="false" tabindex="-1" onclick="switchTab('policy')">Policies</button>
   </nav>
 
   <!-- TAB: POLICIES -->
-  <section id="tab-policy" class="tab-content" style="display:none;">
+  <section id="tab-policy" class="tab-content" role="tabpanel" aria-labelledby="nav-policy" hidden>
     <div class="card">
       <div class="card-header">
         <h2>Active Policy</h2>
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <div class="toolbar">
           <button class="secondary" onclick="openPolicyTemplateSelector()">Create New</button>
           <button class="secondary" onclick="openPolicyWizard(true)">Edit Policy</button>
           <button class="secondary" onclick="loadPolicyEditor()">Reload from Service</button>
         </div>
       </div>
-      <p id="policyHashInfo" style="color:var(--text-muted);">Loading policy metadata...</p>
+      <p id="policyHashInfo" class="muted">Loading policy metadata...</p>
       <p>Changes are a draft until you select Save and Activate.</p>
-      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+      <div class="toolbar mb-3">
         <button class="secondary" onclick="document.getElementById('policyFile').click()">Load YAML</button>
         <input id="policyFile" type="file" accept=".yml,.yaml,application/yaml,text/yaml" hidden onchange="loadPolicyFile(this)" />
         <button class="secondary" onclick="downloadPolicyFile()">Download YAML</button>
       </div>
       <div class="form-group">
         <label for="policyEditor">Policy YAML</label>
-        <textarea id="policyEditor" rows="24" spellcheck="false" style="width:100%; font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;"></textarea>
+        <textarea id="policyEditor" rows="24" spellcheck="false" class="policy-editor"></textarea>
       </div>
-      <div style="display:flex; gap:8px; justify-content:flex-end;">
+      <div class="toolbar toolbar-end">
         <button class="secondary" onclick="validatePolicyEditor()">Validate</button>
         <button onclick="savePolicyEditor()">Save and Activate</button>
       </div>
-      <pre id="policyFeedback" class="json-viewer" style="white-space:pre-wrap; margin-top:16px;"></pre>
+      <pre id="policyFeedback" class="json-viewer policy-feedback"></pre>
     </div>
   </section>
 
-  <dialog id="policyTemplateSelector" aria-labelledby="policyTemplateTitle" class="modal" style="max-width:600px;">
+  <dialog id="policyTemplateSelector" aria-labelledby="policyTemplateTitle" class="modal">
     <h2 id="policyTemplateTitle">Choose policy template</h2>
     <p>Choose a starting point for a new policy draft. Your active policy changes only after Save and Activate.</p>
     <label for="policyTemplateChoice">Template</label>
-    <select id="policyTemplateChoice" onchange="updatePolicyTemplateChoice()" style="width:100%;">
+    <select id="policyTemplateChoice" onchange="updatePolicyTemplateChoice()" class="full-width">
       <option value="">Select a template…</option>
     </select>
     <p id="policyTemplateDescription"></p>
-    <p id="policyTemplateError" role="alert" style="color:var(--danger);"></p>
-    <div style="display:flex; justify-content:flex-end; gap:8px;">
+    <p id="policyTemplateError" role="alert" class="error-text"></p>
+    <div class="modal-actions">
       <button class="secondary" onclick="closePolicyTemplateSelector()">Cancel</button>
       <button id="policyTemplateContinue" onclick="loadSelectedPolicyTemplate()" disabled>Continue</button>
     </div>
   </dialog>
 
-  <dialog id="policyWizard" aria-labelledby="policyWizardTitle" class="modal" style="max-width:780px; max-height:90vh; overflow-y:auto;">
+  <dialog id="policyWizard" aria-labelledby="policyWizardTitle" class="modal">
     <h2 id="policyWizardTitle">Create patching policy</h2>
     <p>Policies created here block unmatched requests. Add or edit rules in order, or generate a policy with no rules to block everything. Generated YAML is a draft and does not change the active policy.</p>
     <p>Each rule matches the exact ordered server list supplied in a patch request. Other targets or combinations are blocked. The first matching rule wins.</p>
@@ -288,171 +127,171 @@
           <div class="form-group"><label for="wizardEnd">End time (earlier means next day)</label><input id="wizardEnd" type="time" value="05:00" /></div>
           <div class="form-group"><label for="wizardOutside">Outside window</label><select id="wizardOutside"><option value="WAIT">Wait</option><option value="BLOCK">Block</option></select></div>
         </div>
-        <p id="wizardError" role="alert" style="color:var(--danger);"></p>
+        <p id="wizardError" role="alert" class="error-text"></p>
         <button id="wizardRuleSubmit" type="submit" class="secondary">Add rule</button>
       </fieldset>
     </form>
-    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px;">
+    <div class="modal-actions">
       <button class="secondary" onclick="document.getElementById('policyWizard').close()">Cancel</button>
       <button onclick="generateWizardPolicy()">Generate YAML</button>
     </div>
   </dialog>
 
   <!-- TAB: MISSIONS & AUDIT -->
-  <section id="tab-missions" class="tab-content">
+  <section id="tab-missions" class="tab-content" role="tabpanel" aria-labelledby="nav-missions">
     <div class="card">
       <div class="card-header">
         <h2>Transactions & Execution Ledger</h2>
-        <div style="display:flex; gap:8px;">
+        <div class="toolbar">
           <button class="secondary" onclick="loadMissions(); loadAudit()">Refresh</button>
         </div>
       </div>
-      <table>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table>
         <thead>
           <tr>
-            <th>Request ID</th>
-            <th>Mission ID</th>
-            <th>Minion</th>
-            <th>Status</th>
-            <th>Updated</th>
-            <th>Actions</th>
+            <th scope="col">Request ID</th>
+            <th scope="col">Mission ID</th>
+            <th scope="col">Minion</th>
+            <th scope="col">Status</th>
+            <th scope="col">Updated</th>
+            <th scope="col">Actions</th>
           </tr>
         </thead>
         <tbody id="missionsTableBody">
-          <tr><td colspan="6" style="text-align:center; color:var(--text-muted);">Loading missions...</td></tr>
+          <tr><td colspan="6" class="empty-state">Loading missions...</td></tr>
         </tbody>
-      </table>
+      </table></div>
     </div>
     <div class="card">
       <div class="card-header">
         <h2>Audit Events</h2>
       </div>
-      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:12px;">
-        <input id="auditRequestId" type="text" placeholder="Request / transaction ID" aria-label="Request or transaction ID" />
-        <input id="auditMissionId" type="text" placeholder="Mission ID" aria-label="Mission ID" />
-        <input id="auditAgentId" type="text" placeholder="Agent ID" aria-label="Agent ID" />
-        <input id="auditMinionId" type="text" placeholder="Minion ID" aria-label="Minion ID" />
-        <input id="auditStatus" type="text" placeholder="Status" aria-label="Status" />
-        <input id="auditEventType" type="text" placeholder="Event type" aria-label="Event type" />
-        <input id="auditSince" type="datetime-local" aria-label="From time" />
-        <input id="auditUntil" type="datetime-local" aria-label="Until time" />
+      <div class="filter-grid">
+        <label>Request ID<input id="auditRequestId" type="text" placeholder="Request / transaction ID" aria-label="Request or transaction ID" /></label>
+        <label>Mission ID<input id="auditMissionId" type="text" placeholder="Mission ID" aria-label="Mission ID" /></label>
+        <label>Agent ID<input id="auditAgentId" type="text" placeholder="Agent ID" aria-label="Agent ID" /></label>
+        <label>Minion ID<input id="auditMinionId" type="text" placeholder="Minion ID" aria-label="Minion ID" /></label>
+        <label>Status<input id="auditStatus" type="text" placeholder="Status" aria-label="Status" /></label>
+        <label>Event type<input id="auditEventType" type="text" placeholder="Event type" aria-label="Event type" /></label>
+        <label>From time<input id="auditSince" type="datetime-local" aria-label="From time" /></label>
+        <label>Until time<input id="auditUntil" type="datetime-local" aria-label="Until time" /></label>
       </div>
-      <div style="display:flex; gap:8px; margin-bottom:12px;">
+      <div class="toolbar mb-3">
         <button onclick="loadAudit(true)">Filter</button>
         <button class="secondary" onclick="clearAuditFilters()">Reset filters</button>
-        <button class="secondary" onclick="document.getElementById('clearAuditDialog').showModal()">Clear</button>
+        <button class="secondary" onclick="showDialog('clearAuditDialog')">Clear</button>
         <button class="secondary" onclick="loadAudit(true)">Reload</button>
       </div>
-      <table>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table>
         <thead>
-          <tr><th>Time</th><th>Event</th><th>Actor</th><th>Request</th><th>Mission</th><th>Agent</th><th>Minion</th><th>Status</th><th>Signature</th><th>Detail</th></tr>
+          <tr><th scope="col">Time</th><th scope="col">Event</th><th scope="col">Actor</th><th scope="col">Request</th><th scope="col">Mission</th><th scope="col">Agent</th><th scope="col">Minion</th><th scope="col">Status</th><th scope="col">Signature</th><th scope="col">Detail</th></tr>
         </thead>
         <tbody id="auditEventsTableBody">
-          <tr><td colspan="10" style="text-align:center; color:var(--text-muted);">Loading audit events...</td></tr>
+          <tr><td colspan="10" class="empty-state">Loading audit events...</td></tr>
         </tbody>
-      </table>
-      <div style="display:flex; justify-content:flex-end; margin-top:10px;">
-        <button id="auditOlderButton" class="secondary" style="display:none;" onclick="loadAudit(false)">Older events</button>
+      </table></div>
+      <div class="toolbar toolbar-end mt-3">
+        <button id="auditOlderButton" class="secondary" hidden onclick="loadAudit(false)">Older events</button>
       </div>
     </div>
   </section>
 
   <!-- TAB: PENDING APPROVALS -->
-  <section id="tab-approvals" class="tab-content" style="display:none;">
+  <section id="tab-approvals" class="tab-content" role="tabpanel" aria-labelledby="nav-approvals" hidden>
     <div class="card">
       <div class="card-header">
         <h2>Paused Actions Awaiting Authorization</h2>
         <button class="secondary" onclick="loadApprovals()">Refresh</button>
       </div>
-      <table>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table>
         <thead>
           <tr>
-            <th>Request ID</th>
-            <th>Agent</th>
-            <th>Capability</th>
-            <th>Target</th>
-            <th>Created</th>
-            <th>Actions</th>
+            <th scope="col">Request ID</th>
+            <th scope="col">Agent</th>
+            <th scope="col">Capability</th>
+            <th scope="col">Target</th>
+            <th scope="col">Created</th>
+            <th scope="col">Actions</th>
           </tr>
         </thead>
         <tbody id="approvalsTableBody">
-          <tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No actions currently paused.</td></tr>
+          <tr><td colspan="6" class="empty-state">No actions currently paused.</td></tr>
         </tbody>
-      </table>
+      </table></div>
     </div>
   </section>
 
   <!-- TAB: AGENTS -->
-  <section id="tab-agents" class="tab-content" style="display:none;">
+  <section id="tab-agents" class="tab-content" role="tabpanel" aria-labelledby="nav-agents" hidden>
     <div class="card">
       <div class="card-header">
         <h2>Registered Agents</h2>
         <button onclick="openModal('registerAgentModal')">+ Register New Agent</button>
       </div>
-      <table>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table>
         <thead>
           <tr>
-            <th>Agent ID</th>
-            <th>Name</th>
-            <th>Team</th>
-            <th>Environment</th>
-            <th>Rate Limits (Sub/Poll)</th>
-            <th>Credential</th>
-            <th>Status</th>
-            <th>Last Used</th>
-            <th>Actions</th>
+            <th scope="col">Agent ID</th>
+            <th scope="col">Name</th>
+            <th scope="col">Team</th>
+            <th scope="col">Environment</th>
+            <th scope="col">Rate Limits (Sub/Poll)</th>
+            <th scope="col">Credential</th>
+            <th scope="col">Status</th>
+            <th scope="col">Last Used</th>
+            <th scope="col">Actions</th>
           </tr>
         </thead>
         <tbody id="agentsTableBody">
-          <tr><td colspan="9" style="text-align:center; color:var(--text-muted);">Loading agents...</td></tr>
+          <tr><td colspan="9" class="empty-state">Loading agents...</td></tr>
         </tbody>
-      </table>
+      </table></div>
     </div>
   </section>
 
   <!-- TAB: MINIONS -->
-  <section id="tab-minions" class="tab-content" style="display:none;">
+  <section id="tab-minions" class="tab-content" role="tabpanel" aria-labelledby="nav-minions" hidden>
     <div class="card">
       <div class="card-header">
         <h2>Registered Minions</h2>
         <div><button onclick="document.getElementById('minionManifestFile').click()">+ Register from File</button>
         <button class="secondary" disabled title="Official catalog is not available yet">Official Catalog (unavailable)</button>
-        <input type="file" id="minionManifestFile" accept=".json,application/json" style="display:none" onchange="importMinionManifest(this)" /></div>
+        <input type="file" id="minionManifestFile" accept=".json,application/json" hidden onchange="importMinionManifest(this)" /></div>
       </div>
       <p>Register an approved release manifest. Importing metadata does not install or verify Minion software.</p>
-      <table>
-        <thead><tr><th>Type ID</th><th>Name</th><th>Version / Runtime</th><th>Capabilities</th><th>Artifact / SHA-256</th><th>Deployments</th><th>Status</th><th>Actions</th></tr></thead>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table>
+        <thead><tr><th scope="col">Type ID</th><th scope="col">Name</th><th scope="col">Version / Runtime</th><th scope="col">Capabilities</th><th scope="col">Artifact / SHA-256</th><th scope="col">Deployments</th><th scope="col">Status</th><th scope="col">Actions</th></tr></thead>
         <tbody id="minionTypesTableBody"><tr><td colspan="8">Loading registered types...</td></tr></tbody>
-      </table>
+      </table></div>
     </div>
     <div class="card">
       <div class="card-header">
         <h2>Deployed Minions</h2>
         <button onclick="openDeployMinion()">+ Add Deployed Minion</button>
       </div>
-      <table>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table>
         <thead>
           <tr>
-            <th>Minion ID / Type</th>
-            <th>Name</th>
-            <th>Runtime / Environment</th>
-            <th>Capabilities</th>
-            <th>Target Scope</th>
-            <th>Release / Report</th>
-            <th>Health / Last Contact</th>
-            <th>Work / Credential</th>
-            <th>Actions</th>
+            <th scope="col">Minion ID / Type</th>
+            <th scope="col">Name</th>
+            <th scope="col">Runtime / Environment</th>
+            <th scope="col">Capabilities</th>
+            <th scope="col">Target Scope</th>
+            <th scope="col">Release / Report</th>
+            <th scope="col">Health / Last Contact</th>
+            <th scope="col">Work / Credential</th>
+            <th scope="col">Actions</th>
           </tr>
         </thead>
         <tbody id="minionsTableBody">
-          <tr><td colspan="9" style="text-align:center; color:var(--text-muted);">Loading minions...</td></tr>
+          <tr><td colspan="9" class="empty-state">Loading minions...</td></tr>
         </tbody>
-      </table>
+      </table></div>
     </div>
   </section>
 
   <!-- TAB: NOTIFICATIONS -->
-  <section id="tab-notifications" class="tab-content" style="display:none;">
+  <section id="tab-notifications" class="tab-content" role="tabpanel" aria-labelledby="nav-notifications" hidden>
     <div class="card">
       <div class="card-header">
         <h2>Notification Profiles & Routing</h2>
@@ -460,22 +299,22 @@
           <button onclick="openProfileModal()">+ New Profile</button>
         </div>
       </div>
-      <table>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table>
         <thead>
           <tr>
-            <th>Profile ID</th>
-            <th>Name</th>
-            <th>Event Types</th>
-            <th>Adapter ID</th>
-            <th>Recipients</th>
-            <th>Status</th>
-            <th>Actions</th>
+            <th scope="col">Profile ID</th>
+            <th scope="col">Name</th>
+            <th scope="col">Event Types</th>
+            <th scope="col">Adapter ID</th>
+            <th scope="col">Recipients</th>
+            <th scope="col">Status</th>
+            <th scope="col">Actions</th>
           </tr>
         </thead>
         <tbody id="profilesTableBody">
-          <tr><td colspan="7" style="text-align:center; color:var(--text-muted);">Loading profiles...</td></tr>
+          <tr><td colspan="7" class="empty-state">Loading profiles...</td></tr>
         </tbody>
-      </table>
+      </table></div>
     </div>
 
     <div class="card">
@@ -483,68 +322,68 @@
         <h2>Recent Delivery Audit Log</h2>
         <button class="secondary" onclick="loadDeliveries()">Refresh</button>
       </div>
-      <table>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table>
         <thead>
           <tr>
-            <th>Delivery ID</th>
-            <th>Event</th>
-            <th>Request ID</th>
-            <th>Adapter</th>
-            <th>Status</th>
-            <th>Attempts</th>
-            <th>Detail</th>
-            <th>Last Update</th>
+            <th scope="col">Delivery ID</th>
+            <th scope="col">Event</th>
+            <th scope="col">Request ID</th>
+            <th scope="col">Adapter</th>
+            <th scope="col">Status</th>
+            <th scope="col">Attempts</th>
+            <th scope="col">Detail</th>
+            <th scope="col">Last Update</th>
           </tr>
         </thead>
         <tbody id="deliveriesTableBody">
-          <tr><td colspan="8" style="text-align:center; color:var(--text-muted);">Loading delivery log...</td></tr>
+          <tr><td colspan="8" class="empty-state">Loading delivery log...</td></tr>
         </tbody>
-      </table>
+      </table></div>
     </div>
   </section>
 
   <!-- TAB: NOTIFICATION ADAPTERS -->
-  <section id="tab-adapters" class="tab-content" style="display:none;">
+  <section id="tab-adapters" class="tab-content" role="tabpanel" aria-labelledby="nav-adapters" hidden>
     <div class="card">
       <div class="card-header">
         <h2>Notification Adapters</h2>
         <button onclick="openAdapterModal()">+ New Adapter</button>
       </div>
-      <p style="color:var(--text-muted);">Each adapter selects one delivery provider. Email adapters (Resend or SMTP/Exchange) send only after the test-email verification is confirmed, and must be verified again if their settings or service-side credentials change. Credentials are read from the service's protected environment or secret files and are never shown here.</p>
-      <table>
+      <p class="muted">Each adapter selects one delivery provider. Email adapters (Resend or SMTP/Exchange) send only after the test-email verification is confirmed, and must be verified again if their settings or service-side credentials change. Credentials are read from the service's protected environment or secret files and are never shown here.</p>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table>
         <thead>
           <tr>
-            <th>Adapter ID</th>
-            <th>Name</th>
-            <th>Provider</th>
-            <th>Settings</th>
-            <th>Service Secrets</th>
-            <th>Verification</th>
-            <th>Status</th>
-            <th>Actions</th>
+            <th scope="col">Adapter ID</th>
+            <th scope="col">Name</th>
+            <th scope="col">Provider</th>
+            <th scope="col">Settings</th>
+            <th scope="col">Service Secrets</th>
+            <th scope="col">Verification</th>
+            <th scope="col">Status</th>
+            <th scope="col">Actions</th>
           </tr>
         </thead>
         <tbody id="adaptersTableBody">
-          <tr><td colspan="8" style="text-align:center; color:var(--text-muted);">Loading adapters...</td></tr>
+          <tr><td colspan="8" class="empty-state">Loading adapters...</td></tr>
         </tbody>
-      </table>
+      </table></div>
     </div>
   </section>
 
   <!-- MODAL: REGISTER AGENT -->
-  <div id="registerAgentModal" class="modal-backdrop">
+  <div id="registerAgentModal" class="modal-backdrop" role="dialog" aria-modal="true" tabindex="-1" hidden>
     <div class="modal">
       <h3>Register New Agent</h3>
       <div class="form-group">
-        <label>Agent Name</label>
+        <label for="newAgentName">Agent Name</label>
         <input type="text" id="newAgentName" placeholder="e.g. Incident Response Bot" />
       </div>
       <div class="form-group">
-        <label>Owner Team</label>
+        <label for="newAgentTeam">Owner Team</label>
         <input type="text" id="newAgentTeam" placeholder="e.g. SecOps" />
       </div>
       <div class="form-group">
-        <label>Environment</label>
+        <label for="newAgentEnv">Environment</label>
         <select id="newAgentEnv">
           <option value="prod">Production</option>
           <option value="stage">Staging</option>
@@ -553,12 +392,12 @@
       </div>
       <div class="form-group">
         <label>Rate Limits (Submits / Polls per min)</label>
-        <div style="display:flex; gap:8px;">
+        <div class="toolbar">
           <input type="number" id="newAgentSubmitLimit" value="60" placeholder="Submit/min" />
           <input type="number" id="newAgentPollLimit" value="120" placeholder="Poll/min" />
         </div>
       </div>
-      <div style="display:flex; justify-content:flex-end; gap:8px;">
+      <div class="modal-actions">
         <button class="secondary" onclick="closeModal('registerAgentModal')">Cancel</button>
         <button onclick="submitRegisterAgent()">Register</button>
       </div>
@@ -566,20 +405,20 @@
   </div>
 
   <!-- MODAL: REGISTER MINION -->
-  <div id="registerMinionModal" class="modal-backdrop">
-    <div class="modal" style="max-height:90vh; overflow:auto;">
+  <div id="registerMinionModal" class="modal-backdrop" role="dialog" aria-modal="true" tabindex="-1" hidden>
+    <div class="modal">
       <h3 id="deployMinionTitle">Add Deployed Minion</h3>
       <div class="form-group">
-        <label>Registered Minion type</label>
+        <label for="deployMinionType">Registered Minion type</label>
         <select id="deployMinionType" onchange="renderMinionTypeFields()"></select>
       </div>
       <pre id="deployMinionTypeDetails"></pre>
       <div class="form-group">
-        <label>Minion ID</label>
+        <label for="newMinionId">Minion ID</label>
         <input type="text" id="newMinionId" placeholder="e.g. PATCH-01" />
       </div>
       <div class="form-group">
-        <label>Environment</label>
+        <label for="deployMinionEnvironment">Environment</label>
         <input type="text" id="deployMinionEnvironment" value="prod" />
       </div>
       <div class="form-group">
@@ -587,55 +426,55 @@
         <div id="deployMinionCapabilities"></div>
       </div>
       <div class="form-group">
-        <label>Target scope (comma separated names or wildcards, e.g. *.example.gov; * for all)</label>
+        <label for="newMinionTargets">Target scope (comma separated names or wildcards, e.g. *.example.gov; * for all)</label>
         <input type="text" id="newMinionTargets" placeholder="e.g. server-01.example.gov, web-*.example.gov" />
       </div>
       <div id="deployMinionFields"></div>
       <p>Additional instance fields are registry metadata, not worker configuration. Do not enter secrets.</p>
       <div class="form-group">
-        <label>Public Key (Ed25519 PEM)</label>
+        <label for="newMinionPubKey">Public Key (Ed25519 PEM)</label>
         <textarea id="newMinionPubKey" rows="4" placeholder="-----BEGIN PUBLIC KEY-----..."></textarea>
         <small id="deployMinionPublicKeyHint"></small>
       </div>
-      <div style="display:flex; justify-content:flex-end; gap:8px;">
+      <div class="modal-actions">
         <button class="secondary" onclick="closeModal('registerMinionModal')">Cancel</button>
         <button onclick="submitRegisterMinion()">Save</button>
       </div>
     </div>
   </div>
 
-  <div id="assignMinionReleaseModal" class="modal-backdrop">
+  <div id="assignMinionReleaseModal" class="modal-backdrop" role="dialog" aria-modal="true" tabindex="-1" hidden>
     <div class="modal">
       <h3>Assign Minion Release</h3>
       <p>Deploy the new files and stop the Minion before changing its assigned release. Unfinished missions prevent reassignment. A fresh matching check-in is required before routing resumes.</p>
-      <label>Registered release</label>
+      <label for="assignMinionRelease">Registered release</label>
       <select id="assignMinionRelease"></select>
-      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px;">
+      <div class="modal-actions">
         <button class="secondary" onclick="closeModal('assignMinionReleaseModal')">Cancel</button>
         <button onclick="submitMinionRelease()">Assign</button>
       </div>
     </div>
   </div>
 
-  <div id="minionConfigModal" class="modal-backdrop">
-    <div class="modal" style="max-width:760px; max-height:90vh; overflow:auto;">
+  <div id="minionConfigModal" class="modal-backdrop" role="dialog" aria-modal="true" tabindex="-1" hidden>
+    <div class="modal modal-wide">
       <h3>Generate Minion Configuration</h3>
       <p id="minionConfigId" class="mono"></p>
-      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:10px;">
-        <div class="form-group"><label>Mission Control HTTPS URL</label><input id="configMissionControlUrl" type="url" required /></div>
-        <div class="form-group"><label>Catalog path</label><input id="configCatalogPath" required /></div>
-        <div class="form-group"><label>Nessus mapping path</label><input id="configMappingPath" required /></div>
-        <div class="form-group"><label>Protected API key file path</label><input id="configApiKeyPath" required /></div>
-        <div class="form-group"><label>SluiceGate public key path</label><input id="configPublicKeyPath" required /></div>
-        <div class="form-group"><label>Minion private key path</label><input id="configPrivateKeyPath" required /></div>
-        <div class="form-group"><label>Nonce store path</label><input id="configNoncePath" required /></div>
-        <div class="form-group"><label>Mission diary directory</label><input id="configDiaryPath" required /></div>
-        <div class="form-group"><label>Trusted server certificate path (optional)</label><input id="configTrustedCertPath" /></div>
-        <div class="form-group"><label>Certificate SHA-256 fingerprints (comma separated)</label><input id="configTrustedCertFingerprints" placeholder="Optional; 64 hex characters each" /></div>
-        <div class="form-group"><label>Idle poll interval (seconds)</label><input id="configPollInterval" type="number" min="1" max="86400" value="60" required /></div>
+      <div class="config-grid">
+        <div class="form-group"><label for="configMissionControlUrl">Mission Control HTTPS URL</label><input id="configMissionControlUrl" type="url" required /></div>
+        <div class="form-group"><label for="configCatalogPath">Catalog path</label><input id="configCatalogPath" required /></div>
+        <div class="form-group"><label for="configMappingPath">Nessus mapping path</label><input id="configMappingPath" required /></div>
+        <div class="form-group"><label for="configApiKeyPath">Protected API key file path</label><input id="configApiKeyPath" required /></div>
+        <div class="form-group"><label for="configPublicKeyPath">SluiceGate public key path</label><input id="configPublicKeyPath" required /></div>
+        <div class="form-group"><label for="configPrivateKeyPath">Minion private key path</label><input id="configPrivateKeyPath" required /></div>
+        <div class="form-group"><label for="configNoncePath">Nonce store path</label><input id="configNoncePath" required /></div>
+        <div class="form-group"><label for="configDiaryPath">Mission diary directory</label><input id="configDiaryPath" required /></div>
+        <div class="form-group"><label for="configTrustedCertPath">Trusted server certificate path (optional)</label><input id="configTrustedCertPath" /></div>
+        <div class="form-group"><label for="configTrustedCertFingerprints">Certificate SHA-256 fingerprints (comma separated)</label><input id="configTrustedCertFingerprints" placeholder="Optional; 64 hex characters each" /></div>
+        <div class="form-group"><label for="configPollInterval">Idle poll interval (seconds)</label><input id="configPollInterval" type="number" min="1" max="86400" value="60" required /></div>
       </div>
-      <label style="display:flex; align-items:center; gap:8px; margin:12px 0;"><input id="configDryRun" type="checkbox" checked /> Dry run</label>
-      <div style="display:flex; justify-content:flex-end; gap:8px;">
+      <label class="checkbox-label"><input id="configDryRun" type="checkbox" checked /> Dry run</label>
+      <div class="modal-actions">
         <button class="secondary" onclick="closeModal('minionConfigModal')">Cancel</button>
         <button onclick="downloadMinionConfig()">Download JSON</button>
       </div>
@@ -643,19 +482,19 @@
   </div>
 
   <!-- MODAL: CREATE NOTIFICATION ADAPTER -->
-  <div id="registerAdapterModal" class="modal-backdrop">
+  <div id="registerAdapterModal" class="modal-backdrop" role="dialog" aria-modal="true" tabindex="-1" hidden>
     <div class="modal">
       <h3>Notification Adapter</h3>
       <div class="form-group">
-        <label>Adapter ID</label>
+        <label for="newAdapterId">Adapter ID</label>
         <input type="text" id="newAdapterId" placeholder="e.g. exchange-smtp" />
       </div>
       <div class="form-group">
-        <label>Adapter Name</label>
+        <label for="newAdapterName">Adapter Name</label>
         <input type="text" id="newAdapterName" placeholder="e.g. Exchange approvals mail" />
       </div>
       <div class="form-group">
-        <label>Provider</label>
+        <label for="newAdapterType">Provider</label>
         <select id="newAdapterType" onchange="renderAdapterFields()">
           <option value="resend">Resend (email)</option>
           <option value="smtp">SMTP / Microsoft Exchange (email)</option>
@@ -665,26 +504,26 @@
       </div>
       <div id="adapterFieldsResend">
         <div class="form-group">
-          <label>Sender address</label>
+          <label for="adapterResendSender">Sender address</label>
           <input type="text" id="adapterResendSender" placeholder="sluicegate@example.gov" />
         </div>
-        <p style="color:var(--text-muted);">The API key is read from the service secret <code>RESEND_API_KEY</code> (or <code>RESEND_API_KEY_FILE</code>).</p>
+        <p class="muted">The API key is read from the service secret <code>RESEND_API_KEY</code> (or <code>RESEND_API_KEY_FILE</code>).</p>
       </div>
-      <div id="adapterFieldsSmtp" style="display:none;">
+      <div id="adapterFieldsSmtp" hidden>
         <div class="form-group">
-          <label>Sender address</label>
+          <label for="adapterSmtpSender">Sender address</label>
           <input type="text" id="adapterSmtpSender" placeholder="sluicegate@example.gov" />
         </div>
         <div class="form-group">
-          <label>Exchange host</label>
+          <label for="adapterSmtpHost">Exchange host</label>
           <input type="text" id="adapterSmtpHost" placeholder="mail.example.gov" />
         </div>
         <div class="form-group">
-          <label>Port (blank = default for the TLS mode)</label>
+          <label for="adapterSmtpPort">Port (blank = default for the TLS mode)</label>
           <input type="number" id="adapterSmtpPort" min="1" max="65535" />
         </div>
         <div class="form-group">
-          <label>TLS mode</label>
+          <label for="adapterSmtpTls">TLS mode</label>
           <select id="adapterSmtpTls">
             <option value="starttls">STARTTLS (587)</option>
             <option value="tls">Implicit TLS (465)</option>
@@ -692,25 +531,25 @@
           </select>
         </div>
         <div class="form-group">
-          <label>Authentication</label>
+          <label for="adapterSmtpAuth">Authentication</label>
           <select id="adapterSmtpAuth">
             <option value="none">None (approved relay)</option>
             <option value="login">Username and password</option>
           </select>
         </div>
         <div class="form-group">
-          <label>CA bundle path on the service (optional, for an internal CA)</label>
+          <label for="adapterSmtpCa">CA bundle path on the service (optional, for an internal CA)</label>
           <input type="text" id="adapterSmtpCa" placeholder="/run/secrets/exchange-ca.pem" />
         </div>
-        <p style="color:var(--text-muted);">Username and password are read from the service secrets <code>SG_SMTP_USERNAME</code> and <code>SG_SMTP_PASSWORD</code> (or their <code>_FILE</code> variants).</p>
+        <p class="muted">Username and password are read from the service secrets <code>SG_SMTP_USERNAME</code> and <code>SG_SMTP_PASSWORD</code> (or their <code>_FILE</code> variants).</p>
       </div>
-      <div id="adapterFieldsWebhook" style="display:none;">
+      <div id="adapterFieldsWebhook" hidden>
         <div class="form-group">
-          <label>Webhook URL</label>
+          <label for="adapterWebhookUrl">Webhook URL</label>
           <input type="text" id="adapterWebhookUrl" placeholder="https://hooks.example.gov/sluicegate" />
         </div>
       </div>
-      <div style="display:flex; justify-content:flex-end; gap:8px;">
+      <div class="modal-actions">
         <button class="secondary" onclick="closeModal('registerAdapterModal')">Cancel</button>
         <button onclick="submitRegisterAdapter()">Save Adapter</button>
       </div>
@@ -718,30 +557,30 @@
   </div>
 
   <!-- MODAL: CREATE NOTIFICATION PROFILE -->
-  <div id="createProfileModal" class="modal-backdrop">
+  <div id="createProfileModal" class="modal-backdrop" role="dialog" aria-modal="true" tabindex="-1" hidden>
     <div class="modal">
       <h3>Create Notification Profile</h3>
       <div class="form-group">
-        <label>Profile ID</label>
+        <label for="newProfileId">Profile ID</label>
         <input type="text" id="newProfileId" placeholder="e.g. approval-alerts" />
       </div>
       <div class="form-group">
-        <label>Profile Name</label>
+        <label for="newProfileName">Profile Name</label>
         <input type="text" id="newProfileName" placeholder="e.g. Action Approval Alerts" />
       </div>
       <div class="form-group">
-        <label>Adapter</label>
+        <label for="newProfileAdapterId">Adapter</label>
         <select id="newProfileAdapterId"></select>
       </div>
       <div class="form-group">
-        <label>Event Types (comma separated)</label>
+        <label for="newProfileEvents">Event Types (comma separated)</label>
         <input type="text" id="newProfileEvents" value="PAUSE_CREATED, REQUEST_APPROVED, REQUEST_REJECTED" />
       </div>
       <div class="form-group">
-        <label>Recipients (comma separated)</label>
+        <label for="newProfileRecipients">Recipients (comma separated)</label>
         <input type="text" id="newProfileRecipients" placeholder="approvers@example.gov" />
       </div>
-      <div style="display:flex; justify-content:flex-end; gap:8px;">
+      <div class="modal-actions">
         <button class="secondary" onclick="closeModal('createProfileModal')">Cancel</button>
         <button onclick="submitCreateProfile()">Create Profile</button>
       </div>
@@ -751,22 +590,22 @@
   <dialog id="clearAuditDialog" aria-labelledby="clearAuditTitle" class="modal">
     <h3 id="clearAuditTitle">Clear displayed audit events?</h3>
     <p>This clears only the display. Audit events remain in the database and can be restored with Reload.</p>
-    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px;">
+    <div class="modal-actions">
       <button class="secondary" onclick="document.getElementById('clearAuditDialog').close()" autofocus>Cancel</button>
       <button onclick="clearAuditDisplay()">Continue</button>
     </div>
   </dialog>
 
   <!-- MODAL: MISSION DETAIL VIEWER -->
-  <div id="missionDetailModal" class="modal-backdrop">
-    <div class="modal" style="max-width: 680px;">
+  <div id="missionDetailModal" class="modal-backdrop" role="dialog" aria-modal="true" tabindex="-1" hidden>
+    <div class="modal modal-inspect">
       <h3 id="detailTitle">Mission Details</h3>
       <div id="requestDetails"></div>
       <details id="detailRaw" open>
         <summary>Full details (JSON)</summary>
         <pre id="detailContent" class="json-viewer"></pre>
       </details>
-      <div style="display:flex; justify-content:flex-end; margin-top:16px;">
+      <div class="modal-actions">
         <button class="secondary" onclick="closeModal('missionDetailModal')">Close</button>
       </div>
     </div>
@@ -791,26 +630,102 @@
     }
 
     function switchTab(tabId) {
-      document.querySelectorAll(".tab-content").forEach(el => el.style.display = "none");
-      document.querySelectorAll(".nav-tab").forEach(el => el.classList.remove("active"));
-      document.getElementById("tab-" + tabId).style.display = "block";
-      event.target.classList.add("active");
+      document.querySelectorAll(".tab-content").forEach(el => { el.hidden = el.id !== "tab-" + tabId; });
+      document.querySelectorAll(".nav-tab").forEach(el => {
+        const selected = el.getAttribute("aria-controls") === "tab-" + tabId;
+        el.classList.toggle("active", selected);
+        el.setAttribute("aria-selected", String(selected));
+        el.tabIndex = selected ? 0 : -1;
+      });
       if (tabId === "policy" && !policyFileHash) loadPolicyEditor();
       if (tabId === "adapters") loadAdapters();
     }
+
+    document.querySelector(".nav-tabs").addEventListener("keydown", event => {
+      const tabs = [...document.querySelectorAll(".nav-tab")];
+      const index = tabs.indexOf(event.target);
+      if (index < 0 || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 :
+        (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+      tabs[next].click();
+      tabs[next].focus();
+    });
 
     function esc(value) {
       return String(value ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
     }
 
+    const dialogOpeners = new Map();
+    const inertStates = new Map();
+
+    function restoreDialogFocus(id) {
+      if (document.querySelector("dialog[open], .modal-backdrop:not([hidden])")) return;
+      const opener = dialogOpeners.get(id);
+      if (opener?.isConnected && opener.getClientRects().length) opener.focus();
+      else document.querySelector('.nav-tab[aria-selected="true"]')?.focus();
+      dialogOpeners.delete(id);
+    }
+
+    function showDialog(id) {
+      dialogOpeners.set(id, document.activeElement);
+      document.getElementById(id).showModal();
+    }
+
+    document.querySelectorAll("dialog").forEach(dialog => {
+      dialog.addEventListener("close", () => restoreDialogFocus(dialog.id));
+    });
+
+    function modalFocusables(modal) {
+      return [...modal.querySelectorAll('button, input, select, textarea, a[href], summary, [tabindex="0"]')]
+        .filter(element => !element.disabled && element.getClientRects().length);
+    }
+
     function openModal(id) {
-      document.getElementById(id).style.display = "flex";
+      const modal = document.getElementById(id);
+      if (!modal.hidden) return;
+      dialogOpeners.set(id, document.activeElement);
+      modal.hidden = false;
+      const heading = modal.querySelector("h2, h3");
+      if (heading) {
+        if (!heading.id) heading.id = id + "Title";
+        modal.setAttribute("aria-labelledby", heading.id);
+      }
+      const states = [...document.body.children].filter(element => element !== modal && element.tagName !== "SCRIPT")
+        .map(element => [element, element.inert]);
+      inertStates.set(id, states);
+      states.forEach(([element]) => { element.inert = true; });
+      if (id === "missionDetailModal" && heading) {
+        heading.tabIndex = -1;
+        heading.focus();
+      } else {
+        (modalFocusables(modal)[0] || modal).focus();
+      }
     }
 
     function closeModal(id) {
       if (id === "missionDetailModal") ++detailLoadGeneration;
-      document.getElementById(id).style.display = "none";
+      document.getElementById(id).hidden = true;
+      (inertStates.get(id) || []).forEach(([element, inert]) => { element.inert = inert; });
+      inertStates.delete(id);
+      restoreDialogFocus(id);
     }
+
+    document.addEventListener("keydown", event => {
+      const modal = document.querySelector(".modal-backdrop:not([hidden])");
+      if (!modal || document.querySelector("dialog[open]")) return;
+      if (event.key === "Escape") { event.preventDefault(); closeModal(modal.id); }
+      if (event.key !== "Tab") return;
+      const focusable = modalFocusables(modal);
+      const first = focusable[0] || modal;
+      const last = focusable[focusable.length - 1] || modal;
+      const outsideControls = !focusable.includes(document.activeElement);
+      if (event.shiftKey && (document.activeElement === first || outsideControls)) {
+        event.preventDefault(); last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || outsideControls)) {
+        event.preventDefault(); first.focus();
+      }
+    });
 
     function formatTs(ts) {
       if (!ts) return "—";
@@ -854,7 +769,7 @@
         const data = await res.json();
         const tbody = document.getElementById("missionsTableBody");
         if (data.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No missions recorded.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No missions recorded.</td></tr>';
           return;
         }
         tbody.innerHTML = data.map(m => `
@@ -864,11 +779,11 @@
             <td>${m.minion_id}</td>
             <td>${statusBadge(m.status)}</td>
             <td>${formatTs(m.updated_at)}</td>
-            <td><button class="secondary" onclick="viewMissionDetail('${m.request_id}')">Inspect</button></td>
+            <td><div class="cell-actions"><button class="secondary" onclick="viewMissionDetail('${m.request_id}')">Inspect</button></div></td>
           </tr>
         `).join("");
       } catch (err) {
-        document.getElementById("missionsTableBody").innerHTML = `<tr><td colspan="6" style="color:var(--danger);">Error: ${err.message}</td></tr>`;
+        document.getElementById("missionsTableBody").innerHTML = `<tr><td colspan="6" class="error-text">Error: ${err.message}</td></tr>`;
       }
     }
 
@@ -877,7 +792,7 @@
       const tbody = document.getElementById("auditEventsTableBody");
       if (reset) {
         auditBeforeId = null;
-        document.getElementById("auditOlderButton").style.display = "none";
+        document.getElementById("auditOlderButton").hidden = true;
         const params = new URLSearchParams();
         const fields = [
           ["request_id", "auditRequestId"], ["mission_id", "auditMissionId"],
@@ -894,7 +809,7 @@
         }
         auditQuery = params.toString();
         auditEventsById.clear();
-        tbody.innerHTML = '<tr><td colspan="10" style="text-align:center; color:var(--text-muted);">Loading audit events...</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" class="empty-state">Loading audit events...</td></tr>';
       }
       const params = new URLSearchParams(auditQuery);
       if (auditBeforeId) params.set("before_id", String(auditBeforeId));
@@ -915,16 +830,16 @@
             <td>${esc(item.minion_id || "")}</td>
             <td>${esc(item.status || "")}</td>
             <td>${item.signature_verified === null ? "—" : item.signature_verified ? "Verified" : "Rejected"}</td>
-            <td><button class="secondary" onclick="viewAuditEvent(${Number(item.audit_id)})">Inspect</button></td>
+            <td><div class="cell-actions"><button class="secondary" onclick="viewAuditEvent(${Number(item.audit_id)})">Inspect</button></div></td>
           </tr>`).join("");
         tbody.innerHTML = reset ? rows : tbody.innerHTML + rows;
-        if (!tbody.innerHTML.trim()) tbody.innerHTML = '<tr><td colspan="10" style="text-align:center; color:var(--text-muted);">No matching audit events.</td></tr>';
+        if (!tbody.innerHTML.trim()) tbody.innerHTML = '<tr><td colspan="10" class="empty-state">No matching audit events.</td></tr>';
         auditBeforeId = data.next_before_id;
-        document.getElementById("auditOlderButton").style.display = auditBeforeId ? "inline-block" : "none";
+        document.getElementById("auditOlderButton").hidden = !auditBeforeId;
       } catch (err) {
         if (generation !== auditLoadGeneration) return;
-        tbody.innerHTML = `<tr><td colspan="10" style="color:var(--danger);">Error: ${esc(err.message)}</td></tr>`;
-        document.getElementById("auditOlderButton").style.display = "none";
+        tbody.innerHTML = `<tr><td colspan="10" class="error-text">Error: ${esc(err.message)}</td></tr>`;
+        document.getElementById("auditOlderButton").hidden = true;
       }
     }
 
@@ -939,8 +854,8 @@
       auditBeforeId = null;
       auditEventsById.clear();
       document.getElementById("auditEventsTableBody").innerHTML =
-        '<tr><td colspan="10" style="text-align:center; color:var(--text-muted);">Display cleared. Select Reload to restore audit events.</td></tr>';
-      document.getElementById("auditOlderButton").style.display = "none";
+        '<tr><td colspan="10" class="empty-state">Display cleared. Select Reload to restore audit events.</td></tr>';
+      document.getElementById("auditOlderButton").hidden = true;
       document.getElementById("clearAuditDialog").close();
     }
 
@@ -1025,7 +940,7 @@
         document.getElementById("pendingCount").innerText = pending.length;
         const tbody = document.getElementById("approvalsTableBody");
         if (pending.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No actions currently paused.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No actions currently paused.</td></tr>';
           return;
         }
         tbody.innerHTML = pending.map(m => `
@@ -1035,10 +950,10 @@
             <td><span class="badge badge-warning">PAUSED</span></td>
             <td>—</td>
             <td>${formatTs(m.created_at)}</td>
-            <td style="display:flex; gap:6px;">
+            <td><div class="cell-actions">
               <button onclick="approveRequest('${m.request_id}')">Approve</button>
               <button class="danger" onclick="rejectRequest('${m.request_id}')">Reject</button>
-            </td>
+            </div></td>
           </tr>
         `).join("");
       } catch (err) {
@@ -1086,7 +1001,7 @@
         const data = await res.json();
         const tbody = document.getElementById("agentsTableBody");
         if (data.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; color:var(--text-muted);">No agents registered.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No agents registered.</td></tr>';
           return;
         }
         tbody.innerHTML = data.map(a => `
@@ -1099,12 +1014,12 @@
             <td>${renderCredentialSummary(a.keys)}</td>
             <td>${a.enabled ? '<span class="badge badge-success">ACTIVE</span>' : '<span class="badge badge-danger">DISABLED</span>'}</td>
             <td>${formatTs(a.last_used_at)}</td>
-            <td style="display:flex; gap:6px;">
+            <td><div class="cell-actions">
               <button class="secondary" onclick="viewAgentDetail(this.dataset.id)" data-id="${esc(a.agent_id)}">Inspect</button>
               <button class="secondary" onclick="revokeAgentKey(this.dataset.id)" data-id="${esc(a.agent_id)}">Revoke Key</button>
               <button class="secondary" onclick="toggleAgent(this.dataset.id, ${!a.enabled})" data-id="${esc(a.agent_id)}">${a.enabled ? 'Disable' : 'Enable'}</button>
               <button class="secondary" onclick="rotateAgentKey(this.dataset.id)" data-id="${esc(a.agent_id)}">Rotate Key</button>
-            </td>
+            </div></td>
           </tr>
         `).join("");
       } catch (err) {
@@ -1193,9 +1108,9 @@
         <td>${esc(t.version)} / ${esc(t.runtime_type)}</td><td>${t.capabilities.map(esc).join(", ")}</td>
         <td>${esc(t.artifact)}<br><small class="mono">${esc(t.package_sha256 || "Not specified")}</small></td>
         <td>${t.deployment_count}</td><td>${t.enabled ? "Enabled" : "Disabled"}</td>
-        <td><button class="secondary" data-id="${esc(t.type_id)}" onclick="inspectMinionType(this.dataset.id)">Inspect</button>
+        <td><div class="cell-actions"><button class="secondary" data-id="${esc(t.type_id)}" onclick="inspectMinionType(this.dataset.id)">Inspect</button>
         <button class="secondary" data-id="${esc(t.type_id)}" onclick="toggleMinionType(this.dataset.id, ${!t.enabled})" ${t.deployment_count ? "disabled" : ""}>${t.enabled ? "Disable" : "Enable"}</button>
-        <button class="secondary" data-id="${esc(t.type_id)}" onclick="deleteMinionType(this.dataset.id)" ${t.deployment_count ? "disabled" : ""}>Delete</button></td></tr>
+        <button class="secondary" data-id="${esc(t.type_id)}" onclick="deleteMinionType(this.dataset.id)" ${t.deployment_count ? "disabled" : ""}>Delete</button></div></td></tr>
       `).join("") : '<tr><td colspan="8">No registered Minion types. Import a release manifest.</td></tr>';
     }
 
@@ -1240,7 +1155,7 @@
         const data = await res.json();
         const tbody = document.getElementById("minionsTableBody");
         if (data.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; color:var(--text-muted);">No minions registered.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No minions registered.</td></tr>';
           return;
         }
         tbody.innerHTML = data.map(m => `
@@ -1253,7 +1168,7 @@
             <td>${statusBadge(m.release_status)}<br><small>Assigned: ${esc(m.version)}<br>Reported: ${esc(m.reported_version || '—')}<br><span class="mono">Assigned: ${esc(m.package_sha256 || '—')}<br>Reported: ${esc(m.reported_fingerprint || '—')}</span></small></td>
             <td>${statusBadge(m.health_status)}<br><small>${formatTs(m.last_contact_at)}</small></td>
             <td>${m.active_mission_count} active<br><small>${renderCredentialSummary(m.keys)}</small></td>
-            <td style="display:flex; gap:6px;">
+            <td><div class="cell-actions">
               <button class="secondary" onclick="viewMinionDetail(this.dataset.id)" data-id="${esc(m.minion_id)}">Inspect</button>
               <button class="secondary" onclick="openDeployMinion(this.dataset.id)" data-id="${esc(m.minion_id)}">Edit</button>
               <button class="secondary" onclick="openAssignMinionRelease(this.dataset.id)" data-id="${esc(m.minion_id)}">Assign Release</button>
@@ -1262,7 +1177,7 @@
               <button class="secondary" onclick="toggleMinion(this.dataset.id, ${!m.enabled})" data-id="${esc(m.minion_id)}">${m.enabled ? 'Disable' : 'Enable'}</button>
               <button class="secondary" onclick="rotateMinionKey(this.dataset.id)" data-id="${esc(m.minion_id)}">Rotate Key</button>
               <button class="secondary" onclick="deleteMinion(this.dataset.id)" data-id="${esc(m.minion_id)}">Delete</button>
-            </td>
+            </div></td>
           </tr>
         `).join("");
       } catch (err) {
@@ -1276,10 +1191,10 @@
         name: type.name, version: type.version, runtime: type.runtime_type, artifact: type.artifact, sha256: type.package_sha256
       }, null, 2) : "Select an enabled type.";
       document.getElementById("deployMinionCapabilities").innerHTML = type ? type.capabilities.map((c, i) =>
-        `<label style="display:block"><input type="checkbox" value="${esc(c)}" ${!editingMinion || editingMinion.capabilities.includes(c) ? "checked" : ""} /> ${esc(c)}</label>`
+        `<label class="block-label"><input type="checkbox" value="${esc(c)}" ${!editingMinion || editingMinion.capabilities.includes(c) ? "checked" : ""} /> ${esc(c)}</label>`
       ).join("") : "";
       document.getElementById("deployMinionFields").innerHTML = type ? (type.instance_fields || []).map(field =>
-        `<div class="form-group"><label>${esc(field.label)}${field.required ? " (required)" : ""}</label><input type="text" data-field-id="${esc(field.id)}" value="${esc(editingMinion?.instance_metadata?.[field.id] || "")}" maxlength="1024" ${field.required ? "required" : ""} /></div>`
+        `<div class="form-group"><label for="${esc(field.id)}">${esc(field.label)}${field.required ? " (required)" : ""}</label><input type="text" data-field-id="${esc(field.id)}" value="${esc(editingMinion?.instance_metadata?.[field.id] || "")}" maxlength="1024" ${field.required ? "required" : ""} /></div>`
       ).join("") : "";
     }
 
@@ -1488,7 +1403,7 @@
         const data = await res.json();
         const tbody = document.getElementById("profilesTableBody");
         if (data.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No notification profiles configured.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No notification profiles configured.</td></tr>';
         } else {
           tbody.innerHTML = data.map(p => `
             <tr>
@@ -1498,7 +1413,7 @@
               <td>${esc(p.adapter_id)}</td>
               <td>${(p.recipients || []).map(esc).join(", ") || '—'}</td>
               <td>${p.enabled ? '<span class="badge badge-success">ACTIVE</span>' : '<span class="badge badge-danger">MUTED</span>'}</td>
-              <td><button class="danger" onclick="deleteProfile('${p.profile_id}')">Delete</button></td>
+              <td><div class="cell-actions"><button class="danger" onclick="deleteProfile('${p.profile_id}')">Delete</button></div></td>
             </tr>
           `).join("");
         }
@@ -1514,7 +1429,7 @@
         const data = await res.json();
         const tbody = document.getElementById("deliveriesTableBody");
         if (data.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color:var(--text-muted);">No notification deliveries recorded.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No notification deliveries recorded.</td></tr>';
           return;
         }
         tbody.innerHTML = data.map(d => `
@@ -1538,9 +1453,9 @@
 
     function renderAdapterFields() {
       const type = document.getElementById("newAdapterType").value;
-      document.getElementById("adapterFieldsResend").style.display = type === "resend" ? "block" : "none";
-      document.getElementById("adapterFieldsSmtp").style.display = type === "smtp" ? "block" : "none";
-      document.getElementById("adapterFieldsWebhook").style.display = type === "webhook" ? "block" : "none";
+      document.getElementById("adapterFieldsResend").hidden = type !== "resend";
+      document.getElementById("adapterFieldsSmtp").hidden = type !== "smtp";
+      document.getElementById("adapterFieldsWebhook").hidden = type !== "webhook";
     }
 
     function adapterSettingsText(a) {
@@ -1564,7 +1479,7 @@
         adapterCache = await res.json();
         const tbody = document.getElementById("adaptersTableBody");
         if (adapterCache.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color:var(--text-muted);">No adapters configured.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No adapters configured.</td></tr>';
           return;
         }
         tbody.innerHTML = adapterCache.map((a, i) => `
@@ -1759,7 +1674,7 @@
       choice.replaceChildren(new Option("Select a template…", ""));
       updatePolicyTemplateChoice();
       document.getElementById("policyTemplateDescription").textContent = "Loading templates…";
-      document.getElementById("policyTemplateSelector").showModal();
+      showDialog("policyTemplateSelector");
       try {
         const response = await fetch("/admin/v1/policy/templates", { headers: getAuthHeaders() });
         if (!response.ok) throw new Error(await response.text());
@@ -1888,7 +1803,7 @@
         document.getElementById("policyWizardTitle").textContent = edit ? "Edit patching policy" : "Create patching policy";
         renderWizardRules();
         document.getElementById("wizardError").textContent = "";
-        dialog.showModal();
+        showDialog(dialog.id);
       } catch (err) {
         document.getElementById("policyFeedback").textContent = "Could not open policy wizard: " + err.message;
       }

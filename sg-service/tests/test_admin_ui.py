@@ -58,6 +58,23 @@ def test_admin_ui_endpoints(tmp_path: Path, monkeypatch) -> None:
         assert "Save and Activate" in r_ui.text
 
 
+def test_admin_assets_are_packaged_public_and_cannot_expose_other_files(tmp_path, monkeypatch):
+    service = setup_test_service(tmp_path, monkeypatch)
+    with TestClient(service.app) as client:
+        stylesheet = client.get("/admin/assets/mission-control.css")
+        assert stylesheet.status_code == 200
+        assert stylesheet.headers["content-type"].startswith("text/css")
+        assert stylesheet.headers["x-content-type-options"] == "nosniff"
+        logo = client.get("/admin/assets/sluicegate-logo.png")
+        assert logo.status_code == 200
+        assert logo.headers["content-type"] == "image/png"
+        assert logo.content.startswith(b"\x89PNG\r\n\x1a\n")
+        assert client.get("/admin/assets/missing.css").status_code == 404
+        assert client.get("/admin/assets/%2e%2e/admin.html").status_code == 404
+        assert client.get("/admin/assets/%2e%2e/%2e%2e/mission_control.py").status_code == 404
+        assert client.get("/admin/v1/missions").status_code == 401
+
+
 def test_policy_admin_workflow_is_authenticated_validated_and_audited(tmp_path: Path, monkeypatch) -> None:
     service = setup_test_service(tmp_path, monkeypatch)
     monkeypatch.setenv("SG_BOOTSTRAP_ADMIN_KEY", "policy-admin-secret")

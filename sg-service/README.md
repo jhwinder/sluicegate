@@ -91,6 +91,8 @@ The service includes a self-contained web console served directly at:
 
 👉 **`http://localhost:8443/admin`** (or `http://localhost:8443/admin/ui`)
 
+The console uses a shared local stylesheet and the supplied SluiceGate header logo, with a neutral palette and restrained blue/green accents. See [Mission Control Branding](../docs/Mission_Control_Branding.md) for asset locations, CSS tokens, keyboard behavior, responsive previews, and verification commands. Rebuild the service image and recreate its container to apply source changes to an existing deployment.
+
 ### Initial Login / Setting Your Admin Token
 1. Open `http://localhost:8443/admin` in your browser.
 2. In the top-right header under **Admin Bearer Token**, paste your admin secret key (e.g., the value of `SG_BOOTSTRAP_ADMIN_KEY`, or an admin key issued via `/admin/v1/credentials/admin/{name}`).
