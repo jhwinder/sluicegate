@@ -1,0 +1,8 @@
+[
+  {
+    "id": "patching",
+    "name": "Patching Policy",
+    "description": "Create rules for Windows patch targets, patch sources, reboots, maintenance windows, and approval.",
+    "editor_mode": "patching_wizard"
+  }
+]

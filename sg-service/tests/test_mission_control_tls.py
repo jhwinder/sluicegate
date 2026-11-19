@@ -131,8 +131,9 @@ class TlsServer:
         self.httpd.server_close()
 
 
-def load_demo_worker():
-    spec = importlib.util.spec_from_file_location("demo_worker", REPOSITORY / "minion-registry/minions/demo_stub/worker.py")
+@pytest.fixture(params=["demo_stub", "test_stub"])
+def worker(request):
+    spec = importlib.util.spec_from_file_location(request.param, REPOSITORY / f"minion-registry/minions/{request.param}/worker.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -210,9 +211,8 @@ def uvicorn_tls_server(tmp_path: Path, monkeypatch) -> Iterator[tuple[int, Mater
         thread.join(timeout=10)
 
 
-def test_service_tls_is_trusted_only_with_the_provisioned_certificate(tmp_path: Path, uvicorn_tls_server) -> None:
+def test_service_tls_is_trusted_only_with_the_provisioned_certificate(tmp_path: Path, uvicorn_tls_server, worker) -> None:
     port, server_material = uvicorn_tls_server
-    worker = load_demo_worker()
     url = f"https://localhost:{port}/health"
     trusted_path, _ = write_material(tmp_path, server_material)
 
@@ -231,8 +231,7 @@ def test_service_tls_is_trusted_only_with_the_provisioned_certificate(tmp_path: 
             https_get(f"https://localhost:{server.port}/health", worker.transport_verification("https://localhost", False, str(mismatch_path)))
 
 
-def test_expired_certificate_is_rejected_even_when_provisioned(tmp_path: Path) -> None:
-    worker = load_demo_worker()
+def test_expired_certificate_is_rejected_even_when_provisioned(tmp_path: Path, worker) -> None:
     expired = make_certificate("expired", ("localhost",), ("127.0.0.1",), expired=True)
     certificate_path, key_path = write_material(tmp_path, expired)
     with TlsServer(certificate_path, key_path) as server:
@@ -240,8 +239,7 @@ def test_expired_certificate_is_rejected_even_when_provisioned(tmp_path: Path) -
             https_get(f"https://localhost:{server.port}/health", worker.transport_verification("https://localhost", False, str(certificate_path)))
 
 
-def test_demo_worker_refuses_plain_http_without_the_development_flag() -> None:
-    worker = load_demo_worker()
+def test_python_worker_refuses_plain_http_without_the_development_flag(worker) -> None:
     with pytest.raises(RuntimeError, match="must use https"):
         worker.transport_verification("http://sg-service:8443", False, "")
     assert worker.transport_verification("http://sg-service:8443", True, "") is True

@@ -201,7 +201,7 @@
       <div class="card-header">
         <h2>Active Policy</h2>
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <button class="secondary" onclick="openPolicyWizard()">Create New</button>
+          <button class="secondary" onclick="openPolicyTemplateSelector()">Create New</button>
           <button class="secondary" onclick="openPolicyWizard(true)">Edit Policy</button>
           <button class="secondary" onclick="loadPolicyEditor()">Reload from Service</button>
         </div>
@@ -224,6 +224,21 @@
       <pre id="policyFeedback" class="json-viewer" style="white-space:pre-wrap; margin-top:16px;"></pre>
     </div>
   </section>
+
+  <dialog id="policyTemplateSelector" aria-labelledby="policyTemplateTitle" class="modal" style="max-width:600px;">
+    <h2 id="policyTemplateTitle">Choose policy template</h2>
+    <p>Choose a starting point for a new policy draft. Your active policy changes only after Save and Activate.</p>
+    <label for="policyTemplateChoice">Template</label>
+    <select id="policyTemplateChoice" onchange="updatePolicyTemplateChoice()" style="width:100%;">
+      <option value="">Select a template…</option>
+    </select>
+    <p id="policyTemplateDescription"></p>
+    <p id="policyTemplateError" role="alert" style="color:var(--danger);"></p>
+    <div style="display:flex; justify-content:flex-end; gap:8px;">
+      <button class="secondary" onclick="closePolicyTemplateSelector()">Cancel</button>
+      <button id="policyTemplateContinue" onclick="loadSelectedPolicyTemplate()" disabled>Continue</button>
+    </div>
+  </dialog>
 
   <dialog id="policyWizard" aria-labelledby="policyWizardTitle" class="modal" style="max-width:780px; max-height:90vh; overflow-y:auto;">
     <h2 id="policyWizardTitle">Create patching policy</h2>
@@ -746,7 +761,11 @@
   <div id="missionDetailModal" class="modal-backdrop">
     <div class="modal" style="max-width: 680px;">
       <h3 id="detailTitle">Mission Details</h3>
-      <pre id="detailContent" class="json-viewer"></pre>
+      <div id="requestDetails"></div>
+      <details id="detailRaw" open>
+        <summary>Full details (JSON)</summary>
+        <pre id="detailContent" class="json-viewer"></pre>
+      </details>
       <div style="display:flex; justify-content:flex-end; margin-top:16px;">
         <button class="secondary" onclick="closeModal('missionDetailModal')">Close</button>
       </div>
@@ -789,6 +808,7 @@
     }
 
     function closeModal(id) {
+      if (id === "missionDetailModal") ++detailLoadGeneration;
       document.getElementById(id).style.display = "none";
     }
 
@@ -924,23 +944,76 @@
       document.getElementById("clearAuditDialog").close();
     }
 
-    function viewAuditEvent(auditId) {
+    let detailLoadGeneration = 0;
+
+    function showDetail(title, data) {
+      ++detailLoadGeneration;
+      document.getElementById("detailTitle").textContent = title;
+      document.getElementById("requestDetails").replaceChildren();
+      document.getElementById("detailContent").textContent = JSON.stringify(data, null, 2);
+      document.getElementById("detailRaw").open = true;
+      openModal("missionDetailModal");
+      return detailLoadGeneration;
+    }
+
+    function renderRequestDetails(data, historical = false) {
+      const submitted = data.submitted_request;
+      const envelope = data.mission_envelope || {};
+      const request = submitted || envelope;
+      const value = input => input === undefined || input === null ? "Unavailable" : typeof input === "object" ? JSON.stringify(input) : String(input);
+      const parameters = request.parameters || {};
+      const fields = [
+        ["Action", request.capability || (request.servers ? "windows.patch.reconcile" : null)],
+        ["Requested target", request.target ?? (request.servers ? { servers: request.servers } : null)],
+        ["Submitting agent", data.agent_id],
+      ];
+      if (Object.hasOwn(parameters, "amount") || String(request.capability).startsWith("stripe.")) {
+        fields.push(["Amount", parameters.amount], ["Currency", parameters.currency]);
+      }
+      const submittedJson = submitted ? JSON.stringify(submitted, null, 2) : "Original submitted request unavailable. Summary uses the stored Mission envelope where available.";
+      document.getElementById("requestDetails").innerHTML = `
+        <h4>${submitted ? "Submitted request" : "Request unavailable — Mission envelope fallback"}</h4>
+        <dl>${fields.map(([label, input]) => `<dt><b>${esc(label)}</b></dt><dd>${esc(value(input))}</dd>`).join("")}</dl>
+        <details><summary>Submitted request details</summary><pre class="json-viewer">${esc(submittedJson)}</pre></details>
+        <h4>${historical ? "Current request / Mission state (separate from the historical event below)" : "Current request / Mission state"}</h4>
+        <p>Decision: ${esc(value(data.policy_decision))} · Status: ${esc(value(data.status))} · Minion: ${esc(value(data.minion_id))}</p>
+        <details><summary>Policy-resolved Mission envelope</summary><pre class="json-viewer">${esc(JSON.stringify(envelope, null, 2))}</pre></details>`;
+    }
+
+    async function fetchRequestDetail(requestId) {
+      const response = await fetch(`/admin/v1/requests/${encodeURIComponent(requestId)}`, { headers: getAuthHeaders() });
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+      return response.json();
+    }
+
+    async function viewAuditEvent(auditId) {
       const item = auditEventsById.get(auditId);
       if (!item) return;
-      document.getElementById("detailTitle").innerText = `${item.event_type} #${item.audit_id}`;
-      document.getElementById("detailContent").innerText = JSON.stringify(item, null, 2);
-      openModal("missionDetailModal");
+      const generation = showDetail(`Historical event: ${item.event_type} #${item.audit_id}`, item);
+      if (!item.request_id) return;
+      document.getElementById("requestDetails").textContent = "Loading linked request…";
+      try {
+        const data = await fetchRequestDetail(item.request_id);
+        if (generation !== detailLoadGeneration) return;
+        renderRequestDetails(data, true);
+      } catch (err) {
+        if (generation !== detailLoadGeneration) return;
+        document.getElementById("requestDetails").textContent = "Linked request unavailable. Historical event is shown below. " + err.message;
+      }
     }
 
     async function viewMissionDetail(requestId) {
+      const generation = showDetail("Request: " + requestId, null);
+      document.getElementById("requestDetails").textContent = "Loading request…";
       try {
-        const res = await fetch(`/admin/v1/requests/${requestId}`, { headers: getAuthHeaders() });
-        const data = await res.json();
-        document.getElementById("detailTitle").innerText = "Request: " + requestId;
-        document.getElementById("detailContent").innerText = JSON.stringify(data, null, 2);
-        openModal("missionDetailModal");
+        const data = await fetchRequestDetail(requestId);
+        if (generation !== detailLoadGeneration) return;
+        renderRequestDetails(data);
+        document.getElementById("detailContent").textContent = JSON.stringify(data, null, 2);
+        document.getElementById("detailRaw").open = false;
       } catch (err) {
-        alert("Failed to load details: " + err.message);
+        if (generation !== detailLoadGeneration) return;
+        document.getElementById("requestDetails").textContent = "Failed to load request details: " + err.message;
       }
     }
 
@@ -1101,9 +1174,7 @@
         const res = await fetch(`/admin/v1/agents/${encodeURIComponent(id)}`, { headers: getAuthHeaders() });
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
-        document.getElementById("detailTitle").innerText = `Agent: ${data.agent_id}`;
-        document.getElementById("detailContent").innerText = JSON.stringify(data, null, 2);
-        openModal("missionDetailModal");
+        showDetail(`Agent: ${data.agent_id}`, data);
       } catch (err) {
         alert("Failed to load Agent details: " + err.message);
       }
@@ -1145,9 +1216,7 @@
     function inspectMinionType(id) {
       const type = minionTypes.find(t => t.type_id === id);
       if (!type) { alert("Minion type not found; refresh the registry."); return; }
-      document.getElementById("detailTitle").innerText = `Registered Minion: ${id}`;
-      document.getElementById("detailContent").innerText = JSON.stringify(type, null, 2);
-      openModal("missionDetailModal");
+      showDetail(`Registered Minion: ${id}`, type);
     }
 
     async function toggleMinionType(id, enabled) {
@@ -1344,9 +1413,7 @@
         if (!minionRes.ok) throw new Error(await minionRes.text());
         if (!missionsRes.ok) throw new Error(await missionsRes.text());
         const [minion, missions] = await Promise.all([minionRes.json(), missionsRes.json()]);
-        document.getElementById("detailTitle").innerText = `Minion: ${minion.minion_id}`;
-        document.getElementById("detailContent").innerText = JSON.stringify({ ...minion, recent_missions: missions }, null, 2);
-        openModal("missionDetailModal");
+        showDetail(`Minion: ${minion.minion_id}`, { ...minion, recent_missions: missions });
       } catch (err) {
         alert("Failed to load Minion details: " + err.message);
       }
@@ -1667,6 +1734,79 @@
     let wizardRules = [];
     let wizardEditIndex = null;
     let wizardSource = null;
+    let policyTemplateCatalog = [];
+    let policyTemplateLoadGeneration = 0;
+
+    function closePolicyTemplateSelector() {
+      ++policyTemplateLoadGeneration;
+      document.getElementById("policyTemplateSelector").close();
+    }
+
+    document.getElementById("policyTemplateSelector").addEventListener("cancel", () => { ++policyTemplateLoadGeneration; });
+
+    function updatePolicyTemplateChoice() {
+      const selected = policyTemplateCatalog.find(entry => entry.id === document.getElementById("policyTemplateChoice").value);
+      document.getElementById("policyTemplateDescription").textContent = selected?.description || "";
+      document.getElementById("policyTemplateContinue").disabled = !selected;
+      document.getElementById("policyTemplateError").textContent = "";
+    }
+
+    async function openPolicyTemplateSelector() {
+      const generation = ++policyTemplateLoadGeneration;
+      const choice = document.getElementById("policyTemplateChoice");
+      choice.disabled = false;
+      policyTemplateCatalog = [];
+      choice.replaceChildren(new Option("Select a template…", ""));
+      updatePolicyTemplateChoice();
+      document.getElementById("policyTemplateDescription").textContent = "Loading templates…";
+      document.getElementById("policyTemplateSelector").showModal();
+      try {
+        const response = await fetch("/admin/v1/policy/templates", { headers: getAuthHeaders() });
+        if (!response.ok) throw new Error(await response.text());
+        const entries = await response.json();
+        if (generation !== policyTemplateLoadGeneration) return;
+        policyTemplateCatalog = entries;
+        choice.append(...entries.map(entry => new Option(entry.name, entry.id)));
+        document.getElementById("policyTemplateDescription").textContent = entries.length ? "Choose a template to continue." : "No templates are available.";
+      } catch (err) {
+        if (generation === policyTemplateLoadGeneration) document.getElementById("policyTemplateError").textContent = "Could not load templates: " + err.message;
+      }
+    }
+
+    async function loadSelectedPolicyTemplate() {
+      const id = document.getElementById("policyTemplateChoice").value;
+      if (!policyTemplateCatalog.some(entry => entry.id === id)) return;
+      const generation = ++policyTemplateLoadGeneration;
+      const editor = document.getElementById("policyEditor");
+      const original = editor.value;
+      const draftGeneration = policyLoadGeneration;
+      document.getElementById("policyTemplateContinue").disabled = true;
+      document.getElementById("policyTemplateChoice").disabled = true;
+      try {
+        const response = await fetch(`/admin/v1/policy/templates/${encodeURIComponent(id)}`, { headers: getAuthHeaders() });
+        if (!response.ok) throw new Error(await response.text());
+        const template = await response.json();
+        if (generation !== policyTemplateLoadGeneration) return;
+        if (editor.value !== original || draftGeneration !== policyLoadGeneration) throw new Error("The policy draft changed while loading. Select the template again.");
+        if (template.editor_mode === "patching_wizard") {
+          closePolicyTemplateSelector();
+          await openPolicyWizard();
+        } else if (template.editor_mode === "yaml" && typeof template.content === "string") {
+          if (!confirmPolicyReplacement()) return;
+          setPolicyDraft(template.content, `Draft loaded from ${template.name}. Validate and review it before activation.`);
+          closePolicyTemplateSelector();
+        } else {
+          throw new Error("Unsupported template editor. The draft was not changed.");
+        }
+      } catch (err) {
+        if (generation === policyTemplateLoadGeneration) document.getElementById("policyTemplateError").textContent = "Could not load template: " + err.message;
+      } finally {
+        if (generation === policyTemplateLoadGeneration) {
+          document.getElementById("policyTemplateContinue").disabled = false;
+          document.getElementById("policyTemplateChoice").disabled = false;
+        }
+      }
+    }
 
     function confirmPolicyReplacement() {
       const current = document.getElementById("policyEditor").value;

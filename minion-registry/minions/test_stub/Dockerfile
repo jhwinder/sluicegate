@@ -1,0 +1,7 @@
+FROM python:3.12-slim
+WORKDIR /app
+COPY minion-registry/minions/test_stub/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+COPY minion-registry/minions/test_stub/worker.py ./worker.py
+COPY minion-registry/minions/test_stub/minion-release.json ./minion-release.json
+CMD ["python", "worker.py"]

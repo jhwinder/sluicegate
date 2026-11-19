@@ -43,6 +43,7 @@ SIGNING_KEY_PATH = Path(os.environ.get("SG_SIGNING_KEY_PATH", "/run/secrets/sg-s
 PATCH_MINION_ID = os.environ.get("SG_PATCH_MINION_ID", "PATCH-01")
 POLICY_PATH = Path(os.environ.get("SG_POLICY_PATH", "/config/policy.yml"))
 ADMIN_HTML_PATH = Path(__file__).resolve().parent / "static" / "admin.html"
+POLICY_TEMPLATE_DIR = Path(os.environ.get("SG_POLICY_TEMPLATE_DIR", str(Path(__file__).resolve().parent / "policy_templates")))
 MAX_MINION_RESULT_BYTES = 256 * 1024
 MINION_STALE_SECONDS = int(os.environ.get("SG_MINION_STALE_SECONDS", "300"))
 ALLOW_FALLBACK_MINION = os.environ.get("SG_ALLOW_FALLBACK_MINION", "false").lower() == "true"
@@ -815,7 +816,7 @@ def initialize() -> None:
                 connection.execute(
                     """
                     INSERT INTO minions (minion_id, type_id, name, runtime_type, version, package_sha256, release_schema, capabilities, scope_metadata, public_key, created_at, updated_at)
-                    VALUES ('DEMO-STUB-01', ?, ?, ?, ?, ?, 2, ?, '{"targets": ["*"]}', ?, ?, ?)
+                    VALUES ('DEMO-STUB-01', ?, ?, ?, ?, ?, 2, ?, '{"targets": ["stripe.refund", "stripe.charge"]}', ?, ?, ?)
                     ON CONFLICT(minion_id) DO UPDATE SET
                         type_id = CASE WHEN minions.type_id = 'DEMO-STUB' THEN excluded.type_id ELSE minions.type_id END,
                         version = CASE WHEN minions.type_id = 'DEMO-STUB' THEN excluded.version ELSE minions.version END,
@@ -2214,21 +2215,31 @@ def list_audit_events(
 def admin_request_status(request_id: str, _admin: str = Depends(require_admin)) -> dict[str, Any]:
     with connect() as connection:
         row = connection.execute(
-            "SELECT mission_id, minion_id, envelope, status, created_at, updated_at FROM missions WHERE request_id = ?",
+            "SELECT mission_id, agent_id, minion_id, envelope, raw_request, status, created_at, updated_at FROM missions WHERE request_id = ?",
             (request_id,),
         ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Request not found")
     envelope = json.loads(row["envelope"])
+    try:
+        submitted_request = json.loads(row["raw_request"]) if row["raw_request"] else None
+    except (TypeError, ValueError):
+        submitted_request = None
+    if not isinstance(submitted_request, dict) or not submitted_request:
+        submitted_request = None
     return {
         "request_id": request_id,
         "mission_id": row["mission_id"],
+        "agent_id": row["agent_id"],
         "minion_id": row["minion_id"],
         "status": row["status"],
         "policy_decision": envelope.get("policy_decision"),
         "policy_hash": envelope.get("policy_hash"),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+        "submitted_request": submitted_request,
+        "request_source": "stored_request" if submitted_request is not None else "unavailable",
+        "mission_envelope": envelope,
     }
 
 
@@ -2411,6 +2422,53 @@ def get_policy(_admin: str = Depends(require_admin)) -> dict[str, str]:
             "file_hash": hashlib.sha256(content_bytes).hexdigest(),
             "active_policy_hash": policy_engine.policy_hash_full if policy_engine else "",
         }
+
+
+def policy_template_catalog() -> list[dict[str, str]]:
+    try:
+        entries = json.loads((POLICY_TEMPLATE_DIR / "catalog.json").read_text(encoding="utf-8"))
+        if not isinstance(entries, list):
+            raise ValueError("Expected a template list")
+        seen = set()
+        for entry in entries:
+            if not isinstance(entry, dict) or not all(isinstance(entry.get(key), str) and entry[key].strip() for key in ("id", "name", "description", "editor_mode")):
+                raise ValueError("Invalid template metadata")
+            if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", entry["id"]) or entry["id"] in seen:
+                raise ValueError("Invalid or duplicate template ID")
+            if entry["editor_mode"] not in {"patching_wizard", "yaml"}:
+                raise ValueError("Unsupported template editor")
+            if entry["editor_mode"] == "yaml" and not isinstance(entry.get("file"), str):
+                raise ValueError("Missing template file")
+            seen.add(entry["id"])
+        return entries
+    except (OSError, ValueError):
+        raise HTTPException(status_code=503, detail="Policy template catalog is unavailable or invalid") from None
+
+
+@app.get("/admin/v1/policy/templates")
+def list_policy_templates(_admin: str = Depends(require_admin)) -> list[dict[str, str]]:
+    return [{key: entry[key] for key in ("id", "name", "description", "editor_mode")} for entry in policy_template_catalog()]
+
+
+@app.get("/admin/v1/policy/templates/{template_id}")
+def get_policy_template(template_id: str, _admin: str = Depends(require_admin)) -> dict[str, Any]:
+    entry = next((entry for entry in policy_template_catalog() if entry["id"] == template_id), None)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Policy template not found")
+    result = {key: entry[key] for key in ("id", "name", "description", "editor_mode")}
+    if entry["editor_mode"] == "yaml":
+        try:
+            path = (POLICY_TEMPLATE_DIR / entry["file"]).resolve()
+            if not path.is_relative_to(POLICY_TEMPLATE_DIR.resolve()) or path.suffix not in {".yml", ".yaml"}:
+                raise ValueError("Invalid template path")
+            content = path.read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            raise HTTPException(status_code=503, detail="Policy template file is unavailable") from None
+        _, issues, is_valid = validate_policy_content(content)
+        if not is_valid:
+            raise HTTPException(status_code=422, detail={"message": "Policy template is invalid", "issues": issues})
+        result["content"] = content
+    return result
 
 
 @app.post("/admin/v1/policy/validate")

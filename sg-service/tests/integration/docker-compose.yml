@@ -1,0 +1,40 @@
+services:
+  sg-service:
+    build:
+      context: ../../..
+      dockerfile: sg-service/Dockerfile
+    image: sluicegate-test-service:${SG_E2E_IMAGE_TAG}
+    environment:
+      SG_DATABASE_PATH: /data/service.sqlite3
+      SG_SIGNING_KEY_PATH: /run/secrets/sg-signing-key.pem
+      SG_POLICY_PATH: /config/test-policy.yml
+      SG_POLICY_TEMPLATE_DIR: /config/templates
+      SG_BOOTSTRAP_ADMIN_KEY: ${SG_BOOTSTRAP_ADMIN_KEY:?run the integration test runner}
+      SG_DEV_BOOTSTRAP: "false"
+    ports:
+      - "127.0.0.1::8443"
+    volumes:
+      - test-data:/data
+      - ${SG_E2E_SECRETS_DIR}/sg-signing-key.pem:/run/secrets/sg-signing-key.pem:ro
+      - ${SG_E2E_SECRETS_DIR}/policy:/config
+
+  test-minion:
+    build:
+      context: ../../..
+      dockerfile: minion-registry/minions/test_stub/Dockerfile
+    image: sluicegate-test-minion:${SG_E2E_IMAGE_TAG}
+    profiles: [test]
+    environment:
+      MISSION_CONTROL_URL: http://sg-service:8443
+      MINION_ALLOW_INSECURE_HTTP: "true"
+      MINION_ID: TEST-STUB-01
+      MINION_API_KEY: ${SG_TEST_MINION_KEY:-}
+      MINION_PRIVATE_KEY_PATH: /run/secrets/test-minion-key.pem
+      MINION_POLL_INTERVAL_SECONDS: "1"
+    volumes:
+      - ${SG_E2E_SECRETS_DIR}/test-minion-key.pem:/run/secrets/test-minion-key.pem:ro
+    depends_on:
+      - sg-service
+
+volumes:
+  test-data:

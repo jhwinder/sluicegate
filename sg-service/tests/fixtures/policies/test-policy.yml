@@ -1,0 +1,73 @@
+version: 1
+
+default:
+  decision: BLOCK
+
+rules:
+  # Patching targets and execution settings are policy-owned.
+  - name: pause-patch-test-host-for-approval
+    when:
+      - path: action.name
+        eq: windows.patch.reconcile
+      - path: target.servers
+        eq: [patch-reboot-test.example.gov]
+      - path: context.approval.approved
+        exists: false
+    obligations:
+      - type: allowed_patch_targets
+        servers: [patch-reboot-test.example.gov]
+      - type: patch_constraints
+        patch_sources: [wsus, nessus_catalog]
+        allowed_patch_types: [SECURITY]
+        allow_reboot: true
+        maintenance_window:
+          timezone: America/New_York
+          days: [SAT]
+          start: "01:00"
+          end: "05:00"
+        outside_window: WAIT
+      - type: allowed_patch_executables
+        executables: [msiexec.exe]
+    decision: PAUSE
+  - name: allow-demo-security-patching-without-reboot
+    when:
+      - path: action.name
+        eq: windows.patch.reconcile
+      - path: target.servers
+        eq: [patch-test.example.gov]
+    obligations:
+      - type: allowed_patch_targets
+        servers: [patch-test.example.gov]
+      - type: patch_constraints
+        patch_sources: [wsus, nessus_catalog]
+        allowed_patch_types: [SECURITY]
+        allow_reboot: false
+        maintenance_window: null
+      - type: allowed_patch_executables
+        executables: [msiexec.exe]
+    decision: ALLOW
+  - name: allow-demo-patch-test-host-after-approval
+    when:
+      - path: action.name
+        eq: windows.patch.reconcile
+      - path: target.servers
+        eq: [patch-reboot-test.example.gov]
+      - path: context.approval.approved
+        eq: true
+    obligations:
+      - type: allowed_patch_targets
+        servers: [patch-reboot-test.example.gov]
+      - type: patch_constraints
+        patch_sources: [wsus, nessus_catalog]
+        allowed_patch_types: [SECURITY]
+        allow_reboot: true
+        maintenance_window:
+          timezone: America/New_York
+          days: [SAT]
+          start: "01:00"
+          end: "05:00"
+        outside_window: WAIT
+      - type: allowed_patch_executables
+        executables: [msiexec.exe]
+    decision: ALLOW
+

@@ -43,6 +43,8 @@ cleanup() {
   exit "$result"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 umask 077
 mkdir "$workdir/policy"
@@ -52,6 +54,7 @@ openssl genpkey -algorithm ED25519 -out "$workdir/demo-minion-key.pem"
 openssl pkey -in "$workdir/demo-minion-key.pem" -pubout -out "$workdir/demo-minion-public.pem"
 
 "${compose[@]}" up --build --detach
+"${compose[@]}" exec -T sg-service python - < "$root/sg-service/tests/integration/verify_runtime.py"
 export SG_E2E_SERVICE_PORT="$("${compose[@]}" port sg-service 8443 | awk -F: '{print $NF}')"
 export SG_E2E_BACKEND_PORT="$("${compose[@]}" port backend 8000 | awk -F: '{print $NF}')"
 export SG_E2E_FRONTEND_PORT="$("${compose[@]}" port frontend 80 | awk -F: '{print $NF}')"

@@ -1,0 +1,315 @@
+import assert from "node:assert/strict";
+import { readFile, writeFile } from "node:fs/promises";
+import { generateKeyPairSync } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { chromium } from "playwright";
+import { service, adminHeaders, json, waitFor, requestState, auditEvents } from "./helpers.mjs";
+
+const agentKey = (await readFile(`${process.env.SG_E2E_SECRETS_DIR}/test-agent-api-key`, "utf8")).trim();
+await waitFor("TEST Minion check-in", async () => {
+  const minions = await json(`${service}/admin/v1/minions`, { headers: adminHeaders });
+  assert.ok(!minions.some(minion => minion.minion_id === "DEMO-STUB-01"));
+  return minions.some(minion => minion.minion_id === "TEST-STUB-01" && minion.release_status === "MATCH");
+});
+const browser = await chromium.launch({ headless: true, ...(process.env.SG_E2E_CHROMIUM_PATH ? { executablePath: process.env.SG_E2E_CHROMIUM_PATH } : {}) });
+try {
+  const adminPage = await browser.newPage();
+  adminPage.on("dialog", dialog => dialog.accept());
+  await adminPage.goto(`${service}/admin/ui`);
+  await adminPage.locator("#adminTokenInput").fill(process.env.SG_BOOTSTRAP_ADMIN_KEY);
+  await adminPage.locator('button[onclick="saveAdminToken()"]').click();
+  await adminPage.locator('.nav-tab[onclick="switchTab(\'minions\')"]').click();
+  const manifest = {
+    schema_version: 2, type_id: "E2E-PATCHER", family: "e2e-patcher", name: "E2E Patcher", version: "2.0",
+    runtime_type: "powershell", artifact: "patcher.zip", package_sha256: "a".repeat(64),
+    capabilities: ["windows.patch.reconcile", "windows.patch.status"], requires_target_scope: true,
+    instance_fields: [{ id: "owner", label: "Owner team", required: true }], release_files: ["worker.py"],
+  };
+  await adminPage.locator("#minionManifestFile").setInputFiles({
+    name: "patcher.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(manifest)),
+  });
+  const typeRow = adminPage.locator("#minionTypesTableBody tr").filter({ hasText: manifest.type_id });
+  await typeRow.waitFor();
+  await adminPage.getByRole("button", { name: "+ Add Deployed Minion" }).click();
+  await adminPage.locator("#deployMinionType").selectOption(manifest.type_id);
+  assert.match(await adminPage.locator("#deployMinionTypeDetails").innerText(), /patcher.zip/);
+  await adminPage.locator("#newMinionId").fill("E2E-INSTANCE");
+  await adminPage.locator("#newMinionTargets").fill("test-*.example.gov");
+  await adminPage.locator('#deployMinionFields input[data-field-id="owner"]').fill("Operations");
+  await adminPage.locator('#deployMinionCapabilities input[value="windows.patch.status"]').uncheck();
+  const publicKey = generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "pem" });
+  await adminPage.locator("#newMinionPubKey").fill(publicKey);
+  await adminPage.locator("#registerMinionModal").getByRole("button", { name: "Save" }).click();
+  const instanceRow = adminPage.locator("#minionsTableBody tr").filter({ hasText: "E2E-INSTANCE" });
+  await instanceRow.waitFor();
+  assert.match(await instanceRow.innerText(), /NOT REPORTED/);
+  const nextRelease = { ...manifest, type_id: "E2E-NEW-PATCHER", version: "3.0", package_sha256: "b".repeat(64) };
+  await adminPage.locator("#minionManifestFile").setInputFiles({
+    name: "patcher-3.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(nextRelease)),
+  });
+  const nextTypeRow = adminPage.locator("#minionTypesTableBody tr").filter({ hasText: nextRelease.type_id });
+  await nextTypeRow.waitFor();
+  await instanceRow.getByRole("button", { name: "Assign Release" }).click();
+  await adminPage.locator("#assignMinionRelease").selectOption(nextRelease.type_id);
+  await adminPage.locator("#assignMinionReleaseModal").getByRole("button", { name: "Assign", exact: true }).click();
+  await instanceRow.getByText("Assigned: 3.0").waitFor();
+  assert.ok(await nextTypeRow.getByRole("button", { name: "Delete" }).isDisabled());
+  assert.ok(await nextTypeRow.getByRole("button", { name: "Disable" }).isDisabled());
+  await instanceRow.getByRole("button", { name: "Edit" }).click();
+  assert.equal(await adminPage.locator('#deployMinionFields input[data-field-id="owner"]').inputValue(), "Operations");
+  await adminPage.locator("#newMinionTargets").fill("updated.example.gov");
+  await adminPage.locator('#deployMinionCapabilities input[value="windows.patch.status"]').check();
+  await adminPage.locator("#registerMinionModal").getByRole("button", { name: "Save" }).click();
+  await instanceRow.getByText("updated.example.gov").waitFor();
+  assert.match(await instanceRow.innerText(), /windows\.patch\.status/i);
+  await instanceRow.getByRole("button", { name: "Disable" }).click();
+  await instanceRow.getByRole("button", { name: "Enable", exact: true }).waitFor();
+  await instanceRow.getByRole("button", { name: "Enable", exact: true }).click();
+  await instanceRow.getByRole("button", { name: "Disable", exact: true }).waitFor();
+  await instanceRow.getByRole("button", { name: "Delete", exact: true }).click();
+  await instanceRow.waitFor({ state: "detached" });
+  await typeRow.getByRole("button", { name: "Disable" }).click();
+  await typeRow.getByRole("button", { name: "Enable" }).waitFor();
+  await typeRow.getByRole("button", { name: "Delete" }).click();
+  await typeRow.waitFor({ state: "detached" });
+  await nextTypeRow.getByRole("button", { name: "Delete" }).click();
+  await nextTypeRow.waitFor({ state: "detached" });
+  console.log("MINIONS: manifest import and type/deployment lifecycle verified");
+  await adminPage.close();
+  async function openNewPolicy(page) {
+    await page.getByRole("button", { name: "Create New" }).click();
+    await page.locator("#policyTemplateSelector").waitFor({ state: "visible" });
+    assert.equal(await page.locator("#policyWizard").isVisible(), false);
+    assert.equal(await page.locator("#policyTemplateContinue").isDisabled(), true);
+    await page.locator("#policyTemplateChoice").selectOption("patching");
+    await page.locator("#policyTemplateContinue").click();
+    await page.locator("#policyWizard").waitFor({ state: "visible" });
+  }
+  const policyPage = await browser.newPage({ acceptDownloads: true });
+  let acceptConfirmation = true;
+  policyPage.on("dialog", async (dialog) => {
+    if (acceptConfirmation) await dialog.accept();
+    else await dialog.dismiss();
+  });
+  await policyPage.goto(`${service}/admin/ui`);
+  await policyPage.locator("#adminTokenInput").fill(process.env.SG_BOOTSTRAP_ADMIN_KEY);
+  await policyPage.locator('button[onclick="saveAdminToken()"]').click();
+  await policyPage.locator('.nav-tab[onclick="switchTab(\'policy\')"]').click();
+  await policyPage.waitForFunction(() => document.getElementById("policyHashInfo").textContent.startsWith("File SHA-256:"));
+  const activePolicy = await json(`${service}/admin/v1/policy`, { headers: adminHeaders });
+  const editor = policyPage.locator("#policyEditor");
+  // Explicit choice is required with one template, and cancel preserves the draft.
+  await policyPage.getByRole("button", { name: "Create New" }).click();
+  await policyPage.locator("#policyTemplateChoice option[value='patching']").waitFor({ state: "attached" });
+  assert.equal(await policyPage.locator("#policyTemplateChoice option").count(), 2);
+  assert.equal(await policyPage.locator("#policyTemplateContinue").isDisabled(), true);
+  await policyPage.locator("#policyTemplateSelector").getByRole("button", { name: "Cancel" }).click();
+  assert.equal(await editor.inputValue(), activePolicy.content);
+
+  // Add a real file-backed template to this disposable instance without changing UI code.
+  const templateDir = `${process.env.SG_E2E_SECRETS_DIR}/policy/templates`;
+  const originalCatalog = await readFile(`${templateDir}/catalog.json`, "utf8");
+  const genericYaml = "# Generic template\nversion: 1\ndefault: {decision: BLOCK}\nrules: []\n";
+  await writeFile(`${templateDir}/generic.yml`, genericYaml);
+  await writeFile(`${templateDir}/catalog.json`, JSON.stringify([
+    ...JSON.parse(originalCatalog),
+    { id: "generic", name: "Generic Policy", description: "Test-only generic YAML template", editor_mode: "yaml", file: "generic.yml" },
+  ]));
+  await editor.fill("# unsaved\n" + activePolicy.content);
+  acceptConfirmation = false;
+  await policyPage.getByRole("button", { name: "Create New" }).click();
+  await policyPage.locator("#policyTemplateChoice").selectOption("generic");
+  await policyPage.locator("#policyTemplateContinue").click();
+  await policyPage.waitForFunction(() => !document.getElementById("policyTemplateContinue").disabled);
+  assert.ok((await editor.inputValue()).startsWith("# unsaved\n"));
+  acceptConfirmation = true;
+  await policyPage.route("**/admin/v1/policy/templates/generic", route => route.fulfill({ status: 503, body: "unavailable" }), { times: 1 });
+  await policyPage.locator("#policyTemplateContinue").click();
+  await policyPage.waitForFunction(() => document.getElementById("policyTemplateError").textContent.includes("Could not load template"));
+  assert.ok((await editor.inputValue()).startsWith("# unsaved\n"));
+  let releaseTemplate;
+  let templateRequested;
+  const templateStarted = new Promise(resolve => { templateRequested = resolve; });
+  const templateDelayed = new Promise(resolve => { releaseTemplate = resolve; });
+  await policyPage.route("**/admin/v1/policy/templates/generic", async route => {
+    templateRequested();
+    await templateDelayed;
+    await route.continue();
+  }, { times: 1 });
+  await policyPage.locator("#policyTemplateContinue").click();
+  await templateStarted;
+  await policyPage.evaluate(() => { document.getElementById("policyEditor").value += "# changed during loading\n"; });
+  releaseTemplate();
+  await policyPage.waitForFunction(() => document.getElementById("policyTemplateError").textContent.includes("draft changed while loading"));
+  assert.ok((await editor.inputValue()).endsWith("# changed during loading\n"));
+  await policyPage.locator("#policyTemplateContinue").click();
+  await policyPage.locator("#policyTemplateSelector").waitFor({ state: "hidden" });
+  assert.equal(await editor.inputValue(), genericYaml);
+  assert.equal((await json(`${service}/admin/v1/policy`, { headers: adminHeaders })).content, activePolicy.content);
+  await writeFile(`${templateDir}/catalog.json`, originalCatalog);
+  await editor.fill(activePolicy.content);
+  await policyPage.getByRole("button", { name: "Edit Policy", exact: true }).click();
+  await policyPage.waitForFunction(() => document.getElementById("policyFeedback").textContent.includes("Could not open policy wizard"));
+  assert.equal(await editor.inputValue(), activePolicy.content);
+  await editor.fill("# unsaved\n" + activePolicy.content);
+  acceptConfirmation = false;
+  await policyPage.getByRole("button", { name: "Reload from Service" }).click();
+  assert.ok((await editor.inputValue()).startsWith("# unsaved\n"));
+  await policyPage.locator('.nav-tab[onclick="switchTab(\'agents\')"]').click();
+  await policyPage.locator('.nav-tab[onclick="switchTab(\'policy\')"]').click();
+  assert.ok((await editor.inputValue()).startsWith("# unsaved\n"));
+  await openNewPolicy(policyPage);
+  const wizard = policyPage.locator("#policyWizard");
+  await wizard.getByRole("button", { name: "Generate YAML" }).click();
+  assert.ok((await editor.inputValue()).startsWith("# unsaved\n"));
+  acceptConfirmation = true;
+  await wizard.getByRole("button", { name: "Generate YAML" }).click();
+  const blank = await editor.inputValue();
+  assert.match(blank, /decision: BLOCK/);
+  assert.match(blank, /rules: \[\]/);
+  assert.equal((await json(`${service}/admin/v1/policy`, { headers: adminHeaders })).content, activePolicy.content);
+  await policyPage.getByRole("button", { name: "Save and Activate" }).click();
+  await policyPage.waitForFunction(() => document.getElementById("policyFeedback").textContent.includes("Policy saved and activated"));
+  assert.equal((await json(`${service}/admin/v1/policy`, { headers: adminHeaders })).content, blank);
+
+  await openNewPolicy(policyPage);
+  assert.ok(await wizard.locator("#wizardZone option[value='America/New_York']").count());
+  await wizard.locator("#wizardTargets").fill("patch-test.example.gov");
+  await wizard.locator('input[name="wizardSource"][value="nessus_catalog"]').check();
+  await wizard.locator("#wizardExecutables").fill("msiexec.exe");
+  await wizard.locator("#wizardWindowEnabled").check();
+  await wizard.locator("#wizardZone").selectOption("America/New_York");
+  await wizard.locator('input[name="wizardDay"][value="SAT"]').check();
+  await wizard.locator("#wizardEnd").fill("01:00");
+  await wizard.getByRole("button", { name: "Add rule" }).click();
+  assert.match(await wizard.locator("#wizardError").innerText(), /different start and end times/);
+  await wizard.locator("#wizardEnd").fill("05:00");
+  await wizard.getByRole("button", { name: "Add rule" }).click();
+  await wizard.locator("#wizardTargets").fill("direct-test.example.gov");
+  await wizard.locator("#wizardApproval").uncheck();
+  await wizard.getByRole("button", { name: "Add rule" }).click();
+  assert.equal(await wizard.locator("#wizardRuleList li").count(), 2);
+  await wizard.getByRole("button", { name: "Generate YAML" }).click();
+  const generated = await editor.inputValue();
+  assert.match(generated, /default:\n  decision: BLOCK/);
+  await policyPage.getByRole("button", { name: "Edit Policy", exact: true }).click();
+  assert.equal(await wizard.locator("#wizardRuleList li").count(), 2);
+  await wizard.getByRole("button", { name: "Edit rule 1" }).click();
+  assert.equal(await wizard.locator("#wizardTargets").inputValue(), "patch-test.example.gov");
+  assert.equal(await wizard.locator("#wizardApproval").isChecked(), true);
+  assert.equal(await wizard.locator("#wizardZone").inputValue(), "America/New_York");
+  await wizard.locator("#wizardReboot").check();
+  await wizard.getByRole("button", { name: "Update rule" }).click();
+  await wizard.getByRole("button", { name: "Generate YAML" }).click();
+  const edited = await editor.inputValue();
+  assert.notEqual(edited, generated);
+  assert.match(edited, /allow_reboot: true/);
+  assert.equal((await json(`${service}/admin/v1/policy`, { headers: adminHeaders })).content, blank);
+  await policyPage.getByRole("button", { name: "Edit Policy", exact: true }).click();
+  await wizard.getByRole("button", { name: "Edit rule 1" }).click();
+  assert.equal(await wizard.locator("#wizardReboot").isChecked(), true);
+  await wizard.locator("#wizardReboot").uncheck();
+  await wizard.getByRole("button", { name: "Update rule" }).click();
+  await wizard.getByRole("button", { name: "Generate YAML" }).click();
+  assert.equal(await editor.inputValue(), generated);
+  await editor.fill("# preserve comment\n" + generated);
+  await policyPage.getByRole("button", { name: "Edit Policy", exact: true }).click();
+  await policyPage.waitForFunction(() => document.getElementById("policyFeedback").textContent.includes("unsupported rules, comments, or formatting"));
+  assert.equal(await editor.inputValue(), "# preserve comment\n" + generated);
+  await editor.fill(generated);
+  const validation = await json(`${service}/admin/v1/policy/validate`, {
+    method: "POST", headers: { ...adminHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify({ content: generated }),
+  });
+  assert.equal(validation.is_valid, true, JSON.stringify(validation.issues));
+  assert.equal((await json(`${service}/admin/v1/policy`, { headers: adminHeaders })).content, blank);
+  const downloadPromise = policyPage.waitForEvent("download");
+  await policyPage.getByRole("button", { name: "Download YAML" }).click();
+  const download = await downloadPromise;
+  assert.equal(await readFile(await download.path(), "utf8"), generated);
+
+  const imported = "# imported policy, preserve unknown content\nversion: 1\ndefault: {decision: BLOCK}\nrules: []\n";
+  await policyPage.locator("#policyFile").setInputFiles({ name: "custom.yaml", mimeType: "application/yaml", buffer: Buffer.from(imported) });
+  await policyPage.waitForFunction((text) => document.getElementById("policyEditor").value === text, imported);
+  assert.equal((await json(`${service}/admin/v1/policy`, { headers: adminHeaders })).content, blank);
+  await policyPage.locator("#policyFile").setInputFiles({ name: "generated.yaml", mimeType: "application/yaml", buffer: Buffer.from(generated) });
+  await policyPage.waitForFunction((text) => document.getElementById("policyEditor").value === text, generated);
+  await policyPage.getByRole("button", { name: "Save and Activate" }).click();
+  await policyPage.waitForFunction(() => document.getElementById("policyFeedback").textContent.includes("Policy saved and activated"));
+
+  async function submitPatch(servers) {
+    const response = await fetch(`${service}/api/v1/patch-requests`, {
+      method: "POST",
+      headers: { Authorization: "Bearer " + agentKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ servers }),
+    });
+    if (response.status !== 202) throw new Error(`Patch request failed: ${response.status} ${await response.text()}`);
+    return response.json();
+  }
+  const pendingPatch = await submitPatch(["patch-test.example.gov"]);
+  assert.equal((await requestState(pendingPatch.request_id)).status, "WAITING_FOR_APPROVAL");
+  const issued = (await auditEvents(pendingPatch.request_id)).find((event) => event.event_type === "mission.issued");
+  assert.deepEqual(issued.detail.signed_envelope.target.servers, ["patch-test.example.gov"]);
+  const parameters = issued.detail.signed_envelope.parameters;
+  assert.deepEqual(parameters.patch_sources, ["wsus", "nessus_catalog"]);
+  assert.deepEqual(parameters.patch_constraints.allowed_patch_types, ["SECURITY"]);
+  assert.equal(parameters.patch_constraints.allow_reboot, false);
+  assert.deepEqual(parameters.maintenance_window, { timezone: "America/New_York", days: ["SAT"], start: "01:00", end: "05:00" });
+  assert.deepEqual(
+    issued.detail.signed_envelope.obligations.find((item) => item.type === "allowed_patch_executables").data.executables,
+    ["msiexec.exe"],
+  );
+  const approvedPatch = await fetch(`${service}/admin/v1/requests/${pendingPatch.request_id}/approve`, {
+    method: "POST", headers: { ...adminHeaders, "Content-Type": "application/json" }, body: "{}",
+  });
+  assert.equal(approvedPatch.status, 200);
+  assert.equal((await approvedPatch.json()).decision, "ALLOW");
+  await waitFor("approved patch simulation to complete on TEST", async () => {
+    const current = await requestState(pendingPatch.request_id);
+    return current.status === "MISSION_COMPLETE_SUCCEEDED" && current.minion_id === "TEST-STUB-01";
+  });
+  const completed = (await auditEvents(pendingPatch.request_id)).find(event => event.event_type === "minion.result");
+  assert.equal(completed.signature_verified, true);
+  assert.equal(completed.detail.signed_payload.result.test, true);
+  assert.equal(completed.detail.signed_payload.result.executed, false);
+  const unrelatedPatch = await submitPatch(["other.example.gov"]);
+  assert.equal((await requestState(unrelatedPatch.request_id)).status, "CLOSED");
+  assert.equal((await requestState(unrelatedPatch.request_id)).policy_decision, "BLOCK");
+  const directPatch = await submitPatch(["direct-test.example.gov"]);
+  assert.equal((await requestState(directPatch.request_id)).policy_decision, "ALLOW");
+  const active = await json(`${service}/admin/v1/policy`, { headers: adminHeaders });
+  const otherSave = await fetch(`${service}/admin/v1/policy`, {
+    method: "POST", headers: { ...adminHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify({ content: blank, expected_file_hash: active.file_hash }),
+  });
+  assert.equal(otherSave.status, 200);
+  await editor.fill(generated + "# stale local draft\n");
+  await policyPage.getByRole("button", { name: "Save and Activate" }).click();
+  await policyPage.waitForFunction(() => document.getElementById("policyFeedback").textContent.includes("Policy was not activated"));
+  assert.match(await policyPage.locator("#policyFeedback").innerText(), /changed since it was loaded/);
+  assert.equal((await json(`${service}/admin/v1/policy`, { headers: adminHeaders })).content, blank);
+  await policyPage.close();
+  console.log("POLICY: wizard, file round-trip, draft safety, and patch decisions verified");
+
+  const container = process.env.SG_E2E_MINION_CONTAINER;
+  assert.ok(container, "Missing isolated TEST Minion container ID");
+  function minionPython(code) {
+    execFileSync("docker", ["exec", container, "python", "-c", code], { stdio: "pipe" });
+  }
+  try {
+    minionPython("from pathlib import Path; p=Path('/app/worker.py'); Path('/tmp/worker-backup').write_bytes(p.read_bytes()); p.write_bytes(p.read_bytes()+b'\\n# drift\\n')");
+    await waitFor("release drift to clear the report", async () => {
+      const minions = await json(`${service}/admin/v1/minions`, { headers: adminHeaders });
+      return minions.find((minion) => minion.minion_id === "TEST-STUB-01")?.release_status === "NOT REPORTED";
+    });
+  } finally {
+    minionPython("from pathlib import Path; Path('/app/worker.py').write_bytes(Path('/tmp/worker-backup').read_bytes())");
+  }
+  await waitFor("restored running release to match", async () => {
+    const minions = await json(`${service}/admin/v1/minions`, { headers: adminHeaders });
+    return minions.find((minion) => minion.minion_id === "TEST-STUB-01")?.release_status === "MATCH";
+  });
+  console.log("RELEASE: running Minion detects modified files and recovers after restoration");
+} finally {
+  await browser.close();
+}

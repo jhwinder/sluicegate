@@ -8,7 +8,6 @@ services:
       SG_DATABASE_PATH: /data/sg-service.sqlite3
       SG_SIGNING_KEY_PATH: /run/secrets/sg-signing-key.pem
       SG_POLICY_PATH: /config/demo-policy.yml
-      SG_PATCH_MINION_ID: DEMO-STUB-01
       SG_BOOTSTRAP_ADMIN_KEY: ${SG_BOOTSTRAP_ADMIN_KEY:?create a local .env file}
       SG_DEV_BOOTSTRAP: "true"
       SG_DEV_AGENT_KEY: ${SG_DEMO_AGENT_KEY:?create a local .env file}
@@ -52,11 +51,8 @@ services:
       SG_SERVICE_URL: http://sg-service:8443
       SG_AGENT_API_KEY: ${SG_DEMO_AGENT_KEY:?create a local .env file}
       SG_ADMIN_API_KEY: ${SG_BOOTSTRAP_ADMIN_KEY:?create a local .env file}
-      POLICY_PATH: /policies/policy.yml
       BASE_URL: http://localhost:8000
       UI_URL: http://localhost:8080
-    volumes:
-      - ./policies:/policies:ro
     depends_on:
       - sg-service
 

@@ -110,6 +110,18 @@ uv build --package sg-service
 uv run --package sg-service --group dev pytest -q sg-service/tests
 ```
 
+The full validation workflow verifies both DEMO and TEST releases and runs separate container stacks:
+
+```sh
+uv run --locked --package sg-service --group dev python minion-registry/release_manifest.py
+npm ci --prefix sluice-demo/tests/e2e
+npm exec --prefix sluice-demo/tests/e2e -- playwright install chromium
+bash sluice-demo/tests/e2e/run.sh
+bash sg-service/tests/integration/run.sh
+```
+
+Unit tests provision temporary state only when requested and do not require a worker container. The TEST runner creates its own service, patching simulation worker, policy, credentials, and database; it removes them on exit. Ordinary service and DEMO startup do not provision TEST. Both stacks are built and exercised by the default CI workflow.
+
 To run the local demo stack, generate development signing keys with `deployment/compose/Generate-DemoKeys.ps1`, copy `sluice-demo/.env.example` to `sluice-demo/.env`, replace the development placeholders, then run:
 
 ```sh
@@ -117,6 +129,8 @@ docker compose --env-file sluice-demo/.env -f sluice-demo/docker-compose.yml up 
 ```
 
 The demo Minion is a safe no-op; it does not patch servers or perform real payments. The Windows Server 2022 deployment scripts are under `deployment/windows/`; a complete release bundle also requires the signed Windows Minion service executable.
+
+DEMO uses the payment-only `sg-service/policies/demo-policy.yml` and the `demo-stub` release family. Automated patching scenarios use the separate `test-stub` family and `sg-service/tests/fixtures/policies/test-policy.yml`. See the [demo guide](sluice-demo/README.md) for upgrading a persisted demo database.
 
 **Status**
 

@@ -78,15 +78,16 @@ def decide(req: ActionRequest):
         "capability": req.action,
         "target": {"type": "API", "id": req.action},
         "parameters": {
+            **req.metadata,
             "amount": req.amount,
             "currency": (req.currency or "USD").upper(),
-            **req.metadata,
         },
         "context": {
             "demo": True,
             "amount": req.amount,
             "currency": (req.currency or "USD").upper(),
             "agent_type": req.metadata.get("agent_type", "Billing Agent"),
+            "demo_metadata": req.metadata,
         },
     }
 
@@ -151,8 +152,8 @@ def get_request(request_id: str):
             headers=admin_headers(),
             timeout=10.0,
         )
-        if r.status_code == 404:
-            raise HTTPException(status_code=404, detail="Not found")
+        if r.status_code != 200:
+            raise HTTPException(status_code=r.status_code, detail="Failed to retrieve request from sg_service")
         data = r.json()
     except requests.RequestException as e:
         raise HTTPException(status_code=503, detail=f"sg_service error: {e}")
@@ -169,15 +170,33 @@ def get_request(request_id: str):
     else:
         ui_status = "PENDING"
 
+    submitted = data.get("submitted_request")
+    source = data.get("request_source", "unavailable")
+    if not isinstance(submitted, dict):
+        # Older records may retain execution parameters but no original request.
+        # Identify this fallback instead of claiming it is the submitted input.
+        submitted = data.get("mission_envelope")
+        source = "mission_envelope" if isinstance(submitted, dict) else "unavailable"
+    submitted = submitted if isinstance(submitted, dict) else {}
+    parameters = submitted.get("parameters")
+    parameters = parameters if isinstance(parameters, dict) else {}
+    context = submitted.get("context")
+    context = context if isinstance(context, dict) else {}
+    metadata = context.get("demo_metadata")
+    if not isinstance(metadata, dict):
+        # Legacy demos flattened metadata into parameters alongside these fields.
+        metadata = {key: value for key, value in parameters.items() if key not in {"amount", "currency"}} or None
+
     return {
         "request_id": request_id,
         "created_at": data.get("created_at", 0),
         "payload": {
-            "action": "stripe.refund",
-            "amount": 0,
-            "currency": "USD",
-            "metadata": {},
+            "action": submitted.get("capability"),
+            "amount": parameters.get("amount"),
+            "currency": parameters.get("currency"),
+            "metadata": metadata,
         },
+        "payload_source": source,
         "decision": decision,
         "status": ui_status,
         "policy_hash": data.get("policy_hash", ""),

@@ -39,6 +39,9 @@ jobs:
           uv build --package sg-core
           uv build --package sg-service
 
+      - name: Verify Minion release manifests
+        run: uv run --locked --package sg-service --group dev python minion-registry/release_manifest.py
+
       - name: Upload pytest results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -70,7 +73,7 @@ jobs:
         run: dotnet test deployment/windows/MinionHost.Tests/MinionHost.Tests.csproj --configuration Release
 
   demo-e2e:
-    name: Demo browser and Minion end-to-end
+    name: Demo smoke and isolated TEST integration
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -85,3 +88,5 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Run isolated Compose end-to-end tests
         run: bash sluice-demo/tests/e2e/run.sh
+      - name: Run isolated TEST worker and admin browser tests
+        run: bash sg-service/tests/integration/run.sh

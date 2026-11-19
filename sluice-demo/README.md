@@ -46,10 +46,10 @@ All execution paths flow through the gate.
     ├── backend
     │   └── app/           # SluiceGate API + enforcement logic
     ├── docker-compose.yml
-    ├── frontend
-    │   └── index.html     # Minimal UI for demoing decisions
-    └── policies
-        └── policy.yml     # Human-readable policy rules
+    └── frontend
+        └── index.html     # Minimal UI for demoing decisions
+
+The active demo policy is `sg-service/policies/demo-policy.yml`, evaluated by `sg-service`. The backend forwards canonical action requests to that service; it does not evaluate a separate policy file.
 
 ## Email approvals (optional)
 
@@ -118,3 +118,39 @@ Approvals can be performed directly in the UI.
 - This demo is intentionally minimal and auditable
 - `sg_core` is built from the local monorepo source; demo containers do not install `sg-core` from PyPI
 - The `demo-minion` service only acknowledges and completes no-op Missions; patching uses the separate Windows deployment package
+
+## Request Details
+
+The request details panel reads durable submitted values from `sg-service`, including the selected action, amount, currency, and metadata. Currency is normalized to uppercase; amount units are unchanged. Metadata cannot override the amount or currency used for policy evaluation. Missing legacy values are shown as `null`, with `payload_source` identifying any Mission-envelope fallback.
+
+Existing requests with stored parameters display their actual amounts through the corrected reader. This does not rewrite historical audit events or infer missing amounts from an ALLOW/PAUSE/BLOCK decision. In the service's **Missions & Audit** tab, Inspect shows the same submitted request and its separately labeled current Mission state.
+
+## DEMO and TEST Workflows
+
+DEMO advertises only `stripe.refund` and `stripe.charge` and blocks patch requests. `DEMO-STUB-1.1.0` belongs to the `demo-stub` family. The separate `TEST-STUB-1.0.0` release belongs to `test-stub` and simulates patching only. The Windows Patching Minion remains the real patching implementation.
+
+From the repository root, install browser dependencies once and run either suite:
+
+```sh
+npm ci --prefix sluice-demo/tests/e2e
+npm exec --prefix sluice-demo/tests/e2e -- playwright install chromium
+bash sluice-demo/tests/e2e/run.sh
+bash sg-service/tests/integration/run.sh
+```
+
+The first runner starts a clean payment demo and exercises its browser flows. The second provisions a TEST Minion through authenticated APIs, using a separate service, keys, policy copy, temporary template catalog, and database. It exercises the admin registry, template selection, policy editing, patching simulation, and release drift. Neither runner edits the checked-in policy or uses the ordinary demo volume. Both remove their own temporary resources on exit. Set `SG_TEST_FORCE_FAILURE=true` for the TEST runner to verify failure cleanup.
+
+Unit tests run independently with `uv run --locked --package sg-service --group dev pytest -q sg-service/tests`; they do not require a worker container. Normal service/DEMO image builds exclude TEST workers, policies, manifests, and test dependencies. The default CI workflow builds and validates both sets of artifacts.
+
+## Upgrade an Existing DEMO Database
+
+The new DEMO release removes patching and generic test capabilities. Registered releases remain immutable, and restarting the service does not automatically reassign an existing `DEMO-STUB-1.0.0` instance.
+
+1. Pause new demo submissions and let outstanding Missions finish under the old worker/policy. Back up the demo database if preserving its history.
+2. Stop the old DEMO worker. Build the updated service and DEMO images, then start the service using the clean demo policy and the existing database volume.
+3. In **Minion Registry**, make `DEMO-STUB-1.1.0` available from `minion-registry/minions/demo_stub/minion-release.json` if it is not already listed. Development bootstrap makes the new type available, but preserves the instance's existing assignment.
+4. Edit `DEMO-STUB-01` to retain only `stripe.refund` and `stripe.charge`, with target scope `stripe.refund, stripe.charge`. Remove `windows.patch.reconcile`, `demo.action`, and the old wildcard scope before assigning the narrower release.
+5. Select **Assign Release** and assign `DEMO-STUB-1.1.0`. The service requires no unfinished Missions and clears the old release report.
+6. Start the updated DEMO worker and confirm **MATCH** and healthy check-in before resuming submissions. Verify that a payment demo succeeds and a patch request is blocked.
+
+Keep old release identities, Missions, and audit records for history. TEST belongs in the disposable integration stack; retire obsolete test-capable deployments explicitly. Only reset the demo database volume when its contents are disposable, and keep operational deployments separate.

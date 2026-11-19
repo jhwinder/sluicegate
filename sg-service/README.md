@@ -39,12 +39,14 @@ docker run -d \
   -p 127.0.0.1:8443:8443 \
   -v sg-service-data:/data \
   -v "$PWD/secrets/sg-signing-key.pem:/run/secrets/sg-signing-key.pem:ro" \
-  -v "$PWD/sg-service/policies:/config:rw" \
+  -v "$PWD/secrets/policy:/config:rw" \
   -e SG_BOOTSTRAP_ADMIN_KEY="admin-secret-key-123" \
   -e SG_SIGNING_KEY_PATH="/run/secrets/sg-signing-key.pem" \
-  -e SG_POLICY_PATH="/config/demo-policy.yml" \
+  -e SG_POLICY_PATH="/config/production-policy.yml" \
   sluicegate/sg-service:local
 ```
+
+Before starting the container, create `secrets/policy/` and copy `deployment/windows/policy.starter.yml` there as `production-policy.yml`, or provide an authored operational policy. The starter blocks all requests. DEMO and TEST policies belong to their respective development/test stacks.
 
 ### Step 4: Verify Service Health
 ```sh
@@ -65,7 +67,8 @@ curl -fsS http://127.0.0.1:8443/health
 | `SG_PATCH_MINION_ID` | `PATCH-01` | Minion ID used only when `SG_ALLOW_FALLBACK_MINION=true` and no registered Minion is eligible. |
 | `SG_ALLOW_FALLBACK_MINION` | `false` | Development only. Routes to an enabled `SG_PATCH_MINION_ID` with a matching release when no eligible Minion exists; it bypasses normal scope, capability, environment and freshness checks. The routing record and a warning log mark it as a fallback. |
 | `SG_MINION_STALE_SECONDS` | `300` | A Minion with no check-in or claim within this window (or never) is not routable. `0` disables the check. |
-| `SG_DEV_BOOTSTRAP` | `false` | When `true`, automatically registers development agent & minion keys (the development Minion's scope is `*`). |
+| `SG_DEV_BOOTSTRAP` | `false` | When `true`, registers the payment DEMO agent and Minion. Its target scope is limited to `stripe.refund` and `stripe.charge`. TEST is provisioned only by test fixtures/runners. Existing DEMO deployments require the [explicit release upgrade](../sluice-demo/README.md#upgrade-an-existing-demo-database). |
+| `SG_POLICY_TEMPLATE_DIR` | Packaged `sg_service/policy_templates/` | Optional directory containing an approved template catalog and YAML template files. This selects creation templates, independently of the active `SG_POLICY_PATH`. |
 | `SG_MINION_MAX_ATTEMPTS` | `3` | Maximum signed execution attempts per Mission. |
 | `SG_MINION_RETRY_INTERVAL_SECONDS` | `30` | Signed delay before an eligible retry. |
 | `SG_MINION_ATTEMPT_TIMEOUT_SECONDS` | `300` | Signed per-attempt execution deadline. |
@@ -98,14 +101,14 @@ The service includes a self-contained web console served directly at:
 ### UI Tabs & Functions
 
 #### Policies
-- **Create New** opens a guided patching-policy builder seeded with a default BLOCK decision. Add exact, ordered target-server lists and patching constraints, then generate a draft; a policy with no rules blocks all requests. Approval outside a maintenance window permits immediate execution.
+- **Create New** opens **Choose policy template**, even when only **Patching Policy** is available. Select a template and Continue. Patching Policy opens the guided builder seeded with a default BLOCK decision; file-backed templates load a YAML draft. A policy with no rules blocks all requests. Approval outside a maintenance window permits immediate execution.
 - **Edit Policy** opens a wizard-generated policy from the YAML editor for visual editing. Policies with other rules, comments, or formatting cannot be represented without loss and must be edited as YAML; they remain unchanged.
 - **Load YAML / Download YAML** exchange drafts with local files.
 - **Validate / Save and Activate** validate and explicitly activate the draft. Reload from Service replaces the editor with the saved policy; unsaved drafts are protected by a confirmation. Saves back up the previous file and reject concurrent changes.
 
 #### 1. Missions & Audit Tab
 - **View Transactions**: Shows the current Mission summary. The Audit Events table shows correlated request receipt, policy decision, routing, signed Mission envelope, claim/recovery, status/result, signature-verification, approval and administrative-mutation events.
-- **Filter and inspect**: Search by request/transaction ID, Mission, Agent, Minion, status, event type, and occurred-at time. Inspect an event to view its structured evidence, including the signed payload where relevant.
+- **Filter and inspect**: Search by request/transaction ID, Mission, Agent, Minion, status, event type, and occurred-at time. Mission Inspect shows the submitted action, target, parameters, and context, including payment amount/currency. Expand the original request or policy-resolved Mission envelope for full details. Event Inspect retains the historical event and its signed evidence, with linked current request/Mission state labeled separately. If the original input is unavailable, the display identifies any envelope fallback instead of inventing values.
 - **Clear and reload**: Clear removes events from the current display after confirmation; it never deletes audit records. Reload or refreshing the page retrieves events again using the current filters. Reset filters removes the search criteria.
 - **API**: `GET /admin/v1/audit-events` accepts `request_id` (or `transaction_id`), `mission_id`, `agent_id`, `minion_id`, `status_filter`, `event_type`, `since`, `until`, `limit` (1-500), and `before_id`. It requires an Admin bearer token.
 - **Storage limits**: Audit rows are retained without automatic expiry. SQLite triggers prevent ordinary application updates/deletes but do not make the database tamper-proof against a host or database administrator. Back up the WSL database and signing-key environment securely; use an independent immutable log store when stronger tamper evidence is required.
@@ -169,3 +172,29 @@ Access points:
 - **Admin Console**: `http://localhost:8443/admin`
 - **Interactive API Swagger Docs**: `http://localhost:8443/docs`
 - **Legacy Demo UI**: `http://localhost:8080`
+
+## Policy Template Catalog
+
+The authenticated endpoints `GET /admin/v1/policy/templates` and `GET /admin/v1/policy/templates/{id}` list creation templates and load the selected template. Initially the packaged catalog contains Patching Policy, using the existing visual wizard. Opening or loading a template never activates it or changes `SG_POLICY_PATH`.
+
+To add a generic YAML template, place the file under the approved template directory and add a catalog entry alongside the existing entry in `catalog.json`:
+
+```json
+{
+  "id": "custom-policy",
+  "name": "Custom Policy",
+  "description": "Starting rules for a custom action.",
+  "editor_mode": "yaml",
+  "file": "custom-policy.yml"
+}
+```
+
+The catalog itself is a JSON array of entries with unique IDs. Use `editor_mode: patching_wizard` for the built-in patching editor. Generic YAML templates open in the YAML editor; they do not require a visual wizard. Paths resolve within the approved template directory, and invalid/missing templates report an error without replacing the draft. Package files under `src/sg_service/policy_templates/` for distribution, or mount an approved directory and set `SG_POLICY_TEMPLATE_DIR`. Keep TEST fixtures out of the operational catalog.
+
+## Development and TEST Isolation
+
+The default CI workflow verifies DEMO and TEST release manifests and builds/exercises their separate stacks. Service image builds include the DEMO manifest for explicit development bootstrap, but exclude TEST workers, manifests, fixture policies, and test dependencies. There is no TEST bootstrap mode in the service.
+
+Unit-test fixtures register only the Minions they need in temporary databases. `bash sg-service/tests/integration/run.sh` creates a disposable service with its TEST policy, provisions `TEST-STUB-01` through administrative APIs, then starts the TEST worker. It uses exact test-host scopes and the service's current `prod` routing environment in its isolated database. The runner checks the final service image's packaging and removes its containers, image tags, volume, credentials, and temporary policy/templates on exit.
+
+See the [DEMO guide](../sluice-demo/README.md#upgrade-an-existing-demo-database) for the explicit upgrade from the mixed DEMO release. Request details are available through the authenticated admin endpoint; low-information agent polling is unchanged.
